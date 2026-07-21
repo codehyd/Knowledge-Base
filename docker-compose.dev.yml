@@ -1,0 +1,22 @@
+# 开发加速：只起数据库。API / Web 在本机跑。
+# 用法：docker compose -f docker-compose.dev.yml up -d
+# 或：./scripts/dev-up.sh
+services:
+  db:
+    image: ${POSTGRES_IMAGE:-docker.m.daocloud.io/pgvector/pgvector:pg16}
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-kongku}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kongku}
+      POSTGRES_DB: ${POSTGRES_DB:-kongku}
+    volumes:
+      - pgdata_dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kongku} -d ${POSTGRES_DB:-kongku}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "5432:5432"
+
+volumes:
+  pgdata_dev:

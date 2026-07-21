@@ -1,0 +1,117 @@
+import time
+from typing import Any
+
+import httpx
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import get_settings
+from app.core.database import engine
+from app.modules.settings_ai.models import AiSettings
+from app.modules.settings_ai.providers import infer_provider_id, list_providers
+from app.modules.settings_ai.schemas import AiSettingsOut, AiSettingsUpdate, AiTestOut
+
+SINGLETON_ID = 1
+
+
+def mask_key(key: str) -> str:
+    if not key:
+        return ""
+    if len(key) <= 8:
+        return "***"
+    return f"{key[:3]}***{key[-4:]}"
+
+
+async def ensure_provider_column() -> None:
+    """兼容已有库：补 provider 列。"""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "ALTER TABLE ai_settings "
+                "ADD COLUMN IF NOT EXISTS provider VARCHAR(100) DEFAULT 'deepseek'"
+            )
+        )
+
+
+class SettingsAiService:
+    async def _get_or_create(self, db: AsyncSession) -> AiSettings:
+        await ensure_provider_column()
+        row = await db.get(AiSettings, SINGLETON_ID)
+        if row:
+            if not getattr(row, "provider", None):
+                row.provider = infer_provider_id(row.base_url)
+                await db.commit()
+                await db.refresh(row)
+            return row
+
+        env = get_settings()
+        row = AiSettings(
+            id=SINGLETON_ID,
+            provider=infer_provider_id(env.llm_base_url) or "deepseek",
+            base_url=env.llm_base_url,
+            api_key=env.llm_api_key,
+            chat_model=env.llm_chat_model,
+            embed_model=env.llm_embed_model,
+        )
+        db.add(row)
+        await db.commit()
+        await db.refresh(row)
+        return row
+
+    async def is_configured(self, db: AsyncSession) -> bool:
+        row = await self._get_or_create(db)
+        return bool(row.api_key.strip())
+
+    async def get(self, db: AsyncSession) -> AiSettingsOut:
+        row = await self._get_or_create(db)
+        provider = row.provider or infer_provider_id(row.base_url)
+        return AiSettingsOut(
+            provider=provider,
+            base_url=row.base_url,
+            api_key_masked=mask_key(row.api_key),
+            chat_model=row.chat_model,
+            embed_model=row.embed_model,
+            configured=bool(row.api_key.strip()),
+        )
+
+    async def update(self, db: AsyncSession, payload: AiSettingsUpdate) -> AiSettingsOut:
+        row = await self._get_or_create(db)
+        row.provider = payload.provider
+        row.base_url = payload.base_url.rstrip("/")
+        row.chat_model = payload.chat_model
+        row.embed_model = payload.embed_model
+        if payload.api_key is not None and payload.api_key.strip():
+            row.api_key = payload.api_key.strip()
+        await db.commit()
+        await db.refresh(row)
+        return await self.get(db)
+
+    async def test_connection(self, db: AsyncSession) -> AiTestOut:
+        row = await self._get_or_create(db)
+        if not row.api_key.strip():
+            return AiTestOut(ok=False, message="尚未配置 API Key")
+
+        url = f"{row.base_url.rstrip('/')}/models"
+        started = time.perf_counter()
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                resp = await client.get(
+                    url,
+                    headers={"Authorization": f"Bearer {row.api_key}"},
+                )
+            latency = int((time.perf_counter() - started) * 1000)
+            if resp.status_code >= 400:
+                return AiTestOut(
+                    ok=False,
+                    latency_ms=latency,
+                    message=f"服务商返回 {resp.status_code}",
+                )
+            return AiTestOut(ok=True, latency_ms=latency, message="连接成功")
+        except httpx.HTTPError as exc:
+            return AiTestOut(ok=False, message=f"网络错误：{exc.__class__.__name__}")
+
+    def providers_catalog(self) -> list[dict[str, Any]]:
+        return list_providers()
+
+
+settings_ai_service = SettingsAiService()

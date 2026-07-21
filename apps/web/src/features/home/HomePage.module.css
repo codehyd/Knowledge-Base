@@ -1,0 +1,82 @@
+.page {
+  max-width: 720px;
+}
+
+.eyebrow {
+  color: var(--color-muted);
+  margin: 0 0 12px;
+  font-size: 13px;
+}
+
+.brand {
+  font-family: var(--font-serif);
+  font-size: 56px;
+  margin: 0;
+  font-weight: 600;
+}
+
+.title {
+  margin: 16px 0 12px;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.desc {
+  margin: 0;
+  color: var(--color-muted);
+  line-height: 1.7;
+  max-width: 560px;
+}
+
+.actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 28px;
+  flex-wrap: wrap;
+}
+
+.primary,
+.ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  padding: 0 18px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+}
+
+.primary {
+  background: var(--color-accent);
+  color: #fff;
+}
+
+.ghost {
+  background: transparent;
+  border-color: var(--color-border);
+}
+
+.principles {
+  list-style: none;
+  padding: 0;
+  margin: 40px 0 0;
+  display: grid;
+  gap: 14px;
+}
+
+.principles li {
+  display: grid;
+  gap: 4px;
+  padding: 14px 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.principles strong {
+  font-size: 15px;
+}
+
+.principles span {
+  color: var(--color-muted);
+  font-size: 13px;
+}

@@ -1,0 +1,62 @@
+# —— 密钥与本地环境 ——
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# —— 依赖与虚拟环境（体积大，勿提交） ——
+**/node_modules/
+**/__pycache__/
+**/.venv/
+**/venv/
+**/.python-version
+**/*.egg-info/
+**/site-packages/
+
+# —— 构建产物 ——
+**/dist/
+**/build/
+**/.vite/
+**/.turbo/
+**/.next/
+**/coverage/
+**/htmlcov/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.cache/
+
+# —— 运行数据（原件/导出/临时文件，保留空目录） ——
+data/*
+!data/uploads/
+!data/exports/
+!data/tmp/
+data/uploads/*
+!data/uploads/.gitkeep
+data/exports/*
+!data/exports/.gitkeep
+data/tmp/*
+!data/tmp/.gitkeep
+
+# —— 日志与系统垃圾 ——
+*.log
+*.tmp
+*.temp
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+**/nohup.out
+
+# —— IDE（可选本地配置，不进库） ——
+.idea/
+*.iml
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.example
+
+# —— 其它敏感/本地 ——
+*.pem
+*.key
+credentials.json
+**/secrets/

@@ -1,0 +1,51 @@
+# 镜像默认走 DaoCloud（通过 .env 的 DOCKER_HUB_PROXY / POSTGRES_IMAGE 覆盖）
+services:
+  db:
+    image: ${POSTGRES_IMAGE:-docker.m.daocloud.io/pgvector/pgvector:pg16}
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-kongku}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kongku}
+      POSTGRES_DB: ${POSTGRES_DB:-kongku}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kongku} -d ${POSTGRES_DB:-kongku}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "5432:5432"
+
+  api:
+    build:
+      context: ./apps/api
+      args:
+        BASE_REGISTRY: ${DOCKER_HUB_PROXY:-docker.m.daocloud.io}/library
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://kongku:kongku@db:5432/kongku}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_CHAT_MODEL: ${LLM_CHAT_MODEL:-deepseek-chat}
+      LLM_EMBED_MODEL: ${LLM_EMBED_MODEL:-deepseek-chat}
+      API_CORS_ORIGINS: ${API_CORS_ORIGINS:-http://localhost:8080,http://localhost:5173}
+      DATA_DIR: /data
+    volumes:
+      - ./data:/data
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+  web:
+    build:
+      context: ./apps/web
+      args:
+        BASE_REGISTRY: ${DOCKER_HUB_PROXY:-docker.m.daocloud.io}/library
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
