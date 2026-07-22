@@ -60,7 +60,13 @@ export function AppLayout() {
     >
       <aside className={styles.sidebar}>
         <NavLink to="/" className={styles.brand} end>
-          <div className={styles.logo}>空库</div>
+          <img
+            className={styles.logo}
+            src={`${import.meta.env.BASE_URL}logo-wordmark.png`}
+            alt="空库"
+            width={132}
+            height={40}
+          />
           <div className={styles.sub}>个人认知知识库</div>
         </NavLink>
 

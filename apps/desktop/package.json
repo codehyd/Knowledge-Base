@@ -34,6 +34,7 @@
       "output": "release",
       "buildResources": "build"
     },
+    "icon": "build/icon.png",
     "files": [
       "electron/**/*",
       "package.json"
@@ -60,6 +61,7 @@
       }
     ],
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         {
           "target": "nsis",
@@ -74,6 +76,7 @@
       "createDesktopShortcut": true
     },
     "mac": {
+      "icon": "build/icon.png",
       "target": [
         {
           "target": "dmg",
@@ -90,6 +93,7 @@
       "gatekeeperAssess": false
     },
     "linux": {
+      "icon": "build/icon.png",
       "target": [
         {
           "target": "AppImage",

@@ -29,7 +29,13 @@ export function HomePage() {
       </div>
 
       <div className={styles.hero}>
-        <h1 className={styles.brand}>空库</h1>
+        <h1 className={styles.brand}>
+          <img
+            src={`${import.meta.env.BASE_URL}logo-wordmark.png`}
+            alt="空库"
+            className={styles.brandLogo}
+          />
+        </h1>
         <h2 className={styles.title}>
           {empty ? "默认没有知识，需要你来喂养" : "知识已在积累，继续投递或去对话"}
         </h2>

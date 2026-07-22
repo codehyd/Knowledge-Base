@@ -16,6 +16,12 @@
 # —— 构建产物 ——
 **/dist/
 **/build/
+!apps/desktop/build/
+!apps/desktop/build/**
+apps/desktop/build/*
+!apps/desktop/build/icon.png
+!apps/desktop/build/icon.ico
+!apps/desktop/build/.gitkeep
 **/.vite/
 **/.turbo/
 **/.next/

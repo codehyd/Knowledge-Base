@@ -63,6 +63,21 @@ npm run dist
 
 产物在 `apps/desktop/release/`。
 
+## 应用图标
+
+字标：`apps/web/public/logo-wordmark.png`  
+应用方标（任务栏 / 安装包）：由脚本从字标左侧书本图形生成：
+
+```powershell
+python apps/desktop/scripts/generate-icons.py
+```
+
+产物：
+
+- `apps/desktop/build/icon.png`（mac/linux + electron-builder）
+- `apps/desktop/build/icon.ico`（Windows）
+- `apps/desktop/electron/icon.png`（窗口备用）
+
 ## GitHub 发版
 
 推荐用脚本（默认 **patch 自增**，并推送 `v*` tag 触发 Actions）：

@@ -226,13 +226,29 @@ async function startApiSynced() {
   return { ready: false, spawnedByUs: false };
 }
 
+function windowIconPath() {
+  const localPng = path.join(__dirname, "icon.png");
+  const buildIco = path.join(__dirname, "..", "build", "icon.ico");
+  const buildPng = path.join(__dirname, "..", "build", "icon.png");
+  // 打包后 asar 内只有 electron/icon.png；开发态可用 build 下 ico/png
+  if (app.isPackaged) {
+    return fs.existsSync(localPng) ? localPng : undefined;
+  }
+  if (process.platform === "win32" && fs.existsSync(buildIco)) return buildIco;
+  if (fs.existsSync(buildPng)) return buildPng;
+  if (fs.existsSync(localPng)) return localPng;
+  return undefined;
+}
+
 async function createWindow() {
+  const icon = windowIconPath();
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 840,
     minWidth: 960,
     minHeight: 640,
     show: false,
+    ...(icon ? { icon } : {}),
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,

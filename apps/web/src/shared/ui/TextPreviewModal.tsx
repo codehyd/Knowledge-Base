@@ -1084,7 +1084,7 @@ export function TextPreviewModal({
         )}
       </Modal>
 
-      {pendingSel && (
+      {pendingSel && !draftOpen && (
         <div
           className={styles.selPopup}
           data-sel-popup="1"
