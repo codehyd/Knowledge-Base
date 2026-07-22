@@ -43,6 +43,21 @@ function apiSidecarPath() {
   return path.join(__dirname, "..", "resources", "api", bin);
 }
 
+/** 打包后用户可写目录（勿写安装目录 Program Files） */
+function appDataRoot() {
+  return app.getPath("userData");
+}
+
+function ensureAppDataDir() {
+  const dir = path.join(appDataRoot(), "data");
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function sidecarLogPath() {
+  return path.join(appDataRoot(), "api-sidecar.log");
+}
+
 function repoRoot() {
   // apps/desktop/electron -> 仓库根
   return path.resolve(__dirname, "..", "..", "..");
@@ -111,19 +126,37 @@ function waitForHealth(timeoutMs = 60000) {
 }
 
 function spawnApiProcess(command, args, options) {
-  apiChild = spawn(command, args, {
+  /** @type {import('child_process').SpawnOptions} */
+  const opts = {
     ...options,
-    stdio: "ignore",
     windowsHide: true,
-  });
+  };
+  // 打包态把 sidecar 日志写到 userData，便于排查「有进程无窗口」
+  if (app.isPackaged) {
+    try {
+      const log = sidecarLogPath();
+      const fd = fs.openSync(log, "a");
+      opts.stdio = ["ignore", fd, fd];
+    } catch {
+      opts.stdio = "ignore";
+    }
+  } else {
+    opts.stdio = "ignore";
+  }
+
+  apiChild = spawn(command, args, opts);
   apiSpawnedByUs = true;
-  apiChild.on("exit", () => {
+  apiChild.on("exit", (code) => {
     apiChild = null;
     if (apiSpawnedByUs) {
       apiStatus = "failed";
-      apiLastError = "后端进程已退出";
+      apiLastError = `后端进程已退出${code != null ? ` (code=${code})` : ""}`;
     }
     apiSpawnedByUs = false;
+  });
+  apiChild.on("error", (err) => {
+    apiStatus = "failed";
+    apiLastError = `后端启动失败：${err.message}`;
   });
 }
 
@@ -164,23 +197,30 @@ async function startApiSynced() {
     /* need spawn */
   }
 
+  const dataDir = app.isPackaged ? ensureAppDataDir() : undefined;
   const env = loadDotEnvInto({
     ...process.env,
     KONGKU_API_PORT: String(API_PORT),
+    KONGKU_API_HOST: API_HOST,
+    ...(dataDir ? { DATA_DIR: dataDir } : {}),
   });
 
   const sidecar = apiSidecarPath();
   if (fs.existsSync(sidecar)) {
-    spawnApiProcess(sidecar, [], { env });
+    spawnApiProcess(sidecar, [], {
+      env,
+      cwd: app.isPackaged ? appDataRoot() : undefined,
+    });
     try {
-      await waitForHealth(90000);
+      // 窗口已并行打开；此处最多等 45s，失败也不阻塞界面
+      await waitForHealth(45000);
       apiStatus = "ready";
       return { ready: true, spawnedByUs: true };
     } catch (err) {
       apiStatus = "failed";
       apiLastError = String(err);
-      stopApi();
-      return { ready: false, spawnedByUs: false };
+      // 不立刻 kill：留给用户看界面提示；超时后再清
+      return { ready: false, spawnedByUs: apiSpawnedByUs };
     }
   }
 
@@ -257,7 +297,19 @@ async function createWindow() {
     },
   });
 
-  mainWindow.once("ready-to-show", () => mainWindow?.show());
+  const reveal = () => {
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+      mainWindow.show();
+    }
+  };
+  mainWindow.once("ready-to-show", reveal);
+  // Windows 上偶发 ready-to-show 不触发；强制露出窗口避免「只有进程没界面」
+  setTimeout(reveal, 2500);
+
+  mainWindow.webContents.on("did-fail-load", (_e, code, desc, url) => {
+    console.warn("[kongku] did-fail-load", code, desc, url);
+    reveal();
+  });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url);
@@ -317,17 +369,23 @@ app.whenReady().then(async () => {
     apiStatus,
     apiLastError,
     apiSpawnedByUs,
+    dataDir: app.isPackaged ? path.join(appDataRoot(), "data") : undefined,
   }));
 
-  try {
-    await startApiSynced();
-  } catch (err) {
+  // 先开窗口，再并行拉 API，避免 Win 上长时间「有进程无界面」
+  const apiPromise = startApiSynced().catch((err) => {
     apiStatus = "failed";
     apiLastError = String(err);
     console.warn("[kongku] API start:", err);
+  });
+
+  try {
+    await createWindow();
+  } catch (err) {
+    console.error("[kongku] createWindow:", err);
   }
 
-  await createWindow();
+  await apiPromise;
   setupAutoUpdater();
 
   app.on("activate", () => {
