@@ -65,6 +65,25 @@ npm run dist
 
 ## GitHub 发版
 
+推荐用脚本（默认 **patch 自增**，并推送 `v*` tag 触发 Actions）：
+
+```powershell
+# Windows
+.\scripts\release-desktop.ps1              # v0.1.0 -> v0.1.1
+.\scripts\release-desktop.ps1 -Bump minor  # -> v0.2.0
+.\scripts\release-desktop.ps1 0.3.0        # 指定版本
+.\scripts\release-desktop.ps1 -DryRun      # 只预览
+```
+
+```bash
+# Git Bash / macOS / Linux
+./scripts/release-desktop.sh
+./scripts/release-desktop.sh --minor
+./scripts/release-desktop.sh 0.3.0
+```
+
+手工方式：
+
 ```bash
 git tag v0.1.0
 git push origin v0.1.0
