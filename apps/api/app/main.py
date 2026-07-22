@@ -13,6 +13,7 @@ from app.modules.health.router import router as health_router
 from app.modules.knowledge.router import router as knowledge_router
 from app.modules.overview.router import router as overview_router
 from app.modules.settings_ai.router import router as settings_ai_router
+from app.modules.settings_db.router import router as settings_db_router
 from app.modules.sources.router import router as sources_router
 
 
@@ -26,10 +27,13 @@ async def lifespan(_: FastAPI):
 
     # 启动时为尚无切片的已入库条目自动回填（失败不阻塞服务）
     try:
-        from app.core.database import SessionLocal
+        from app.core import database as db_mod
         from app.modules.knowledge.index import reindex_missing
 
-        async with SessionLocal() as db:
+        if db_mod.SessionLocal is None:
+            db_mod.init_engine_from_config()
+        assert db_mod.SessionLocal is not None
+        async with db_mod.SessionLocal() as db:
             await reindex_missing(db, with_embed=True)
     except Exception:
         pass
@@ -68,6 +72,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(overview_router, prefix="/api")
     app.include_router(settings_ai_router, prefix="/api")
+    app.include_router(settings_db_router, prefix="/api")
     app.include_router(sources_router, prefix="/api")
     app.include_router(knowledge_router, prefix="/api")
     app.include_router(chat_router, prefix="/api")

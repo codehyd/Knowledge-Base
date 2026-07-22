@@ -25,6 +25,20 @@ export type AiSettings = {
   configured: boolean;
 };
 
+export type DbSettings = {
+  mode: "sqlite" | "postgres";
+  sqlite_path: string;
+  postgres_url_masked: string;
+  postgres_configured: boolean;
+  postgres_host?: string;
+  postgres_port?: string;
+  postgres_database?: string;
+  postgres_username?: string;
+  effective_url_masked: string;
+  connected: boolean;
+  message: string;
+};
+
 export type SourceItem = {
   id: number;
   type: string;
@@ -229,6 +243,36 @@ export const api = {
   testAiSettings: () =>
     request<{ ok: boolean; latency_ms?: number; message: string }>("/api/settings/ai/test", {
       method: "POST",
+    }),
+
+  getDbSettings: () => request<DbSettings>("/api/settings/db"),
+  saveDbSettings: (body: {
+    mode: "sqlite" | "postgres";
+    sqlite_path: string;
+    postgres_url?: string | null;
+    postgres_host?: string | null;
+    postgres_port?: string | null;
+    postgres_database?: string | null;
+    postgres_username?: string | null;
+    postgres_password?: string | null;
+  }) =>
+    request<DbSettings>("/api/settings/db", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  testDbSettings: (body: {
+    mode: "sqlite" | "postgres";
+    sqlite_path: string;
+    postgres_url?: string | null;
+    postgres_host?: string | null;
+    postgres_port?: string | null;
+    postgres_database?: string | null;
+    postgres_username?: string | null;
+    postgres_password?: string | null;
+  }) =>
+    request<{ ok: boolean; message: string }>("/api/settings/db/test", {
+      method: "POST",
+      body: JSON.stringify(body),
     }),
 
   listSources: () => request<{ items: SourceItem[]; total: number }>("/api/sources"),

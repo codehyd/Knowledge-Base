@@ -1,11 +1,11 @@
 from sqlalchemy import text
 
-from app.core.database import engine
+from app.core.database import get_engine
 from app.modules.health.schemas import HealthOut
 
 DB_UNAVAILABLE_MESSAGE = (
-    "未检测到数据库服务。请先在本机启动 Postgres（开发可用 Docker），"
-    "并确认 DATABASE_URL 配置正确。"
+    "未检测到可用数据库。请到「设置 → 数据库」检查连接；"
+    "默认使用本地 SQLite（data/kongku.db），也可配置 Postgres。"
 )
 
 
@@ -16,7 +16,7 @@ class HealthService:
         database_ok = False
         message = ""
         try:
-            async with engine.connect() as conn:
+            async with get_engine().connect() as conn:
                 await conn.execute(text("SELECT 1"))
             database_ok = True
         except Exception:

@@ -26,6 +26,9 @@
     "electron": "^35.2.1",
     "electron-builder": "^26.0.12"
   },
+  "pnpm": {
+    "onlyBuiltDependencies": ["electron", "electron-winstaller"]
+  },
   "build": {
     "appId": "app.kongku.desktop",
     "productName": "空库",

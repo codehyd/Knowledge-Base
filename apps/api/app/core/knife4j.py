@@ -30,6 +30,10 @@ OPENAPI_TAGS = [
         "description": "AI Provider / API Key / 对话与向量模型；支持连接测试",
     },
     {
+        "name": "数据库配置",
+        "description": "本地 SQLite / 远程 Postgres；配置落在 runtime-db.json，支持热切换",
+    },
+    {
         "name": "喂养投递",
         "description": "电子书 / 笔记 / 链接投递、正文抽取与解析队列",
     },

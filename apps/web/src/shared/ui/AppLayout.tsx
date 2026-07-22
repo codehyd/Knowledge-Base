@@ -21,7 +21,7 @@ const nav = [
 ];
 
 const DEFAULT_DB_HINT =
-  "未检测到数据库服务。请先在本机启动 Postgres（开发可用 Docker），并确认 DATABASE_URL 配置正确。";
+  "未检测到可用数据库。请到「设置 → 数据库」检查连接；默认使用本地 SQLite。";
 
 export function AppLayout() {
   const location = useLocation();
