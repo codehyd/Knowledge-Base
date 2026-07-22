@@ -1,25 +1,24 @@
 #!/usr/bin/env bash
 # 桌面端发版：打 v* tag 并推送，触发 GitHub Actions「Release Desktop」
 #
-# 用法：
+# 用法（在仓库根目录）：
 #   ./scripts/release-desktop.sh              # 默认 patch 自增
 #   ./scripts/release-desktop.sh --minor
 #   ./scripts/release-desktop.sh --major
 #   ./scripts/release-desktop.sh 0.3.0
 #   ./scripts/release-desktop.sh --dry-run
+#   ./scripts/release-desktop.sh --skip-fetch # 网络不通时跳过拉 tag
 set -euo pipefail
+
+# 无论从哪启动，都切到仓库根
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-
-echo "==> 同步远程标签（避免换机器时本地 tag 不全）"
-if ! git fetch origin --tags --prune; then
-  echo "警告：fetch tags 失败，将仅根据本地 tag / package.json 计算版本" >&2
-fi
 
 BUMP="patch"
 VERSION=""
 DRY_RUN=0
 FORCE=0
+SKIP_FETCH=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -28,8 +27,9 @@ while [[ $# -gt 0 ]]; do
     --major) BUMP="major"; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     --force) FORCE=1; shift ;;
+    --skip-fetch) SKIP_FETCH=1; shift ;;
     -h|--help)
-      sed -n '2,12p' "$0"
+      sed -n '2,14p' "$0"
       exit 0
       ;;
     *)
@@ -38,6 +38,25 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ "$SKIP_FETCH" -ne 1 ]]; then
+  echo "==> 同步远程标签（约 20s 超时；网络不通可加 --skip-fetch）"
+  # 低速超时，避免一直卡在 fetch
+  set +e
+  GIT_HTTP_LOW_SPEED_LIMIT=1000 \
+  GIT_HTTP_LOW_SPEED_TIME=20 \
+  git fetch origin --tags --prune
+  fetch_rc=$?
+  set -e
+  if [[ $fetch_rc -ne 0 ]]; then
+    echo "警告：fetch tags 失败（常见于连不上 GitHub），将按本地 tag / package.json 计算版本" >&2
+    echo "      也可重试：./scripts/release-desktop.sh --skip-fetch" >&2
+  else
+    echo "远程标签已同步"
+  fi
+else
+  echo "==> 已跳过 fetch tags（--skip-fetch）"
+fi
 
 latest_tag() {
   git tag -l 'v*' --sort=-v:refname | head -n1 || true
@@ -115,6 +134,7 @@ if ! git diff --cached --quiet; then
 fi
 
 git tag -a "${TAG}" -m "Release ${TAG}"
+echo "==> 推送分支与标签（若再次卡住，多半是网络访问 GitHub 问题）"
 git push origin HEAD
 git push origin "${TAG}"
 

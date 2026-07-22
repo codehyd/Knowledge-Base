@@ -6,6 +6,7 @@
 #   .\scripts\release-desktop.ps1 -Bump major  # 0.1.0 -> 1.0.0
 #   .\scripts\release-desktop.ps1 0.3.0        # 指定版本（可带或不带 v）
 #   .\scripts\release-desktop.ps1 -DryRun     # 只打印，不改仓库
+#   .\scripts\release-desktop.ps1 -SkipFetch  # 网络不通时跳过拉 tag
 
 [CmdletBinding()]
 param(
@@ -17,17 +18,28 @@ param(
 
   [switch]$DryRun,
 
-  [switch]$Force
+  [switch]$Force,
+
+  [switch]$SkipFetch
 )
 
 $ErrorActionPreference = "Stop"
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $Root
 
-Write-Host "==> 同步远程标签（避免换机器时本地 tag 不全）"
-git fetch origin --tags --prune 2>$null
-if ($LASTEXITCODE -ne 0) {
-  Write-Host "警告：fetch tags 失败，将仅根据本地 tag / package.json 计算版本" -ForegroundColor Yellow
+if (-not $SkipFetch) {
+  Write-Host "==> 同步远程标签（约 20s 超时；网络不通可加 -SkipFetch）"
+  $env:GIT_HTTP_LOW_SPEED_LIMIT = "1000"
+  $env:GIT_HTTP_LOW_SPEED_TIME = "20"
+  git fetch origin --tags --prune
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "警告：fetch tags 失败，将按本地 tag / package.json 计算版本" -ForegroundColor Yellow
+    Write-Host "      也可重试：.\scripts\release-desktop.ps1 -SkipFetch" -ForegroundColor Yellow
+  } else {
+    Write-Host "远程标签已同步"
+  }
+} else {
+  Write-Host "==> 已跳过 fetch tags (-SkipFetch)"
 }
 
 function Get-LatestSemverTag {
