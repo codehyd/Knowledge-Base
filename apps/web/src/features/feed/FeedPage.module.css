@@ -1,5 +1,6 @@
 .page {
-  max-width: 1200px;
+  width: 100%;
+  max-width: none;
 }
 
 .header {
@@ -40,7 +41,7 @@
 
 .layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 300px;
+  grid-template-columns: minmax(0, 1.4fr) minmax(300px, 0.9fr);
   gap: 20px;
   align-items: start;
 }

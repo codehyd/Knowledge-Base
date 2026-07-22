@@ -1,8 +1,14 @@
 .page {
-  max-width: 1280px;
+  width: 100%;
+  max-width: none;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .header {
+  flex: 0 0 auto;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -33,10 +39,12 @@
 }
 
 .layout {
+  flex: 1;
+  min-height: 0;
   display: grid;
-  grid-template-columns: 180px minmax(0, 1fr) minmax(280px, 360px);
+  grid-template-columns: 200px minmax(0, 1fr) minmax(320px, 1fr);
   gap: 16px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .cats,
@@ -53,6 +61,19 @@
   display: grid;
   gap: 4px;
   align-content: start;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+.cats::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+}
+
+.cats::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border-radius: 999px;
 }
 
 .catItem {
@@ -98,8 +119,19 @@
 }
 
 .listPane {
-  min-height: 420px;
-  overflow: hidden;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+.listPane::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+}
+
+.listPane::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border-radius: 999px;
 }
 
 .list {
@@ -177,15 +209,28 @@
 }
 
 .detail {
-  padding: 18px 18px 16px;
-  min-height: 420px;
+  padding: 0;
+  min-height: 0;
+  height: 100%;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  position: sticky;
-  top: 20px;
-  max-height: calc(100vh - 100px);
-  overflow: auto;
+  overflow: hidden;
+}
+
+.detailInner {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.detailScroll {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 14px 18px 16px;
+  display: flex;
+  flex-direction: column;
 }
 
 .detailEmpty {
@@ -193,11 +238,20 @@
   display: grid;
   place-content: center;
   min-height: 280px;
+  padding: 18px;
 }
 
 .detailHint {
-  margin: 24px 0;
+  margin: 24px 18px;
   color: var(--color-muted);
+}
+
+.detailHead {
+  flex: 0 0 auto;
+  padding: 16px 18px 14px;
+  border-bottom: 1px solid #e6eaee;
+  background: #fff;
+  border-radius: 13px 13px 0 0;
 }
 
 .detailHead h2 {
@@ -218,6 +272,15 @@
   margin: 8px 0 0;
   font-size: 12px;
   color: var(--color-muted);
+  word-break: break-all;
+}
+
+.detailSection {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .detailSection h3 {
@@ -228,16 +291,17 @@
 }
 
 .sectionHead {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-bottom: 8px;
 }
 
 .moreLink {
+  flex: 0 0 auto;
   padding-left: 0;
-  margin-top: 4px;
+  align-self: flex-start;
 }
 
 .detailBody {
@@ -250,18 +314,38 @@
 
 .preview {
   margin: 0;
-  padding: 12px;
+  flex: 1;
+  min-height: 0;
+  padding: 14px 16px;
   border-radius: 10px;
   background: #f7f9fa;
   border: 1px solid #eef1f3;
-  font-size: 12px;
-  line-height: 1.65;
+  font-size: 13px;
+  line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 280px;
   overflow: auto;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color: #334155;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+.preview::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+}
+
+.preview::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.preview::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border-radius: 999px;
+}
+
+.preview::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
 }
 
 .previewModal {
@@ -278,17 +362,33 @@
   word-break: break-word;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color: #334155;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+.previewModal::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+}
+
+.previewModal::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border-radius: 999px;
+}
+
+.previewModal::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
 }
 
 .detailActions {
+  flex: 0 0 auto;
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
-  margin-top: auto;
-  padding-top: 12px;
-  position: sticky;
-  bottom: 0;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0) 0%, #fff 28%);
-  padding-bottom: 2px;
+  padding: 12px 16px;
+  background: #f7f9fa;
+  border-top: 1px solid #e6eaee;
+  border-radius: 0 0 13px 13px;
 }
 
 .emptyBox {
@@ -302,12 +402,12 @@
 @media (max-width: 1100px) {
   .layout {
     grid-template-columns: 160px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
   }
 
   .detail {
     grid-column: 1 / -1;
-    position: static;
-    max-height: none;
+    max-height: min(48vh, 420px);
   }
 }
 

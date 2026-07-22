@@ -7,6 +7,7 @@ import {
   RightOutlined,
   SettingOutlined,
   UploadOutlined,
+  WarningOutlined,
 } from "@ant-design/icons";
 import { api } from "@/shared/api/client";
 import styles from "./AppLayout.module.css";
@@ -19,12 +20,29 @@ const nav = [
   { to: "/settings", label: "设置", icon: SettingOutlined },
 ];
 
+const DEFAULT_DB_HINT =
+  "未检测到数据库服务。请先在本机启动 Postgres（开发可用 Docker），并确认 DATABASE_URL 配置正确。";
+
 export function AppLayout() {
   const location = useLocation();
   const [keyConfigured, setKeyConfigured] = useState<boolean | null>(null);
+  const [serviceBanner, setServiceBanner] = useState<string | null>(null);
 
   useEffect(() => {
     void (async () => {
+      try {
+        const health = await api.health();
+        if (!health.database) {
+          setServiceBanner(health.database_message || DEFAULT_DB_HINT);
+        } else {
+          setServiceBanner(null);
+        }
+      } catch {
+        setServiceBanner(
+          "后端服务未就绪。请确认 Electron 已拉起 API，或本机 18765 端口有空库 API 在运行。",
+        );
+      }
+
       try {
         const overview = await api.overview();
         setKeyConfigured(overview.key_configured);
@@ -36,7 +54,9 @@ export function AppLayout() {
 
   return (
     <div
-      className={`${styles.shell}${location.pathname.startsWith("/chat") ? ` ${styles.shellChat}` : ""}`}
+      className={`${styles.shell}${
+        location.pathname.startsWith("/chat") ? ` ${styles.shellChat}` : ""
+      }`}
     >
       <aside className={styles.sidebar}>
         <NavLink to="/" className={styles.brand} end>
@@ -78,8 +98,18 @@ export function AppLayout() {
       </aside>
 
       <main
-        className={`${styles.main}${location.pathname.startsWith("/chat") ? ` ${styles.mainChat}` : ""}`}
+        className={`${styles.main}${
+          location.pathname.startsWith("/chat") ? ` ${styles.mainChat}` : ""
+        }${
+          location.pathname.startsWith("/knowledge") ? ` ${styles.mainFill}` : ""
+        }`}
       >
+        {serviceBanner ? (
+          <div className={styles.serviceBanner} role="alert">
+            <WarningOutlined />
+            <span>{serviceBanner}</span>
+          </div>
+        ) : null}
         <Outlet />
       </main>
     </div>

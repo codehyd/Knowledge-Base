@@ -1,12 +1,14 @@
 .page {
+  width: 100%;
   max-width: 720px;
   margin: 0 auto;
-  min-height: calc(100vh - 56px);
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   background: #fff;
   border-radius: 16px;
-  padding: 28px 40px 32px;
+  padding: 24px 36px 20px;
   border: 1px solid #e8ecef;
 }
 
@@ -16,16 +18,16 @@
   gap: 8px;
   color: var(--color-muted);
   font-size: 13px;
-  margin-bottom: 56px;
+  margin-bottom: 28px;
 }
 
 .hero {
-  padding-top: 12px;
+  padding-top: 4px;
 }
 
 .brand {
   font-family: var(--font-serif);
-  font-size: 64px;
+  font-size: 56px;
   margin: 0;
   font-weight: 600;
   color: var(--color-accent);
@@ -34,8 +36,8 @@
 }
 
 .title {
-  margin: 20px 0 14px;
-  font-size: 26px;
+  margin: 16px 0 12px;
+  font-size: 24px;
   font-weight: 600;
   line-height: 1.45;
   color: var(--color-ink);
@@ -53,7 +55,7 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-top: 28px;
+  margin-top: 22px;
   flex-wrap: wrap;
 }
 
@@ -105,7 +107,7 @@
 .principles {
   list-style: none;
   padding: 0;
-  margin: 52px 0 0;
+  margin: 28px 0 0;
   display: grid;
   gap: 0;
 }
@@ -115,7 +117,7 @@
   grid-template-columns: 28px 1fr;
   gap: 14px;
   align-items: start;
-  padding: 18px 0;
+  padding: 14px 0;
   border-top: 1px solid #e8ecef;
 }
 
@@ -143,7 +145,7 @@
 
 .foot {
   margin-top: auto;
-  padding-top: 48px;
+  padding-top: 20px;
   text-align: center;
   color: var(--color-muted);
   font-size: 13px;
@@ -151,7 +153,7 @@
 
 @media (max-width: 720px) {
   .page {
-    padding: 20px 16px 28px;
+    padding: 20px 16px 20px;
     border-radius: 0;
     border: none;
     background: transparent;

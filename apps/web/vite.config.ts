@@ -4,6 +4,8 @@ import { fileURLToPath, URL } from "node:url";
 
 export default defineConfig({
   plugins: [react()],
+  // Electron loadFile 需要相对资源路径
+  base: process.env.ELECTRON === "1" ? "./" : "/",
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),

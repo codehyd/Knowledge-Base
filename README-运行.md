@@ -71,6 +71,8 @@ cd apps/web && npm run dev
 | Vite 前端 | 41779 |
 | Compose Nginx | 18080 |
 
+桌面端 Electron 发版见 [docs/工程/13-桌面端Electron.md](./docs/工程/13-桌面端Electron.md)（`v*` tag 触发 win/mac/linux；开 Electron 同步起 Python，关则停；无 Postgres 时界面提示）。
+
 ## 架构约定
 
 见 [docs/工程/02-架构约定.md](./docs/工程/02-架构约定.md)。

@@ -18,7 +18,12 @@ from app.modules.sources.router import router as sources_router
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    await init_db()
+    # 无数据库时仍允许 API 进程启动，由 /health 提示「没有数据库服务」
+    try:
+        await init_db()
+    except Exception as exc:
+        print(f"[kongku] init_db skipped (database unavailable): {exc}")
+
     # 启动时为尚无切片的已入库条目自动回填（失败不阻塞服务）
     try:
         from app.core.database import SessionLocal

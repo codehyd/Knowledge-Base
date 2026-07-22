@@ -1,0 +1,106 @@
+# 按 tag 发布桌面端（Windows / macOS / Linux）
+#
+# 触发：推送 v* tag，例如：
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# 产物：GitHub Release 附件（供 electron-updater 后续升级）
+#
+# 注意：
+# 1. macOS 正式公证需配置 Apple 证书；当前关闭自动签名探测以便 CI 能出包
+# 2. 各平台先 PyInstaller 打 API sidecar，再 electron-builder 打进安装包
+# 3. 无 Postgres 时安装包仍可起 Python；界面会提示「没有数据库服务」
+# 4. publish 使用 github provider，仓库信息取自当前 git remote
+
+name: Release Desktop
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            electron_args: --win --x64
+          - os: macos-latest
+            electron_args: --mac --x64 --arm64
+          - os: ubuntu-22.04
+            electron_args: --linux --x64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            apps/web/package-lock.json
+            apps/desktop/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: apps/api/requirements.txt
+
+      - name: Install web deps
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Build web (Electron)
+        working-directory: apps/web
+        env:
+          ELECTRON: "1"
+        run: npm run build
+
+      - name: Install API deps
+        working-directory: apps/api
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build API sidecar
+        working-directory: apps/api
+        run: python scripts/build_sidecar.py
+
+      - name: Install desktop deps
+        working-directory: apps/desktop
+        run: npm install
+
+      - name: Sync version from tag
+        shell: bash
+        working-directory: apps/desktop
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm fakeroot dpkg
+
+      - name: Build & publish Electron
+        working-directory: apps/desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npx electron-builder ${{ matrix.electron_args }} --publish always

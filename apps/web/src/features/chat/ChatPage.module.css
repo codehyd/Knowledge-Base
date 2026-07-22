@@ -1,6 +1,6 @@
 .page {
   width: 100%;
-  max-width: 1100px;
+  max-width: none;
   height: 100%;
   min-height: 0;
   display: flex;
@@ -168,11 +168,11 @@
     #f7f9fa;
   scrollbar-gutter: stable;
   scrollbar-width: thin;
-  scrollbar-color: rgba(100, 116, 139, 0.45) transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
 .messages::-webkit-scrollbar {
-  width: 8px;
+  width: var(--scrollbar-size);
 }
 
 .messages::-webkit-scrollbar-track {
@@ -180,15 +180,14 @@
 }
 
 .messages::-webkit-scrollbar-thumb {
-  background: rgba(100, 116, 139, 0.35);
+  background-color: var(--scrollbar-thumb);
   border-radius: 999px;
-  border: 2px solid transparent;
+  border: 1px solid transparent;
   background-clip: padding-box;
 }
 
 .messages::-webkit-scrollbar-thumb:hover {
-  background: rgba(100, 116, 139, 0.55);
-  background-clip: padding-box;
+  background-color: var(--scrollbar-thumb-hover);
 }
 
 .empty {
@@ -222,7 +221,7 @@
 }
 
 .bubble {
-  max-width: min(78%, 640px);
+  max-width: min(88%, 920px);
   padding: 10px 14px;
   border-radius: 14px;
   line-height: 1.6;

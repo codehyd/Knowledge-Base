@@ -1,0 +1,2 @@
+# API sidecar 由 `python apps/api/scripts/build_sidecar.py` 或 CI 生成
+# 占位，勿提交 kongku-api / kongku-api.exe

@@ -3,7 +3,8 @@
   grid-template-columns: 180px minmax(0, 1fr) 280px;
   gap: 20px;
   align-items: start;
-  max-width: 1200px;
+  width: 100%;
+  max-width: none;
   background: #fff;
   border: 1px solid #e8ecef;
   border-radius: 16px;
@@ -84,7 +85,7 @@
 }
 
 .form {
-  max-width: 560px;
+  max-width: min(720px, 100%);
 }
 
 .testAlert {

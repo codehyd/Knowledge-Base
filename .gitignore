@@ -58,6 +58,13 @@ Thumbs.db
 # —— API 临时下载（Knife4j jar 解压等） ——
 apps/api/tmp/
 
+# —— 桌面端本地产物 ——
+apps/desktop/release/
+apps/desktop/resources/api/kongku-api
+apps/desktop/resources/api/kongku-api.exe
+apps/desktop/resources/api/*.dll
+!apps/desktop/resources/api/.gitkeep
+
 # —— 其它敏感/本地 ——
 *.pem
 *.key

@@ -158,13 +158,35 @@ function parseErrorBody(text: string, status: number): string {
   return raw.length > 240 ? `${raw.slice(0, 240)}…` : raw;
 }
 
+/** Electron 下指向本机 API；浏览器开发态走 Vite 同源代理（空字符串） */
+let apiBase = "";
+
+export async function initApiBase(): Promise<void> {
+  const desktop = (
+    window as unknown as {
+      kongkuDesktop?: { getConfig: () => Promise<{ apiOrigin?: string }> };
+    }
+  ).kongkuDesktop;
+  if (!desktop) {
+    apiBase = "";
+    return;
+  }
+  try {
+    const cfg = await desktop.getConfig();
+    apiBase = (cfg.apiOrigin || "").replace(/\/$/, "");
+  } catch {
+    apiBase = "http://127.0.0.1:18765";
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   const isForm = typeof FormData !== "undefined" && init?.body instanceof FormData;
   if (!isForm && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  const res = await fetch(path, {
+  const url = path.startsWith("http") ? path : `${apiBase}${path}`;
+  const res = await fetch(url, {
     ...init,
     headers,
   });
@@ -178,8 +200,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+export type HealthStatus = {
+  ok: boolean;
+  service?: string;
+  database: boolean;
+  database_message?: string;
+};
+
 export const api = {
-  health: () => request<{ ok: boolean }>("/health"),
+  health: () => request<HealthStatus>("/health"),
   overview: () =>
     request<{ entries: number; key_configured: boolean; empty_library: boolean }>(
       "/api/stats/overview",

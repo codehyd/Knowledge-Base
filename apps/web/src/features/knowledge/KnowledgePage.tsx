@@ -285,7 +285,7 @@ export function KnowledgePage() {
           ) : detailLoading && !detail ? (
             <p className={styles.detailHint}>加载中…</p>
           ) : detail ? (
-            <>
+            <div className={styles.detailInner}>
               <div className={styles.detailHead}>
                 <h2>{detail.title}</h2>
                 <div className={styles.detailTags}>
@@ -305,40 +305,23 @@ export function KnowledgePage() {
                 </p>
               </div>
 
-              <div className={styles.detailSection}>
-                <h3>摘要</h3>
-                <p className={styles.detailBody}>{detail.summary || "暂无摘要"}</p>
-              </div>
-
-              <div className={styles.detailSection}>
-                <div className={styles.sectionHead}>
-                  <h3>原文预览</h3>
-                  {(detail.char_count ?? 0) > 0 && (
+              <div className={styles.detailScroll}>
+                <div className={styles.detailSection}>
+                  <div className={styles.sectionHead}>
+                    <h3>原文预览</h3>
+                  </div>
+                  <pre className={styles.preview}>{detail.preview || "暂无原文"}</pre>
+                  {detail.preview_truncated && (
                     <Button
                       type="link"
                       size="small"
-                      icon={<EyeOutlined />}
-                      loading={previewLoading}
+                      className={styles.moreLink}
                       onClick={() => void openPreview(detail.id)}
                     >
-                      全文预览
-                      {detail.char_count
-                        ? `（${detail.char_count.toLocaleString()} 字）`
-                        : ""}
+                      内容已截断，点击查看更多
                     </Button>
                   )}
                 </div>
-                <pre className={styles.preview}>{detail.preview || "暂无原文"}</pre>
-                {detail.preview_truncated && (
-                  <Button
-                    type="link"
-                    size="small"
-                    className={styles.moreLink}
-                    onClick={() => void openPreview(detail.id)}
-                  >
-                    内容已截断，点击查看更多
-                  </Button>
-                )}
               </div>
 
               <div className={styles.detailActions}>
@@ -365,7 +348,7 @@ export function KnowledgePage() {
                   <Button type="primary">在对话中提问</Button>
                 </Link>
               </div>
-            </>
+            </div>
           ) : null}
         </aside>
       </div>

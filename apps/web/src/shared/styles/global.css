@@ -10,6 +10,9 @@
   --radius: 12px;
   --font-sans: "IBM Plex Sans", "PingFang SC", "Noto Sans SC", sans-serif;
   --font-serif: "Source Han Serif SC", "Songti SC", "Noto Serif SC", serif;
+  --scrollbar-size: 6px;
+  --scrollbar-thumb: rgba(31, 41, 51, 0.18);
+  --scrollbar-thumb-hover: rgba(42, 111, 106, 0.45);
 }
 
 * {
@@ -20,7 +23,8 @@ html,
 body,
 #root {
   margin: 0;
-  min-height: 100%;
+  height: 100%;
+  overflow: hidden;
 }
 
 body {
@@ -28,10 +32,38 @@ body {
   color: var(--color-ink);
   background: var(--color-bg);
   -webkit-font-smoothing: antialiased;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
 #root {
-  min-height: 100vh;
+  min-height: 100%;
+  height: 100%;
+}
+
+/* 全局细滚动条：默认几乎隐形，悬停/拖动时略显品牌色 */
+*::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 a {
