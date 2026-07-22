@@ -12,7 +12,8 @@ class Settings(BaseSettings):
     llm_chat_model: str = "deepseek-v4-flash"
     llm_embed_model: str = "deepseek-v4-flash"
     api_cors_origins: str = "http://localhost:5173,http://localhost:8080"
-    data_dir: str = "/data"
+    # 本机开发默认仓库根下 data/；Compose 内通过 DATA_DIR=/data 覆盖
+    data_dir: str = "data"
 
     @property
     def cors_origins(self) -> list[str]:

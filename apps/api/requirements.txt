@@ -6,3 +6,11 @@ pgvector==0.4.0
 pydantic-settings==2.8.1
 httpx==0.28.1
 python-multipart==0.0.20
+pypdf==5.4.0
+ebooklib==0.18
+trafilatura==2.0.0
+pymupdf==1.25.5
+rapidocr==3.9.2
+onnxruntime>=1.16.0
+numpy==2.2.4
+Pillow==11.1.0

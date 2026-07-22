@@ -1,14 +1,23 @@
 .page {
-  max-width: 720px;
+  max-width: 960px;
+  background: #fff;
+  border: 1px solid #e8ecef;
+  border-radius: 16px;
+  padding: 24px 28px 32px;
 }
 
-.page h1 {
-  margin: 0 0 12px;
-  font-size: 28px;
+.header h1 {
+  margin: 0 0 8px;
+  font-size: 24px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
-.page p {
-  margin: 0;
-  color: var(--color-muted);
-  line-height: 1.7;
+.body {
+  margin-top: 40px;
+  padding: 48px 24px;
+  border: 1.5px dashed #d5dbe1;
+  border-radius: 12px;
+  background: #fafbfc;
 }

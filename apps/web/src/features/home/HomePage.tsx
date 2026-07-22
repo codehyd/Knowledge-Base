@@ -1,5 +1,12 @@
 import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
+import {
+  HomeOutlined,
+  PlayCircleOutlined,
+  RightOutlined,
+  RiseOutlined,
+  SafetyCertificateOutlined,
+} from "@ant-design/icons";
 import { api } from "@/shared/api/client";
 import styles from "./HomePage.module.css";
 
@@ -16,37 +23,60 @@ export function HomePage() {
 
   return (
     <section className={styles.page}>
-      <p className={styles.eyebrow}>首页</p>
-      <h1 className={styles.brand}>空库</h1>
-      <h2 className={styles.title}>
-        {empty ? "默认没有知识，需要你来喂养" : "知识已在积累，继续投递或去对话"}
-      </h2>
-      <p className={styles.desc}>
-        投递电子书、笔记或视频链接；视频可自动提取文案，无需手贴文稿。AI
-        帮你总结归类。对话只按库内作答，超出范围会拒答。
-      </p>
-      <div className={styles.actions}>
-        <Link className={styles.primary} to="/feed">
-          开始喂养
-        </Link>
-        <Link className={styles.ghost} to="/settings">
-          {keyConfigured ? "查看模型配置" : "配置 API Key"}
-        </Link>
+      <div className={styles.breadcrumb}>
+        <HomeOutlined />
+        <span>首页</span>
       </div>
-      <ul className={styles.principles}>
+
+      <div className={styles.hero}>
+        <h1 className={styles.brand}>空库</h1>
+        <h2 className={styles.title}>
+          {empty ? "默认没有知识，需要你来喂养" : "知识已在积累，继续投递或去对话"}
+        </h2>
+        <p className={styles.desc}>
+          投递电子书、笔记或视频链接；视频可自动提取文案，无需手贴文稿。AI
+          帮你总结归类。
+        </p>
+
+        <div className={styles.actions}>
+          <Link className={styles.primary} to="/feed">
+            开始喂养
+          </Link>
+          <Link className={styles.ghost} to="/settings">
+            {keyConfigured ? "查看模型配置" : "配置 API Key"}
+          </Link>
+          <a className={styles.textLink} href="#principles">
+            查看使用说明
+            <RightOutlined />
+          </a>
+        </div>
+      </div>
+
+      <ul id="principles" className={styles.principles}>
         <li>
-          <strong>空库起步</strong>
-          <span>没有预置百科，你喂什么它懂什么</span>
+          <RiseOutlined className={styles.pIcon} />
+          <div>
+            <strong>空库起步</strong>
+            <span>从投递开始，逐步构建你的专属知识库。</span>
+          </div>
         </li>
         <li>
-          <strong>视频自动提取文案</strong>
-          <span>字幕优先，失败再转写</span>
+          <PlayCircleOutlined className={styles.pIcon} />
+          <div>
+            <strong>视频自动提取文案</strong>
+            <span>粘贴视频链接，自动提取文案，无需手贴文稿。</span>
+          </div>
         </li>
         <li>
-          <strong>只按库内答</strong>
-          <span>超出范围明确拒答，保护认知质量</span>
+          <SafetyCertificateOutlined className={styles.pIcon} />
+          <div>
+            <strong>只按库内答</strong>
+            <span>基于你的知识库作答，超出范围会拒答，避免幻觉。</span>
+          </div>
         </li>
       </ul>
+
+      <p className={styles.foot}>超出范围会拒答 · 不预装通识百科</p>
     </section>
   );
 }

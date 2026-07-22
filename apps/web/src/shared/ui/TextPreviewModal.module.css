@@ -1,0 +1,431 @@
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.searchInput {
+  flex: 1 1 240px;
+  min-width: 180px;
+}
+
+.hitMeta {
+  min-width: 64px;
+}
+
+.hitNav {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  border: 1px solid #e6eaee;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.hitNavBtn {
+  width: 28px;
+  height: 28px;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  color: #475569;
+}
+
+.hitNavBtn + .hitNavBtn {
+  border-left: 1px solid #e6eaee;
+}
+
+.hitNavBtn:hover:not(:disabled) {
+  color: var(--color-accent, #2a6f6a);
+  background: rgba(42, 111, 106, 0.06) !important;
+}
+
+.fontControls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.fontSelect {
+  width: 88px;
+}
+
+.meta {
+  margin: 0 0 10px !important;
+  font-size: 12px;
+}
+
+.pageBadge {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--color-accent-soft, rgba(42, 111, 106, 0.12));
+  color: var(--color-accent, #2a6f6a);
+  font-weight: 600;
+}
+
+.bodyWrap {
+  display: grid;
+  gap: 6px;
+}
+
+.edgeHint {
+  font-size: 12px;
+  color: var(--color-muted, #6b7280);
+  text-align: center;
+  padding: 2px 0;
+}
+
+.edgeActive {
+  color: var(--color-accent, #2a6f6a);
+}
+
+.body {
+  max-height: min(52vh, 480px);
+  overflow: auto;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: #f7f9fa;
+  border: 1px solid #eef1f3;
+  font-size: 13px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: #334155;
+  overscroll-behavior: contain;
+}
+
+.scrollTip {
+  font-size: 12px;
+}
+
+.hit {
+  background: #ffe08a;
+  color: inherit;
+  padding: 0 1px;
+  border-radius: 2px;
+}
+
+.hitActive {
+  background: #2a6f6a;
+  color: #fff;
+  box-shadow: 0 0 0 2px rgba(42, 111, 106, 0.25);
+}
+
+.hitList {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  max-height: 140px;
+  overflow: auto;
+}
+
+.hitItem {
+  appearance: none;
+  border: 1px solid #eef1f3;
+  background: #fff;
+  border-radius: 8px;
+  padding: 8px 10px;
+  text-align: left;
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+.hitItem span {
+  font-size: 12px;
+  color: var(--color-muted, #6b7280);
+}
+
+.hitItem em {
+  font-style: normal;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #334155;
+}
+
+.hitItem:hover {
+  border-color: rgba(42, 111, 106, 0.35);
+}
+
+.hitItemActive {
+  border-color: rgba(42, 111, 106, 0.55);
+  background: rgba(42, 111, 106, 0.06);
+}
+
+.mainSplit {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 240px;
+  gap: 12px;
+  align-items: start;
+}
+
+.ann {
+  padding: 0 1px;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.annYellow {
+  background: rgba(250, 204, 21, 0.45);
+}
+
+.annTeal {
+  background: rgba(42, 111, 106, 0.28);
+}
+
+.annCoral {
+  background: rgba(244, 124, 90, 0.35);
+}
+
+.annActive {
+  outline: 2px solid rgba(42, 111, 106, 0.55);
+  outline-offset: 1px;
+}
+
+.notePane {
+  border: 1px solid #eef1f3;
+  border-radius: 10px;
+  background: #fff;
+  max-height: min(52vh, 480px);
+  overflow: auto;
+  padding: 10px;
+}
+
+.notePaneHead {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--color-ink, #1f2937);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.noteEmpty {
+  margin: 24px 8px;
+  font-size: 12px;
+  color: var(--color-muted, #6b7280);
+  text-align: center;
+  line-height: 1.5;
+}
+
+.noteList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.noteItem {
+  appearance: none;
+  width: 100%;
+  border: 1px solid #eef1f3;
+  background: #fafbfc;
+  border-radius: 8px;
+  padding: 8px;
+  text-align: left;
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: 10px 1fr;
+  gap: 8px;
+}
+
+.noteItem:hover {
+  border-color: rgba(42, 111, 106, 0.35);
+}
+
+.noteItemActive {
+  border-color: rgba(42, 111, 106, 0.55);
+  background: rgba(42, 111, 106, 0.06);
+}
+
+.noteDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 5px;
+}
+
+.dotYellow {
+  background: #eab308;
+}
+
+.dotTeal {
+  background: #2a6f6a;
+}
+
+.dotCoral {
+  background: #f47c5a;
+}
+
+.noteBody strong {
+  display: block;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #1f2937;
+}
+
+.noteBody p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #334155;
+}
+
+.noteMuted {
+  color: #9ca3af !important;
+}
+
+.noteBody em {
+  display: block;
+  margin-top: 4px;
+  font-style: normal;
+  font-size: 11px;
+  color: #9ca3ab;
+}
+
+.selPopup {
+  position: fixed;
+  z-index: 1100;
+  transform: translate(-50%, -100%);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  max-width: min(92vw, 420px);
+  padding: 8px 10px;
+  background: #fff;
+  border: 1px solid #e6eaee;
+  border-radius: 12px;
+  box-shadow: 0 10px 28px rgba(31, 41, 51, 0.14);
+}
+
+.selPopupLabel {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.selColors {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.selColorDot {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 0 1px rgba(31, 41, 51, 0.18);
+  cursor: pointer;
+  padding: 0;
+}
+
+.selColorActive {
+  box-shadow: 0 0 0 2px rgba(42, 111, 106, 0.55);
+  transform: scale(1.08);
+}
+
+.selColorCustom,
+.colorCustom {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.selColorCustom {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px dashed rgba(31, 41, 51, 0.35);
+  background:
+    conic-gradient(
+      from 0deg,
+      #facc15,
+      #f47c5a,
+      #c084fc,
+      #60a5fa,
+      #2a6f6a,
+      #facc15
+    );
+}
+
+.colorCustom {
+  border: 1px solid #e6eaee;
+  border-radius: 999px;
+  padding: 4px 10px 4px 6px;
+  font-size: 12px;
+  color: #334155;
+  background: #fff;
+}
+
+.selColorCustom input,
+.colorCustom input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+  border: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.annPending {
+  outline: 1.5px dashed rgba(42, 111, 106, 0.55);
+  outline-offset: 1px;
+}
+
+.quoteBox {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f7f9fa;
+  border: 1px solid #eef1f3;
+  max-height: 120px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.colorRow {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.colorBtn {
+  appearance: none;
+  border: 1px solid #e6eaee;
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  color: #fff;
+}
+
+.colorBtnActive {
+  box-shadow: 0 0 0 2px rgba(42, 111, 106, 0.35);
+}
+
+@media (max-width: 900px) {
+  .mainSplit {
+    grid-template-columns: 1fr;
+  }
+
+  .notePane {
+    max-height: 200px;
+  }
+}

@@ -27,6 +27,11 @@ body {
   font-family: var(--font-sans);
   color: var(--color-ink);
   background: var(--color-bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100vh;
 }
 
 a {

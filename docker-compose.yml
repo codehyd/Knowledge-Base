@@ -14,7 +14,7 @@ services:
       timeout: 5s
       retries: 10
     ports:
-      - "5432:5432"
+      - "55432:5432"
 
   api:
     build:
@@ -27,7 +27,7 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_CHAT_MODEL: ${LLM_CHAT_MODEL:-deepseek-chat}
       LLM_EMBED_MODEL: ${LLM_EMBED_MODEL:-deepseek-chat}
-      API_CORS_ORIGINS: ${API_CORS_ORIGINS:-http://localhost:8080,http://localhost:5173}
+      API_CORS_ORIGINS: ${API_CORS_ORIGINS:-http://localhost:18080,http://localhost:41779}
       DATA_DIR: /data
     volumes:
       - ./data:/data
@@ -35,7 +35,7 @@ services:
       db:
         condition: service_healthy
     ports:
-      - "8000:8000"
+      - "18765:8000"
 
   web:
     build:
@@ -43,7 +43,7 @@ services:
       args:
         BASE_REGISTRY: ${DOCKER_HUB_PROXY:-docker.m.daocloud.io}/library
     ports:
-      - "8080:80"
+      - "18080:80"
     depends_on:
       - api
 

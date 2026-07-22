@@ -11,10 +11,16 @@ export default defineConfig({
   },
   server: {
     host: true,
-    port: 5173,
+    port: 41779,
     proxy: {
-      "/api": "http://localhost:8000",
-      "/health": "http://localhost:8000",
+      "/api": "http://127.0.0.1:18765",
+      "/health": "http://127.0.0.1:18765",
+      "/doc.html": "http://127.0.0.1:18765",
+      "/webjars": "http://127.0.0.1:18765",
+      "/img": "http://127.0.0.1:18765",
+      "/v3": "http://127.0.0.1:18765",
+      "/openapi.json": "http://127.0.0.1:18765",
+      "/docs": "http://127.0.0.1:18765",
     },
   },
 });

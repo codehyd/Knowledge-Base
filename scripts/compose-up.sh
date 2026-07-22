@@ -16,4 +16,4 @@ echo "镜像代理: $DOCKER_HUB_PROXY"
 DOCKER_BUILDKIT=1 docker compose up -d --build "$@"
 docker compose ps
 echo ""
-echo "网页 http://localhost:8080  |  API http://localhost:8000/docs"
+echo "网页 http://localhost:18080  |  API文档 http://localhost:18765/doc.html (Knife4j)"

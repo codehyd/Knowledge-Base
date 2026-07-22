@@ -55,6 +55,9 @@ Thumbs.db
 !.vscode/extensions.json
 !.vscode/settings.json.example
 
+# —— API 临时下载（Knife4j jar 解压等） ——
+apps/api/tmp/
+
 # —— 其它敏感/本地 ——
 *.pem
 *.key

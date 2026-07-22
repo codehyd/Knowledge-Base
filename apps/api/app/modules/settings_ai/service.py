@@ -2,11 +2,9 @@ import time
 from typing import Any
 
 import httpx
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.database import engine
 from app.modules.settings_ai.models import AiSettings
 from app.modules.settings_ai.providers import infer_provider_id, list_providers
 from app.modules.settings_ai.schemas import AiSettingsOut, AiSettingsUpdate, AiTestOut
@@ -22,20 +20,8 @@ def mask_key(key: str) -> str:
     return f"{key[:3]}***{key[-4:]}"
 
 
-async def ensure_provider_column() -> None:
-    """兼容已有库：补 provider 列。"""
-    async with engine.begin() as conn:
-        await conn.execute(
-            text(
-                "ALTER TABLE ai_settings "
-                "ADD COLUMN IF NOT EXISTS provider VARCHAR(100) DEFAULT 'deepseek'"
-            )
-        )
-
-
 class SettingsAiService:
     async def _get_or_create(self, db: AsyncSession) -> AiSettings:
-        await ensure_provider_column()
         row = await db.get(AiSettings, SINGLETON_ID)
         if row:
             if not getattr(row, "provider", None):
@@ -60,7 +46,7 @@ class SettingsAiService:
 
     async def is_configured(self, db: AsyncSession) -> bool:
         row = await self._get_or_create(db)
-        return bool(row.api_key.strip())
+        return bool((row.api_key or "").strip())
 
     async def get(self, db: AsyncSession) -> AiSettingsOut:
         row = await self._get_or_create(db)
@@ -68,10 +54,10 @@ class SettingsAiService:
         return AiSettingsOut(
             provider=provider,
             base_url=row.base_url,
-            api_key_masked=mask_key(row.api_key),
+            api_key_masked=mask_key(row.api_key or ""),
             chat_model=row.chat_model,
             embed_model=row.embed_model,
-            configured=bool(row.api_key.strip()),
+            configured=bool((row.api_key or "").strip()),
         )
 
     async def update(self, db: AsyncSession, payload: AiSettingsUpdate) -> AiSettingsOut:
@@ -88,25 +74,38 @@ class SettingsAiService:
 
     async def test_connection(self, db: AsyncSession) -> AiTestOut:
         row = await self._get_or_create(db)
-        if not row.api_key.strip():
-            return AiTestOut(ok=False, message="尚未配置 API Key")
+        if not (row.api_key or "").strip():
+            return AiTestOut(ok=False, message="尚未配置 API Key，请先保存")
 
-        url = f"{row.base_url.rstrip('/')}/models"
+        base = row.base_url.rstrip("/")
+        headers = {"Authorization": f"Bearer {row.api_key}"}
         started = time.perf_counter()
+        # 用最小 chat 请求探测：部分厂商 /models 慢或不开放，会导致「卡住」感
+        payload = {
+            "model": row.chat_model,
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 1,
+            "stream": False,
+        }
         try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
-                resp = await client.get(
-                    url,
-                    headers={"Authorization": f"Bearer {row.api_key}"},
+            async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=5.0)) as client:
+                resp = await client.post(
+                    f"{base}/chat/completions",
+                    headers=headers,
+                    json=payload,
                 )
             latency = int((time.perf_counter() - started) * 1000)
             if resp.status_code >= 400:
+                detail = (resp.text or "")[:200]
                 return AiTestOut(
                     ok=False,
                     latency_ms=latency,
-                    message=f"服务商返回 {resp.status_code}",
+                    message=f"服务商返回 {resp.status_code}"
+                    + (f"：{detail}" if detail else ""),
                 )
             return AiTestOut(ok=True, latency_ms=latency, message="连接成功")
+        except httpx.TimeoutException:
+            return AiTestOut(ok=False, message="连接超时（12s），请检查 Base URL / 网络")
         except httpx.HTTPError as exc:
             return AiTestOut(ok=False, message=f"网络错误：{exc.__class__.__name__}")
 

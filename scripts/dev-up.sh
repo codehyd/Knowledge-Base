@@ -44,13 +44,13 @@ if [[ ! -d apps/web/node_modules ]]; then
   (cd apps/web && npm install --registry https://registry.npmmirror.com)
 fi
 
-echo "==> 启动 API (8000) 与 Web (5173)"
-export DATABASE_URL="${DATABASE_URL:-postgresql+asyncpg://kongku:kongku@127.0.0.1:5432/kongku}"
-export API_CORS_ORIGINS="${API_CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}"
+echo "==> 启动 API (18765) 与 Web (41779)"
+export DATABASE_URL="${DATABASE_URL:-postgresql+asyncpg://kongku:kongku@127.0.0.1:55432/kongku}"
+export API_CORS_ORIGINS="${API_CORS_ORIGINS:-http://localhost:41779,http://127.0.0.1:41779}"
 
-uvicorn app.main:app --app-dir apps/api --reload --host 127.0.0.1 --port 8000 &
+uvicorn app.main:app --app-dir apps/api --reload --host 127.0.0.1 --port 18765 &
 API_PID=$!
-(cd apps/web && npm run dev -- --host 127.0.0.1 --port 5173) &
+(cd apps/web && npm run dev -- --host 127.0.0.1 --port 41779) &
 WEB_PID=$!
 
 cleanup() {
@@ -60,8 +60,9 @@ trap cleanup EXIT INT TERM
 
 echo ""
 echo "已启动："
-echo "  网页  http://127.0.0.1:5173"
-echo "  API   http://127.0.0.1:8000/docs"
-echo "  健康  http://127.0.0.1:8000/health"
+echo "  网页  http://127.0.0.1:41779"
+echo "  API文档 http://127.0.0.1:18765/doc.html  (Knife4j)"
+echo "  健康  http://127.0.0.1:18765/health"
+echo "  数据库 127.0.0.1:55432"
 echo "按 Ctrl+C 结束本机 API/Web（数据库容器仍保留）"
 wait

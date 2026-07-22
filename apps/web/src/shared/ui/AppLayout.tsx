@@ -1,64 +1,85 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useEffect, useState } from "react";
+import {
+  BookOutlined,
+  CommentOutlined,
+  KeyOutlined,
+  RightOutlined,
+  SettingOutlined,
+  UploadOutlined,
+} from "@ant-design/icons";
 import { api } from "@/shared/api/client";
 import styles from "./AppLayout.module.css";
 
+/** 对齐 figma/01：主导航为喂养 / 对话 / 知识 / 设置；点品牌回首页 */
 const nav = [
-  { to: "/", label: "首页", end: true },
-  { to: "/feed", label: "喂养" },
-  { to: "/chat", label: "对话" },
-  { to: "/knowledge", label: "知识" },
-  { to: "/settings", label: "设置" },
+  { to: "/feed", label: "喂养", icon: UploadOutlined },
+  { to: "/chat", label: "对话", icon: CommentOutlined },
+  { to: "/knowledge", label: "知识", icon: BookOutlined },
+  { to: "/settings", label: "设置", icon: SettingOutlined },
 ];
 
 export function AppLayout() {
+  const location = useLocation();
   const [keyConfigured, setKeyConfigured] = useState<boolean | null>(null);
-  const [apiOk, setApiOk] = useState<boolean | null>(null);
 
   useEffect(() => {
     void (async () => {
       try {
-        const health = await api.health();
-        setApiOk(health.ok);
         const overview = await api.overview();
         setKeyConfigured(overview.key_configured);
       } catch {
-        setApiOk(false);
         setKeyConfigured(null);
       }
     })();
-  }, []);
+  }, [location.pathname]);
 
   return (
-    <div className={styles.shell}>
+    <div
+      className={`${styles.shell}${location.pathname.startsWith("/chat") ? ` ${styles.shellChat}` : ""}`}
+    >
       <aside className={styles.sidebar}>
-        <div className={styles.brand}>
+        <NavLink to="/" className={styles.brand} end>
           <div className={styles.logo}>空库</div>
           <div className={styles.sub}>个人认知知识库</div>
-        </div>
+        </NavLink>
+
         <nav className={styles.nav}>
-          {nav.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.end}
-              className={({ isActive }) =>
-                isActive ? `${styles.navItem} ${styles.active}` : styles.navItem
-              }
-            >
-              {item.label}
-            </NavLink>
-          ))}
+          {nav.map((item) => {
+            const Icon = item.icon;
+            return (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={({ isActive }) =>
+                  isActive ? `${styles.navItem} ${styles.active}` : styles.navItem
+                }
+              >
+                <Icon className={styles.navIcon} />
+                <span>{item.label}</span>
+              </NavLink>
+            );
+          })}
         </nav>
-        <div className={styles.footer}>
-          <div>API：{apiOk == null ? "检测中" : apiOk ? "正常" : "异常"}</div>
-          <div>
-            Key：
-            {keyConfigured == null ? "—" : keyConfigured ? "已配置" : "未配置"}
-          </div>
-        </div>
+
+        <NavLink to="/settings" className={styles.keyStatus}>
+          <span className={styles.keyLeft}>
+            <KeyOutlined />
+            <span>
+              {keyConfigured == null
+                ? "Key 检测中"
+                : keyConfigured
+                  ? "Key 已配置"
+                  : "Key 未配置"}
+            </span>
+          </span>
+          <RightOutlined className={styles.keyChevron} />
+        </NavLink>
       </aside>
-      <main className={styles.main}>
+
+      <main
+        className={`${styles.main}${location.pathname.startsWith("/chat") ? ` ${styles.mainChat}` : ""}`}
+      >
         <Outlet />
       </main>
     </div>

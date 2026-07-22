@@ -1,10 +1,11 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Route, Routes } from "react-router-dom";
 import { AppLayout } from "@/shared/ui/AppLayout";
 import { HomePage } from "@/features/home/HomePage";
 import { FeedPage } from "@/features/feed/FeedPage";
 import { ChatPage } from "@/features/chat/ChatPage";
 import { KnowledgePage } from "@/features/knowledge/KnowledgePage";
 import { SettingsPage } from "@/features/settings/SettingsPage";
+import { NotFoundPage } from "@/features/not-found/NotFoundPage";
 
 /**
  * 前端也按功能分目录（features/*）。
@@ -19,7 +20,7 @@ export function App() {
         <Route path="chat" element={<ChatPage />} />
         <Route path="knowledge" element={<KnowledgePage />} />
         <Route path="settings" element={<SettingsPage />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>
   );
