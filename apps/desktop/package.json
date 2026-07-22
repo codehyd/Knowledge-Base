@@ -4,6 +4,10 @@
   "private": true,
   "description": "空库桌面端（Electron）。dev 会同步拉起本机 API，关闭窗口结束自己拉起的 API。",
   "author": "kongku",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/codehyd/Knowledge-Base.git"
+  },
   "main": "electron/main.cjs",
   "type": "commonjs",
   "scripts": {
@@ -50,6 +54,8 @@
     "publish": [
       {
         "provider": "github",
+        "owner": "codehyd",
+        "repo": "Knowledge-Base",
         "releaseType": "release"
       }
     ],
