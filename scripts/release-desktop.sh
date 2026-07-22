@@ -2,17 +2,22 @@
 # 桌面端发版：打 v* tag 并推送，触发 GitHub Actions「Release Desktop」
 #
 # 用法（在仓库根目录）：
-#   ./scripts/release-desktop.sh              # 默认 patch 自增
-#   ./scripts/release-desktop.sh --minor
-#   ./scripts/release-desktop.sh --major
-#   ./scripts/release-desktop.sh 0.3.0
-#   ./scripts/release-desktop.sh --dry-run
-#   ./scripts/release-desktop.sh --skip-fetch # 网络不通时跳过拉 tag
+#   bash scripts/release-desktop.sh              # 默认 patch 自增
+#   bash scripts/release-desktop.sh --minor
+#   bash scripts/release-desktop.sh --major
+#   bash scripts/release-desktop.sh 0.3.0
+#   bash scripts/release-desktop.sh --dry-run
+#   bash scripts/release-desktop.sh --skip-fetch # 网络不通时跳过拉 tag
 set -euo pipefail
 
-# 无论从哪启动，都切到仓库根
+# 无论从哪启动，都切到仓库根（脚本必须在 scripts/ 下）
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+
+if [[ ! -f apps/desktop/package.json ]]; then
+  echo "未找到 apps/desktop/package.json。请在仓库根执行：bash scripts/release-desktop.sh" >&2
+  exit 1
+fi
 
 BUMP="patch"
 VERSION=""
@@ -34,6 +39,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     *)
       VERSION="${1#v}"
+      VERSION="${VERSION%%-*}"  # 允许传入 0.1.1-test，取数字部分
       shift
       ;;
   esac
@@ -41,7 +47,6 @@ done
 
 if [[ "$SKIP_FETCH" -ne 1 ]]; then
   echo "==> 同步远程标签（约 20s 超时；网络不通可加 --skip-fetch）"
-  # 低速超时，避免一直卡在 fetch
   set +e
   GIT_HTTP_LOW_SPEED_LIMIT=1000 \
   GIT_HTTP_LOW_SPEED_TIME=20 \
@@ -49,8 +54,8 @@ if [[ "$SKIP_FETCH" -ne 1 ]]; then
   fetch_rc=$?
   set -e
   if [[ $fetch_rc -ne 0 ]]; then
-    echo "警告：fetch tags 失败（常见于连不上 GitHub），将按本地 tag / package.json 计算版本" >&2
-    echo "      也可重试：./scripts/release-desktop.sh --skip-fetch" >&2
+    echo "警告：fetch tags 失败，将按本地 tag / package.json 计算版本" >&2
+    echo "      也可重试：bash scripts/release-desktop.sh --skip-fetch" >&2
   else
     echo "远程标签已同步"
   fi
@@ -58,16 +63,14 @@ else
   echo "==> 已跳过 fetch tags（--skip-fetch）"
 fi
 
+# 取最新 vX.Y.Z 或 vX.Y.Z-xxx（如 v0.1.1-test）
 latest_tag() {
   git tag -l 'v*' --sort=-v:refname | head -n1 || true
 }
 
+# 不依赖 python（Windows 商店 python 常为占位符会卡住）
 pkg_version() {
-  python - <<'PY'
-import json
-from pathlib import Path
-print(json.load(open("apps/desktop/package.json", encoding="utf-8"))["version"])
-PY
+  sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' apps/desktop/package.json | head -n1
 }
 
 bump_semver() {
@@ -89,11 +92,17 @@ if [[ -n "$VERSION" ]]; then
   NEXT="$VERSION"
 else
   BASE_TAG="$(latest_tag)"
-  if [[ -n "$BASE_TAG" && "$BASE_TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+  # 兼容 v0.1.1 与 v0.1.1-test
+  if [[ -n "$BASE_TAG" && "$BASE_TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)([.-].*)?$ ]]; then
     BASE="${BASH_REMATCH[1]}"
   else
     BASE="$(pkg_version)"
+    BASE="${BASE%%-*}"
     BASE_TAG="v${BASE}"
+  fi
+  if [[ ! "$BASE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "无法解析基础版本（tag=${BASE_TAG:-无}）。请指定版本：bash scripts/release-desktop.sh 0.1.2" >&2
+    exit 1
   fi
   NEXT="$(bump_semver "$BASE" "$BUMP")"
   echo "基于 ${BASE_TAG} 按 --${BUMP} 自增 -> v${NEXT}"
@@ -118,15 +127,20 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   exit 0
 fi
 
-python - <<PY
-import json
-from pathlib import Path
-p = Path("apps/desktop/package.json")
-data = json.loads(p.read_text(encoding="utf-8"))
-data["version"] = "${NEXT}"
-p.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-print(f"更新 package.json -> ${NEXT}")
-PY
+# 仅替换首个 version 字段
+tmp="$(mktemp)"
+awk -v ver="$NEXT" '
+  BEGIN { done=0 }
+  {
+    if (!done && $0 ~ /"version"[[:space:]]*:/) {
+      sub(/"version"[[:space:]]*:[[:space:]]*"[^"]+"/, "\"version\": \"" ver "\"")
+      done=1
+    }
+    print
+  }
+' apps/desktop/package.json >"$tmp"
+mv "$tmp" apps/desktop/package.json
+echo "更新 package.json -> ${NEXT}"
 
 git add apps/desktop/package.json
 if ! git diff --cached --quiet; then
@@ -134,7 +148,7 @@ if ! git diff --cached --quiet; then
 fi
 
 git tag -a "${TAG}" -m "Release ${TAG}"
-echo "==> 推送分支与标签（若再次卡住，多半是网络访问 GitHub 问题）"
+echo "==> 推送分支与标签（若卡住，多半是网络访问 GitHub 问题）"
 git push origin HEAD
 git push origin "${TAG}"
 

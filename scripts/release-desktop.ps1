@@ -45,13 +45,15 @@ if (-not $SkipFetch) {
 function Get-LatestSemverTag {
   $tags = git tag -l "v*" --sort=-v:refname 2>$null
   if (-not $tags) { return $null }
-  $first = ($tags | Select-Object -First 1)
-  if ($first -match '^v(\d+)\.(\d+)\.(\d+)$') {
-    return [pscustomobject]@{
-      Raw = $first
-      Major = [int]$Matches[1]
-      Minor = [int]$Matches[2]
-      Patch = [int]$Matches[3]
+  foreach ($first in @($tags)) {
+    # 兼容 v0.1.1 与 v0.1.1-test
+    if ($first -match '^v(\d+)\.(\d+)\.(\d+)([.-].*)?$') {
+      return [pscustomobject]@{
+        Raw = $first
+        Major = [int]$Matches[1]
+        Minor = [int]$Matches[2]
+        Patch = [int]$Matches[3]
+      }
     }
   }
   return $null
