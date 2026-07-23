@@ -63,8 +63,6 @@
   align-content: start;
   min-height: 0;
   overflow: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
 .cats::-webkit-scrollbar {
@@ -121,8 +119,6 @@
 .listPane {
   min-height: 0;
   overflow: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
 .listPane::-webkit-scrollbar {
@@ -327,8 +323,6 @@
   overflow: auto;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color: #334155;
-  scrollbar-width: thin;
-  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
 .preview::-webkit-scrollbar {
@@ -362,8 +356,6 @@
   word-break: break-word;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color: #334155;
-  scrollbar-width: thin;
-  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
 .previewModal::-webkit-scrollbar {

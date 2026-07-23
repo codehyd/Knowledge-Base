@@ -38,6 +38,16 @@ async def clear_finished(db: AsyncSession = Depends(get_db)) -> dict:
     return {"removed": n}
 
 
+@router.delete(
+    "/{source_id}",
+    summary="删除队列中的单条来源",
+    description="从喂养队列移除该项，并清理对应上传文件。已入库的知识条目不受影响。",
+)
+async def delete_source(source_id: int, db: AsyncSession = Depends(get_db)) -> dict:
+    await sources_service.delete_source(db, source_id)
+    return {"ok": True, "id": source_id}
+
+
 @router.post(
     "/ingest-ready",
     response_model=IngestReadyOut,

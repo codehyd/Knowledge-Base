@@ -23,6 +23,7 @@ LLM_PROVIDERS: list[dict[str, Any]] = [
         "name": "DeepSeek",
         "base_url": "https://api.deepseek.com/v1",
         "docs_url": "https://api-docs.deepseek.com/",
+        "keys_url": "https://platform.deepseek.com/api_keys",
         "chat_models": [
             _m(
                 "deepseek-v4-flash",
@@ -61,6 +62,7 @@ LLM_PROVIDERS: list[dict[str, Any]] = [
         "name": "OpenAI",
         "base_url": "https://api.openai.com/v1",
         "docs_url": "https://platform.openai.com/docs",
+        "keys_url": "https://platform.openai.com/api-keys",
         "chat_models": [
             _m("gpt-4o-mini", "GPT-4o mini", "便宜日用", recommended=True),
             _m("gpt-4o", "GPT-4o", "更强多模态/对话"),
@@ -81,6 +83,7 @@ LLM_PROVIDERS: list[dict[str, Any]] = [
         "name": "硅基流动 SiliconFlow",
         "base_url": "https://api.siliconflow.cn/v1",
         "docs_url": "https://docs.siliconflow.cn/",
+        "keys_url": "https://cloud.siliconflow.cn/account/ak",
         "chat_models": [
             _m(
                 "deepseek-ai/DeepSeek-V3",
@@ -106,6 +109,7 @@ LLM_PROVIDERS: list[dict[str, Any]] = [
         "name": "月之暗面 Kimi",
         "base_url": "https://api.moonshot.cn/v1",
         "docs_url": "https://platform.moonshot.cn/docs",
+        "keys_url": "https://platform.moonshot.cn/console/api-keys",
         "chat_models": [
             _m("moonshot-v1-8k", "moonshot-v1-8k", "短上下文", recommended=True),
             _m("moonshot-v1-32k", "moonshot-v1-32k", "中等上下文"),
@@ -121,6 +125,7 @@ LLM_PROVIDERS: list[dict[str, Any]] = [
         "name": "通义千问（DashScope 兼容模式）",
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "docs_url": "https://help.aliyun.com/zh/model-studio/",
+        "keys_url": "https://bailian.console.aliyun.com/?apiKey=1#/api-key",
         "chat_models": [
             _m("qwen-plus", "qwen-plus", "均衡", recommended=True),
             _m("qwen-turbo", "qwen-turbo", "更快更省"),
@@ -141,6 +146,7 @@ LLM_PROVIDERS: list[dict[str, Any]] = [
         "name": "智谱 GLM",
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
         "docs_url": "https://open.bigmodel.cn/dev/api",
+        "keys_url": "https://open.bigmodel.cn/usercenter/apikeys",
         "chat_models": [
             _m("glm-4-flash", "GLM-4-Flash", "快、省", recommended=True),
             _m("glm-4-air", "GLM-4-Air", "均衡"),

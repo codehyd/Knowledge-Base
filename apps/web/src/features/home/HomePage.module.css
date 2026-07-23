@@ -146,14 +146,6 @@
   line-height: 1.6;
 }
 
-.foot {
-  margin-top: auto;
-  padding-top: 20px;
-  text-align: center;
-  color: var(--color-muted);
-  font-size: 13px;
-}
-
 @media (max-width: 720px) {
   .page {
     padding: 20px 16px 20px;

@@ -9,11 +9,17 @@
  * 数据库：不启停 Postgres；无库时由 API /health 与前端提示。
  */
 
-const { app, BrowserWindow, shell, ipcMain } = require("electron");
+const { app, BrowserWindow, Menu, shell, ipcMain } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { spawn } = require("child_process");
 const http = require("http");
+
+// 关闭 Fluent/Overlay 滚动条，避免忽略页面 ::-webkit-scrollbar 自定义样式
+app.commandLine.appendSwitch(
+  "disable-features",
+  "OverlayScrollbar,FluentOverlayScrollbar,FluentScrollbars",
+);
 
 /** @type {import('electron').BrowserWindow | null} */
 let mainWindow = null;
@@ -95,12 +101,11 @@ function loadDotEnvInto(env) {
   return env;
 }
 
-function waitForHealth(timeoutMs = 60000) {
+function waitForHttp(url, timeoutMs = 60000, label = "服务") {
   const started = Date.now();
   return new Promise((resolve, reject) => {
     const tick = () => {
-      // /health 在无 DB 时也应返回 200（database=false）
-      const req = http.get(`${API_ORIGIN}/health`, (res) => {
+      const req = http.get(url, (res) => {
         res.resume();
         if (res.statusCode && res.statusCode < 500) {
           resolve(true);
@@ -116,7 +121,7 @@ function waitForHealth(timeoutMs = 60000) {
     };
     const retry = () => {
       if (Date.now() - started > timeoutMs) {
-        reject(new Error(`API 未在 ${timeoutMs}ms 内就绪：${API_ORIGIN}/health`));
+        reject(new Error(`${label}未在 ${timeoutMs}ms 内就绪：${url}`));
         return;
       }
       setTimeout(tick, 500);
@@ -125,38 +130,49 @@ function waitForHealth(timeoutMs = 60000) {
   });
 }
 
+function waitForHealth(timeoutMs = 60000) {
+  // /health 在无 DB 时也应返回 200（database=false）
+  return waitForHttp(`${API_ORIGIN}/health`, timeoutMs, "API");
+}
+
 function spawnApiProcess(command, args, options) {
   /** @type {import('child_process').SpawnOptions} */
   const opts = {
     ...options,
     windowsHide: true,
   };
-  // 打包态把 sidecar 日志写到 userData，便于排查「有进程无窗口」
-  if (app.isPackaged) {
-    try {
-      const log = sidecarLogPath();
-      const fd = fs.openSync(log, "a");
-      opts.stdio = ["ignore", fd, fd];
-    } catch {
-      opts.stdio = "ignore";
-    }
-  } else {
-    opts.stdio = "ignore";
+  // 开发/打包都写日志，避免子进程静默退出后无法排查
+  try {
+    const log = app.isPackaged
+      ? sidecarLogPath()
+      : path.join(repoRoot(), "data", "api-dev.log");
+    fs.mkdirSync(path.dirname(log), { recursive: true });
+    const fd = fs.openSync(log, "a");
+    fs.writeSync(
+      fd,
+      `\n==== ${new Date().toISOString()} spawn ${command} ${args.join(" ")}\n`,
+    );
+    opts.stdio = ["ignore", fd, fd];
+  } catch {
+    opts.stdio = app.isPackaged ? "ignore" : "inherit";
   }
 
+  console.log("[kongku] spawn API:", command, args.join(" "));
   apiChild = spawn(command, args, opts);
   apiSpawnedByUs = true;
   apiChild.on("exit", (code) => {
     apiChild = null;
     if (apiSpawnedByUs) {
       apiStatus = "failed";
-      apiLastError = `后端进程已退出${code != null ? ` (code=${code})` : ""}`;
+      apiLastError = `后端进程已退出${code != null ? ` (code=${code})` : ""}；详见 data/api-dev.log 或 userData/api-sidecar.log`;
+      console.warn("[kongku]", apiLastError);
     }
     apiSpawnedByUs = false;
   });
   apiChild.on("error", (err) => {
     apiStatus = "failed";
     apiLastError = `后端启动失败：${err.message}`;
+    console.error("[kongku]", apiLastError);
   });
 }
 
@@ -197,67 +213,110 @@ async function startApiSynced() {
     /* need spawn */
   }
 
-  const dataDir = app.isPackaged ? ensureAppDataDir() : undefined;
+  const root = repoRoot();
+  const dataDir = app.isPackaged
+    ? ensureAppDataDir()
+    : (() => {
+        const dir = path.join(root, "data");
+        fs.mkdirSync(dir, { recursive: true });
+        return dir;
+      })();
+
+  // Electron 拉起的 API：默认 SQLite（不依赖本机 Docker Postgres）
+  // 若要强制用仓库 .env 里的 Postgres：启动前设 KONGKU_USE_ENV_DB=1
   const env = loadDotEnvInto({
     ...process.env,
     KONGKU_API_PORT: String(API_PORT),
     KONGKU_API_HOST: API_HOST,
-    ...(dataDir ? { DATA_DIR: dataDir } : {}),
+    KONGKU_DESKTOP: "1",
+    DATA_DIR: dataDir,
   });
+  if (process.env.KONGKU_USE_ENV_DB !== "1") {
+    delete env.DATABASE_URL;
+    // 显式 SQLite，避免 cwd 下找不到 .env 时行为不一致
+    const dbFile = path.join(dataDir, "kongku.db").replace(/\\/g, "/");
+    env.DATABASE_URL = `sqlite+aiosqlite:///${dbFile}`;
+  }
 
   const sidecar = apiSidecarPath();
   if (fs.existsSync(sidecar)) {
     spawnApiProcess(sidecar, [], {
       env,
-      cwd: app.isPackaged ? appDataRoot() : undefined,
+      cwd: app.isPackaged ? appDataRoot() : path.join(root, "apps", "api"),
     });
     try {
-      // 窗口已并行打开；此处最多等 45s，失败也不阻塞界面
       await waitForHealth(45000);
       apiStatus = "ready";
+      console.log("[kongku] API ready (sidecar):", API_ORIGIN);
       return { ready: true, spawnedByUs: true };
     } catch (err) {
       apiStatus = "failed";
       apiLastError = String(err);
-      // 不立刻 kill：留给用户看界面提示；超时后再清
       return { ready: false, spawnedByUs: apiSpawnedByUs };
     }
   }
 
   if (!app.isPackaged) {
-    const root = repoRoot();
     const uvicorn =
       process.platform === "win32"
         ? path.join(root, "apps", "api", ".venv", "Scripts", "uvicorn.exe")
         : path.join(root, "apps", "api", ".venv", "bin", "uvicorn");
+    const py =
+      process.platform === "win32"
+        ? path.join(root, "apps", "api", ".venv", "Scripts", "python.exe")
+        : path.join(root, "apps", "api", ".venv", "bin", "python");
+
+    let command = "";
+    /** @type {string[]} */
+    let args = [];
     if (fs.existsSync(uvicorn)) {
-      spawnApiProcess(
-        uvicorn,
-        [
-          "app.main:app",
-          "--app-dir",
-          path.join(root, "apps", "api"),
-          "--host",
-          API_HOST,
-          "--port",
-          String(API_PORT),
-        ],
-        { cwd: path.join(root, "apps", "api"), env },
-      );
+      command = uvicorn;
+      args = [
+        "app.main:app",
+        "--app-dir",
+        path.join(root, "apps", "api"),
+        "--host",
+        API_HOST,
+        "--port",
+        String(API_PORT),
+      ];
+    } else if (fs.existsSync(py)) {
+      command = py;
+      args = [
+        "-m",
+        "uvicorn",
+        "app.main:app",
+        "--app-dir",
+        path.join(root, "apps", "api"),
+        "--host",
+        API_HOST,
+        "--port",
+        String(API_PORT),
+      ];
+    }
+
+    if (command) {
+      spawnApiProcess(command, args, {
+        cwd: path.join(root, "apps", "api"),
+        env,
+      });
       try {
         await waitForHealth(90000);
         apiStatus = "ready";
+        console.log("[kongku] API ready (uvicorn):", API_ORIGIN, "db=", env.DATABASE_URL);
         return { ready: true, spawnedByUs: true };
       } catch (err) {
         apiStatus = "failed";
-        apiLastError = String(err);
+        apiLastError = `${err}；请查看 data/api-dev.log，并确认已 pip install -r apps/api/requirements.txt（含 aiosqlite）`;
+        console.error("[kongku]", apiLastError);
         stopApi();
         return { ready: false, spawnedByUs: false };
       }
     }
     apiStatus = "failed";
     apiLastError =
-      "未找到 API：请先创建 apps/api/.venv 并安装依赖，或放置 resources/api/kongku-api";
+      "未找到 API：请先创建 apps/api/.venv 并 pip install -r requirements.txt";
+    console.error("[kongku]", apiLastError);
     return { ready: false, spawnedByUs: false };
   }
 
@@ -281,6 +340,9 @@ function windowIconPath() {
 }
 
 async function createWindow() {
+  // 去掉系统默认 File / Edit / View 菜单栏
+  Menu.setApplicationMenu(null);
+
   const icon = windowIconPath();
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -288,6 +350,7 @@ async function createWindow() {
     minWidth: 960,
     minHeight: 640,
     show: false,
+    autoHideMenuBar: true,
     ...(icon ? { icon } : {}),
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -316,11 +379,34 @@ async function createWindow() {
     return { action: "deny" };
   });
 
-  // 开发：默认连 Vite；可用 KONGKU_DEV_WEB 覆盖，设为空则用打包静态页逻辑
+  // 开发：默认连 Vite（网页端同样用这份 Vite）；仅 Electron 负责拉起 Python
+  // 可用 KONGKU_DEV_WEB 覆盖；设为空字符串则走下方打包静态页逻辑
   if (!app.isPackaged) {
-    const devUrl = process.env.KONGKU_DEV_WEB || DEV_WEB;
+    const devUrl =
+      process.env.KONGKU_DEV_WEB === undefined
+        ? DEV_WEB
+        : process.env.KONGKU_DEV_WEB;
     if (devUrl) {
-      await mainWindow.loadURL(devUrl);
+      try {
+        console.log(`[kongku] 等待 Vite：${devUrl}`);
+        await waitForHttp(devUrl, 90000, "Vite");
+        await mainWindow.loadURL(devUrl);
+      } catch (err) {
+        console.error("[kongku] Vite 未就绪:", err);
+        const tip = `<!doctype html><meta charset="utf-8"/><title>空库</title>
+<body style="font-family:sans-serif;padding:40px;line-height:1.6;color:#1f2933;background:#f7f8f9">
+<h1>前端 Vite 未启动</h1>
+<p>Electron 开发态需要先开网页 Vite（端口 41779），再开桌面壳。</p>
+<p>请另开终端执行：</p>
+<pre style="background:#fff;padding:12px;border:1px solid #e6eaee;border-radius:8px">cd apps/web
+npm run dev</pre>
+<p>或一键：<code>scripts/dev-electron.ps1</code> / <code>scripts/dev-electron.sh</code></p>
+<p style="color:#6b7280">${String(err).replace(/[<>&]/g, "")}</p>
+</body>`;
+        await mainWindow.loadURL(
+          `data:text/html;charset=utf-8,${encodeURIComponent(tip)}`,
+        );
+      }
       return;
     }
   }

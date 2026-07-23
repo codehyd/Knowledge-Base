@@ -10,6 +10,7 @@ export type ProviderOption = {
   name: string;
   base_url: string;
   docs_url?: string;
+  keys_url?: string;
   chat_models: ModelOption[];
   embed_models: ModelOption[];
   allow_custom_base_url?: boolean;
@@ -37,6 +38,30 @@ export type DbSettings = {
   effective_url_masked: string;
   connected: boolean;
   message: string;
+  schema_ready: boolean;
+  missing_tables: string[];
+  schema_message: string;
+};
+
+export type OpenBookItem = {
+  id: string;
+  title: string;
+  authors: string[];
+  languages: string[];
+  download_count: number;
+  cover_url: string;
+  has_epub: boolean;
+  has_text: boolean;
+  source: string;
+  detail_url: string;
+  snippet?: string;
+};
+
+export type OpenBookSourceInfo = {
+  id: string;
+  name: string;
+  description: string;
+  languages: string[];
 };
 
 export type SourceItem = {
@@ -274,6 +299,93 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  initDbSchema: () =>
+    request<{
+      ok: boolean;
+      message: string;
+      created_tables: string[];
+      schema_ready: boolean;
+      missing_tables: string[];
+      vector_extension: boolean;
+    }>("/api/settings/db/init", { method: "POST" }),
+
+  getOpenBookSettings: () =>
+    request<{
+      open_ebook_direct_ingest: boolean;
+      description: string;
+      ctext_api_key_masked?: string;
+      ctext_configured?: boolean;
+      ctext_keys_url?: string;
+      ctext_docs_url?: string;
+      ctext_hint?: string;
+      mirror_repo?: string;
+      mirror_ref?: string;
+      mirror_presets?: { id: string; name: string; repo: string; ref: string; desc?: string }[];
+      mirror_hint?: string;
+    }>("/api/open-books/settings"),
+  saveOpenBookSettings: (body: {
+    open_ebook_direct_ingest?: boolean;
+    ctext_api_key?: string | null;
+    mirror_repo?: string | null;
+    mirror_ref?: string | null;
+  }) =>
+    request<{
+      open_ebook_direct_ingest: boolean;
+      description: string;
+      ctext_api_key_masked?: string;
+      ctext_configured?: boolean;
+      ctext_keys_url?: string;
+      ctext_docs_url?: string;
+      ctext_hint?: string;
+      mirror_repo?: string;
+      mirror_ref?: string;
+      mirror_presets?: { id: string; name: string; repo: string; ref: string; desc?: string }[];
+      mirror_hint?: string;
+    }>("/api/open-books/settings", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  listOpenBookSources: () =>
+    request<{ items: OpenBookSourceInfo[]; default_source: string }>(
+      "/api/open-books/sources",
+    ),
+  searchOpenBooks: (q: string, source: string, page = 1) =>
+    request<{
+      query: string;
+      source: string;
+      total: number;
+      items: OpenBookItem[];
+      notice: string;
+    }>(
+      `/api/open-books/search?q=${encodeURIComponent(q)}&source=${encodeURIComponent(source)}&page=${page}`,
+    ),
+  importOpenBook: (body: { source: string; book_id: string; direct_ingest?: boolean }) =>
+    request<{
+      job_id: string;
+      status: string;
+      progress: number;
+      message: string;
+      source_id?: number | null;
+      title: string;
+      filename: string;
+      direct_ingest: boolean;
+      error: string;
+    }>("/api/open-books/import", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  getOpenBookJob: (jobId: string) =>
+    request<{
+      job_id: string;
+      status: string;
+      progress: number;
+      message: string;
+      source_id?: number | null;
+      title: string;
+      filename: string;
+      direct_ingest: boolean;
+      error: string;
+    }>(`/api/open-books/jobs/${encodeURIComponent(jobId)}`),
 
   listSources: () => request<{ items: SourceItem[]; total: number }>("/api/sources"),
   uploadSource: (file: File, type: "ebook" | "note") => {
@@ -299,10 +411,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ content }),
     }),
-  clearFinishedSources: () =>
-    request<{ removed: number }>("/api/sources/queue/finished", { method: "DELETE" }),
-  ingestSource: (id: number) =>
-    request<IngestResult>(`/api/sources/${id}/ingest`, { method: "POST" }),
+    clearFinishedSources: () =>
+      request<{ removed: number }>("/api/sources/queue/finished", { method: "DELETE" }),
+    deleteSource: (id: number) =>
+      request<{ ok: boolean; id: number }>(`/api/sources/${id}`, { method: "DELETE" }),
+    ingestSource: (id: number) =>
+      request<IngestResult>(`/api/sources/${id}/ingest`, { method: "POST" }),
   ingestReadySources: () =>
     request<{ ingested: IngestResult[]; skipped: number; failed: { source_id: number; detail: string }[] }>(
       "/api/sources/ingest-ready",

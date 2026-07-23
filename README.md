@@ -9,9 +9,9 @@ AI 总结归类；对话只按库内答；API Key（如 DeepSeek）自备。
 | 目录 | 用途 |
 |------|------|
 | **[工程文档](./docs/工程/README.md)** | **技术选型、架构、0→1、每个功能点怎么实现** |
-| [运行说明](./README-运行.md) | Docker / 开发启动；API 文档为 Knife4j `/doc.html` |
+| [运行说明](./README-运行.md) | 个人版：Electron + SQLite；API 文档 Knife4j `/doc.html` |
 | [桌面端 Electron](./docs/工程/13-桌面端Electron.md) | 安装包、tag 发版、updater、与本地开发的区别 |
-| [数据库连接](./docs/工程/03-数据库连接.md) | 开发库账号端口 |
+| [数据库连接](./docs/工程/03-数据库连接.md) | 默认 SQLite；可选自备 Postgres |
 | [产品文档](./docs/产品/README.md) | 定位、喂养规则、拒答、自测、副业扩展 |
 | [UI 视觉稿](./figma/README.md) | 11 屏界面对照 |
 
@@ -19,10 +19,10 @@ AI 总结归类；对话只按库内答；API Key（如 DeepSeek）自备。
 
 | 文档 | 用途 |
 |------|------|
-| [技术选型](./docs/工程/00-技术选型.md) | React + FastAPI + Postgres/pgvector + Compose … |
-| [从0到1](./docs/工程/01-从0到1.md) | 建仓到空库页跑通 |
+| [技术选型](./docs/工程/00-技术选型.md) | React + FastAPI + SQLite（个人）… |
+| [从0到1](./docs/工程/01-从0到1.md) | 建仓到空库页跑通（历史含 Compose，现以 README-运行为准） |
 | [架构约定](./docs/工程/02-架构约定.md) | MVC、按功能分模块，便于维护 |
-| [功能点 01～12](./docs/工程/功能/) | Docker、Key、喂养、解析、对话、拒答、导出… |
+| [功能点 01～12](./docs/工程/功能/) | 骨架、Key、喂养、解析、对话、拒答、导出… |
 
 ## 产品速查
 

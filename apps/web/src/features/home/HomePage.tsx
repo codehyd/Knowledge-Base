@@ -77,12 +77,10 @@ export function HomePage() {
           <SafetyCertificateOutlined className={styles.pIcon} />
           <div>
             <strong>只按库内答</strong>
-            <span>基于你的知识库作答，超出范围会拒答，避免幻觉。</span>
+            <span>基于你的知识库作答，超出范围会拒答，避免幻觉。不预装通识百科。</span>
           </div>
         </li>
       </ul>
-
-      <p className={styles.foot}>超出范围会拒答 · 不预装通识百科</p>
     </section>
   );
 }

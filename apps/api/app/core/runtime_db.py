@@ -45,15 +45,29 @@ def normalize_postgres_url(url: str) -> str:
     return raw
 
 
-def sqlite_url_for_path(path: str | Path) -> str:
-    p = Path(path).expanduser()
+def resolve_sqlite_path(path: str | Path | None = None) -> Path:
+    """相对路径一律相对 DATA_DIR，避免 cwd=apps/api 时指错库文件。"""
+    raw = str(path or "").strip()
+    if not raw:
+        return default_sqlite_path()
+    p = Path(raw).expanduser()
     if not p.is_absolute():
-        # 相对路径相对仓库/进程工作目录；若落在 data_dir 下也可直接写相对
-        p = p.resolve()
-    else:
-        p = p.resolve()
+        # 兼容旧值 data/kongku.db → 落到 DATA_DIR/kongku.db
+        name = p.name if p.name else DEFAULT_SQLITE_REL
+        if p.as_posix() in ("data/kongku.db", "./data/kongku.db"):
+            p = data_dir() / DEFAULT_SQLITE_REL
+        elif len(p.parts) == 1:
+            p = data_dir() / name
+        else:
+            # 其它相对路径仍相对 DATA_DIR 解析
+            p = (data_dir() / p).resolve()
+            return p
+    return p.resolve()
+
+
+def sqlite_url_for_path(path: str | Path) -> str:
+    p = resolve_sqlite_path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    # SQLAlchemy 需要至少三个斜杠：sqlite+aiosqlite:///abs/path
     return f"sqlite+aiosqlite:///{p.as_posix()}"
 
 
@@ -72,9 +86,11 @@ def load_runtime_config() -> dict[str, Any] | None:
 
 def save_runtime_config(*, mode: DbMode, sqlite_path: str, postgres_url: str) -> None:
     data_dir().mkdir(parents=True, exist_ok=True)
+    # SQLite 路径统一存绝对路径，避免跨 cwd 漂移
+    stored_sqlite = str(resolve_sqlite_path(sqlite_path or default_sqlite_path()))
     payload = {
         "mode": mode,
-        "sqlite_path": sqlite_path,
+        "sqlite_path": stored_sqlite,
         "postgres_url": postgres_url,
     }
     runtime_config_path().write_text(
@@ -191,10 +207,9 @@ def extract_postgres_password(url: str) -> str:
 def sqlite_path_from_url(url: str) -> str:
     if not url.startswith("sqlite"):
         return str(default_sqlite_path())
-    # sqlite+aiosqlite:///path
     prefix = "sqlite+aiosqlite:///"
     if url.startswith(prefix):
-        return url[len(prefix) :]
+        return str(resolve_sqlite_path(url[len(prefix) :]))
     if url.startswith("sqlite:///"):
-        return url[len("sqlite:///") :]
+        return str(resolve_sqlite_path(url[len("sqlite:///") :]))
     return str(default_sqlite_path())

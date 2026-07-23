@@ -88,6 +88,17 @@
   max-width: min(720px, 100%);
 }
 
+.keyTabs {
+  margin-top: 4px;
+}
+
+.tabHint {
+  margin: 0 0 16px;
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .testAlert {
   margin-top: 16px;
 }

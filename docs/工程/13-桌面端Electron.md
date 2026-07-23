@@ -6,20 +6,19 @@
 |------|------|
 | 打开 Electron | **自动拉起** Python API（开发：`.venv/uvicorn`；打包：`resources/api/kongku-api`） |
 | 关闭 Electron | **结束自己拉起的** API 子进程；若启动前端口上已有外部 API，则不杀 |
-| 数据库进程 | **不启停**；仍用本机 Postgres（开发 Docker） |
-| 无 Postgres | API 仍可启动；`/health` 与界面提示「未检测到数据库服务」 |
-| 有 Postgres | API 启动时 `init_db` 自动建表 |
+| 数据库 | **不启停独立 DB 进程**；默认 SQLite（`data/kongku.db`） |
+| 启动 | API 启动时 `init_db` 建表；个人版无需 Docker |
 
 ```mermaid
 flowchart LR
   openApp[Open Electron] --> spawnApi[Spawn Python API]
+  spawnApi --> sqlite[SQLite data/kongku.db]
   spawnApi --> health["/health"]
-  health -->|database true| uiOk[Normal UI]
-  health -->|database false| uiHint[Show no DB banner]
+  health --> uiOk[Normal UI]
   closeApp[Close Electron] --> killApi[Kill spawned API]
 ```
 
-日常网页开发仍可：Vite + 手动 uvicorn + Docker Postgres，不必开 Electron。
+日常网页调试：Vite + 手动 uvicorn（同样默认 SQLite），不必开 Electron。
 
 ## 目录
 
@@ -31,9 +30,7 @@ flowchart LR
 ## 本地试跑（验证启停同步）
 
 1. 先停掉手动开的 API（确保 18765 空闲）  
-2. 起 Docker Postgres（有库）或故意不起（验无库提示）  
-3. 起 Vite（可选，开发壳连它）  
-4. 开 Electron：
+2. 开 Electron（会按需拉起 Vite + API；默认 SQLite）：
 
 ```powershell
 cd apps/desktop

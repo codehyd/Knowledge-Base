@@ -11,8 +11,8 @@
   --font-sans: "IBM Plex Sans", "PingFang SC", "Noto Sans SC", sans-serif;
   --font-serif: "Source Han Serif SC", "Songti SC", "Noto Serif SC", serif;
   --scrollbar-size: 6px;
-  --scrollbar-thumb: rgba(31, 41, 51, 0.18);
-  --scrollbar-thumb-hover: rgba(42, 111, 106, 0.45);
+  --scrollbar-thumb: rgba(31, 41, 51, 0.22);
+  --scrollbar-thumb-hover: rgba(42, 111, 106, 0.5);
 }
 
 * {
@@ -32,8 +32,6 @@ body {
   color: var(--color-ink);
   background: var(--color-bg);
   -webkit-font-smoothing: antialiased;
-  scrollbar-width: thin;
-  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
 #root {
@@ -41,7 +39,18 @@ body {
   height: 100%;
 }
 
-/* 全局细滚动条：默认几乎隐形，悬停/拖动时略显品牌色 */
+/*
+ * 细滚动条：
+ * Chromium/Electron 上只要祖先设了 scrollbar-width/color，就会忽略 ::-webkit-scrollbar，
+ * 并退回系统 Fluent 条。因此标准属性只给不支持 webkit 伪元素的引擎（如 Firefox）。
+ */
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+  }
+}
+
 *::-webkit-scrollbar {
   width: var(--scrollbar-size);
   height: var(--scrollbar-size);

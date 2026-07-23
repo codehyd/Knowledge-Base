@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 快速开发启动：只拉/起 DB，本机跑 API + Web（比全量 compose build 快很多）
+# 个人版开发提示（已不再启动 Docker）
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -11,58 +11,15 @@ fi
 
 mkdir -p data/uploads data/exports data/tmp
 
-# 本机已有 postgres 镜像时优先复用，避免再拉 pgvector
-if docker image inspect postgres:16-alpine >/dev/null 2>&1; then
-  export POSTGRES_IMAGE="${POSTGRES_IMAGE:-postgres:16-alpine}"
-  echo "使用本机已有镜像: $POSTGRES_IMAGE"
-fi
+cat <<'EOF'
+空库 · 个人版（默认 SQLite，无 Docker）
 
-echo "==> 启动数据库"
-docker compose -f docker-compose.dev.yml up -d
+推荐 Electron：
+  cd apps/desktop && npm run dev
 
-echo "==> 等待数据库就绪"
-for i in $(seq 1 30); do
-  if docker compose -f docker-compose.dev.yml exec -T db pg_isready -U kongku -d kongku >/dev/null 2>&1; then
-    break
-  fi
-  sleep 1
-done
+仅网页：
+  终端1: cd apps/web && npm run dev
+  终端2: cd apps/api && source .venv/bin/activate && uvicorn app.main:app --reload --port 18765
 
-if [[ ! -d apps/api/.venv ]]; then
-  echo "==> 创建 API 虚拟环境并安装依赖"
-  python3 -m venv apps/api/.venv
-  # shellcheck disable=SC1091
-  source apps/api/.venv/bin/activate
-  pip install -r apps/api/requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
-else
-  # shellcheck disable=SC1091
-  source apps/api/.venv/bin/activate
-fi
-
-if [[ ! -d apps/web/node_modules ]]; then
-  echo "==> 安装前端依赖"
-  (cd apps/web && npm install --registry https://registry.npmmirror.com)
-fi
-
-echo "==> 启动 API (18765) 与 Web (41779)"
-export DATABASE_URL="${DATABASE_URL:-postgresql+asyncpg://kongku:kongku@127.0.0.1:55432/kongku}"
-export API_CORS_ORIGINS="${API_CORS_ORIGINS:-http://localhost:41779,http://127.0.0.1:41779}"
-
-uvicorn app.main:app --app-dir apps/api --reload --host 127.0.0.1 --port 18765 &
-API_PID=$!
-(cd apps/web && npm run dev -- --host 127.0.0.1 --port 41779) &
-WEB_PID=$!
-
-cleanup() {
-  kill "$API_PID" "$WEB_PID" 2>/dev/null || true
-}
-trap cleanup EXIT INT TERM
-
-echo ""
-echo "已启动："
-echo "  网页  http://127.0.0.1:41779"
-echo "  API文档 http://127.0.0.1:18765/doc.html  (Knife4j)"
-echo "  健康  http://127.0.0.1:18765/health"
-echo "  数据库 127.0.0.1:55432"
-echo "按 Ctrl+C 结束本机 API/Web（数据库容器仍保留）"
-wait
+数据文件: data/kongku.db
+EOF

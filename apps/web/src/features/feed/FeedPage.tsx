@@ -24,10 +24,13 @@ import {
   Tag,
   Typography,
 } from "antd";
-import { api, type SourceItem } from "@/shared/api/client";
+import { api, type OpenBookItem, type OpenBookSourceInfo, type SourceItem } from "@/shared/api/client";
 import { formatError } from "@/shared/ui/feedback";
 import { TextPreviewModal } from "@/shared/ui/TextPreviewModal";
 import styles from "./FeedPage.module.css";
+
+const CTEXT_SETTINGS_HREF = "/settings?keys=books";
+const NEED_CTEXT_KEY = "NEED_CTEXT_KEY";
 
 const ACTIVE = new Set(["pending", "extracting", "processing"]);
 
@@ -54,7 +57,7 @@ function statusLabel(item: SourceItem): string {
 }
 
 export function FeedPage() {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const navigate = useNavigate();
   const [tab, setTab] = useState("upload");
   const [items, setItems] = useState<SourceItem[]>([]);
@@ -72,6 +75,19 @@ export function FeedPage() {
   const [previewSourceId, setPreviewSourceId] = useState<number | null>(null);
   const [ebookDragging, setEbookDragging] = useState(false);
   const [noteDragging, setNoteDragging] = useState(false);
+  const [openQuery, setOpenQuery] = useState("");
+  const [openResults, setOpenResults] = useState<OpenBookItem[]>([]);
+  const [openSearching, setOpenSearching] = useState(false);
+  const [openSearched, setOpenSearched] = useState(false);
+  const [openSearchOpen, setOpenSearchOpen] = useState(false);
+  const [openSources, setOpenSources] = useState<OpenBookSourceInfo[]>([]);
+  const [openSource, setOpenSource] = useState("zh_open");
+  const [openNotice, setOpenNotice] = useState("");
+  const [directIngestEnabled, setDirectIngestEnabled] = useState(false);
+  const [ctextConfigured, setCtextConfigured] = useState(false);
+  const [importingId, setImportingId] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<number>(0);
+  const [downloadMessage, setDownloadMessage] = useState("");
   const ebookRef = useRef<HTMLInputElement>(null);
   const noteRef = useRef<HTMLInputElement>(null);
 
@@ -87,6 +103,28 @@ export function FeedPage() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [s, sources] = await Promise.all([
+          api.getOpenBookSettings(),
+          api.listOpenBookSources(),
+        ]);
+        if (cancelled) return;
+        setDirectIngestEnabled(Boolean(s.open_ebook_direct_ingest));
+        setCtextConfigured(Boolean(s.ctext_configured));
+        setOpenSources(sources.items || []);
+        if (sources.default_source) setOpenSource(sources.default_source);
+      } catch {
+        /* 设置读取失败时保持默认 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const hasActive = items.some((i) => ACTIVE.has(i.status));
@@ -141,6 +179,77 @@ export function FeedPage() {
     }, "链接已投递，后台自动提取文案");
   }
 
+  async function onOpenBookSearch() {
+    const q = openQuery.trim();
+    if (!q) {
+      message.warning("请输入书名或作者");
+      return;
+    }
+    setOpenSearching(true);
+    setOpenSearched(true);
+    try {
+      const res = await api.searchOpenBooks(q, openSource);
+      setOpenResults(res.items);
+      setOpenNotice(res.notice || "");
+      if (!res.items.length) message.info("未找到结果");
+    } catch (err) {
+      setOpenResults([]);
+      message.error(formatError(err, "搜索失败"));
+    } finally {
+      setOpenSearching(false);
+    }
+  }
+
+  async function onImportOpenBook(bookId: string, direct: boolean) {
+    if (openSource === "ctext" && !ctextConfigured) {
+      message.warning("请先配置 ctext API Key");
+      navigate(CTEXT_SETTINGS_HREF);
+      return;
+    }
+    if (direct && !directIngestEnabled) {
+      message.warning("未开启「公版书直接入库」，请到设置 → 喂养中开启");
+      return;
+    }
+    setImportingId(bookId);
+    setDownloadProgress(2);
+    setDownloadMessage("正在创建下载任务…");
+    try {
+      const job = await api.importOpenBook({
+        source: openSource,
+        book_id: bookId,
+        direct_ingest: direct,
+      });
+      setDownloadProgress(job.progress || 5);
+      setDownloadMessage(job.message || "下载中…");
+
+      // 轮询进度
+      for (let i = 0; i < 180; i++) {
+        await new Promise((r) => window.setTimeout(r, 500));
+        const st = await api.getOpenBookJob(job.job_id);
+        setDownloadProgress(st.progress || 0);
+        setDownloadMessage(st.message || "");
+        if (st.status === "done") {
+          await refresh();
+          message.success(st.message || (direct ? "下载完成并已入库" : "下载完成，已加入喂养队列"));
+          setOpenSearchOpen(false);
+          return;
+        }
+        if (st.status === "failed") {
+          message.error(st.error || st.message || "下载失败");
+          return;
+        }
+      }
+      message.warning("下载超时，请稍后在喂养队列查看是否已完成");
+      await refresh();
+    } catch (err) {
+      message.error(formatError(err, "下载失败"));
+    } finally {
+      setImportingId(null);
+      setDownloadProgress(0);
+      setDownloadMessage("");
+    }
+  }
+
   const readyCount = items.filter((i) => i.status === "ready").length;
   const queueItems =
     tab === "history"
@@ -168,6 +277,34 @@ export function FeedPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function removeOne(item: SourceItem) {
+    const name = item.title || item.filename || `#${item.id}`;
+    modal.confirm({
+      title: "从队列中删除？",
+      content: `将移除「${name}」。若已入库，知识库中的条目会保留。`,
+      okText: "删除",
+      okType: "danger",
+      cancelText: "取消",
+      onOk: async () => {
+        setBusy(true);
+        try {
+          await api.deleteSource(item.id);
+          if (previewSourceId === item.id) {
+            setPreviewOpen(false);
+            setPreviewSourceId(null);
+          }
+          await refresh();
+          message.success("已从队列删除");
+        } catch (err) {
+          message.error(formatError(err, "删除失败"));
+          throw err;
+        } finally {
+          setBusy(false);
+        }
+      },
+    });
   }
 
   async function ingestAllReady() {
@@ -266,6 +403,23 @@ export function FeedPage() {
                   <CloudUploadOutlined className={styles.cloud} />
                   <strong>点击或拖拽文件到此处上传</strong>
                   <span>文件大小不超过 200MB</span>
+                </div>
+                <div className={styles.cardActions}>
+                  <Button onClick={() => ebookRef.current?.click()} disabled={busy}>
+                    选择文件
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      setOpenSearchOpen(true);
+                      void api.getOpenBookSettings().then((s) => {
+                        setDirectIngestEnabled(Boolean(s.open_ebook_direct_ingest));
+                        setCtextConfigured(Boolean(s.ctext_configured));
+                      });
+                    }}
+                    disabled={busy}
+                  >
+                    搜索公版书
+                  </Button>
                 </div>
                 <input
                   ref={ebookRef}
@@ -489,6 +643,15 @@ export function FeedPage() {
                         补贴文案
                       </Button>
                     )}
+                    <Button
+                      size="small"
+                      danger
+                      icon={<DeleteOutlined />}
+                      disabled={busy}
+                      onClick={() => removeOne(item)}
+                    >
+                      删除
+                    </Button>
                   </Space>
                 </li>
               ))}
@@ -531,6 +694,139 @@ export function FeedPage() {
           </p>
         </aside>
       </div>
+
+      <Modal
+        title="搜索公版书"
+        open={openSearchOpen}
+        onCancel={() => setOpenSearchOpen(false)}
+        footer={null}
+        width={720}
+        destroyOnHidden
+      >
+        <div className={styles.openBooks}>
+          <Alert
+            type="info"
+            showIcon
+            message="仅公版 / 开放电子书"
+            description={
+              openNotice ||
+              "可切换书源搜索。默认「下载」后进入喂养队列；开启设置后才显示「直接入库」。"
+            }
+          />
+          <Tabs
+            size="small"
+            activeKey={openSource}
+            onChange={(key) => {
+              setOpenSource(key);
+              setOpenResults([]);
+              setOpenSearched(false);
+              setOpenNotice(openSources.find((s) => s.id === key)?.description || "");
+              if (key === "ctext") {
+                void api.getOpenBookSettings().then((s) => {
+                  setCtextConfigured(Boolean(s.ctext_configured));
+                });
+              }
+            }}
+            items={openSources.map((s) => ({
+              key: s.id,
+              label: s.name,
+            }))}
+          />
+          <form
+            className={styles.openSearchRow}
+            onSubmit={(e) => {
+              e.preventDefault();
+              void onOpenBookSearch();
+            }}
+          >
+            <Input
+              value={openQuery}
+              onChange={(e) => setOpenQuery(e.target.value)}
+              placeholder={
+                openSource === "gutenberg"
+                  ? "输入书名或作者（英文效果更好）"
+                  : openSource === "ctext"
+                    ? "输入书名（繁简均可），如：紅樓夢、論語"
+                    : "输入书名，如：红楼梦、道德经（简繁均可）"
+              }
+              allowClear
+              disabled={openSearching || importingId != null}
+              autoFocus
+            />
+            <Button
+              type="primary"
+              htmlType="submit"
+              loading={openSearching}
+              disabled={importingId != null || !openQuery.trim()}
+            >
+              搜索
+            </Button>
+          </form>
+          {openSource === "ctext" && !ctextConfigured ? (
+            <p className={styles.needKeyBanner}>
+              下载需配置 Key，
+              <Link to={CTEXT_SETTINGS_HREF} className={styles.needKeyLink}>
+                前往设置
+              </Link>
+            </p>
+          ) : null}
+          {importingId ? (
+            <div className={styles.openProgress}>
+              <Progress percent={downloadProgress} status="active" size="small" />
+              <p>{downloadMessage || "下载中…"}</p>
+            </div>
+          ) : null}
+          {openSearched && openResults.length === 0 ? (
+            <p className={styles.openEmpty}>未找到结果，可换书源、换关键词，或改用本地上传。</p>
+          ) : null}
+          {openResults.length > 0 ? (
+            <ul className={styles.openList}>
+              {openResults.map((book) => {
+                const canDownload = book.has_epub || book.has_text;
+                const showSnippet =
+                  Boolean(book.snippet) && book.snippet !== NEED_CTEXT_KEY;
+                return (
+                  <li key={`${book.source}-${book.id}`} className={styles.openItem}>
+                    <div className={styles.openMeta}>
+                      <strong>{book.title}</strong>
+                      <span>
+                        {book.authors.length ? book.authors.join(" / ") : "未知作者"}
+                        {book.languages.length ? ` · ${book.languages.join(",")}` : ""}
+                        {book.has_epub ? " · EPUB" : book.has_text ? " · TXT" : ""}
+                        {showSnippet ? ` · ${book.snippet}` : null}
+                      </span>
+                    </div>
+                    <Space wrap size={8}>
+                      <Button
+                        size="small"
+                        type="primary"
+                        loading={importingId === book.id}
+                        disabled={!canDownload || importingId != null}
+                        onClick={() => void onImportOpenBook(book.id, false)}
+                      >
+                        下载
+                      </Button>
+                      {directIngestEnabled ? (
+                        <Button
+                          size="small"
+                          loading={importingId === book.id}
+                          disabled={!canDownload || importingId != null}
+                          onClick={() => void onImportOpenBook(book.id, true)}
+                        >
+                          直接入库
+                        </Button>
+                      ) : null}
+                    </Space>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+          <p className={styles.openHint}>
+            「直接入库」仅在设置 → 喂养开启后显示；默认只提供「下载」。
+          </p>
+        </div>
+      </Modal>
 
       <Modal
         title="粘贴笔记"

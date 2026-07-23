@@ -14,27 +14,42 @@ from app.modules.knowledge.router import router as knowledge_router
 from app.modules.overview.router import router as overview_router
 from app.modules.settings_ai.router import router as settings_ai_router
 from app.modules.settings_db.router import router as settings_db_router
+from app.modules.open_books.router import router as open_books_router
 from app.modules.sources.router import router as sources_router
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    # 无数据库时仍允许 API 进程启动，由 /health 提示「没有数据库服务」
+    # SQLite：启动时自动建表对齐；Postgres：只探测，表结构由设置页「初始化」按钮触发
     try:
-        await init_db()
+        from app.core import database as db_mod
+        from app.core.runtime_db import detect_mode_from_url, resolve_database_url
+
+        mode = detect_mode_from_url(resolve_database_url())
+        if mode == "sqlite":
+            result = await init_db()
+            print(f"[kongku] init_db ok (sqlite): {result.get('message')}")
+        else:
+            status = await db_mod.schema_status()
+            print(
+                f"[kongku] postgres connected={status.get('connected')} "
+                f"schema_ready={status.get('schema_ready')}"
+            )
     except Exception as exc:
-        print(f"[kongku] init_db skipped (database unavailable): {exc}")
+        print(f"[kongku] init_db skipped (database unavailable or failed): {exc}")
 
     # 启动时为尚无切片的已入库条目自动回填（失败不阻塞服务）
     try:
         from app.core import database as db_mod
         from app.modules.knowledge.index import reindex_missing
 
-        if db_mod.SessionLocal is None:
-            db_mod.init_engine_from_config()
-        assert db_mod.SessionLocal is not None
-        async with db_mod.SessionLocal() as db:
-            await reindex_missing(db, with_embed=True)
+        status = await db_mod.schema_status()
+        if status.get("schema_ready"):
+            if db_mod.SessionLocal is None:
+                db_mod.init_engine_from_config()
+            assert db_mod.SessionLocal is not None
+            async with db_mod.SessionLocal() as db:
+                await reindex_missing(db, with_embed=True)
     except Exception:
         pass
     yield
@@ -73,6 +88,7 @@ def create_app() -> FastAPI:
     app.include_router(overview_router, prefix="/api")
     app.include_router(settings_ai_router, prefix="/api")
     app.include_router(settings_db_router, prefix="/api")
+    app.include_router(open_books_router, prefix="/api")
     app.include_router(sources_router, prefix="/api")
     app.include_router(knowledge_router, prefix="/api")
     app.include_router(chat_router, prefix="/api")

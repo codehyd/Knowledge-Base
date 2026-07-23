@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
@@ -129,6 +130,57 @@ class SourcesService:
         await db.refresh(row)
         return row
 
+    async def create_from_bytes(
+        self,
+        db: AsyncSession,
+        *,
+        data: bytes,
+        filename: str,
+        title: str = "",
+        source_type: str = "ebook",
+    ) -> Source:
+        """由公版书下载等内部路径投递文件（不经 UploadFile）。"""
+        if source_type not in {"ebook", "note"}:
+            raise HTTPException(status_code=400, detail="type 仅支持 ebook / note")
+        if not data:
+            raise HTTPException(status_code=400, detail="空文件")
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=400, detail="文件超过 200MB 限制")
+
+        safe = _safe_name(filename or "book.bin")
+        suffix = Path(safe).suffix.lower()
+        allowed = ALLOWED_EBOOK if source_type == "ebook" else ALLOWED_NOTE
+        if suffix not in allowed:
+            raise HTTPException(
+                status_code=400,
+                detail=f"不支持的扩展名 {suffix or '(无)'}，允许：{', '.join(sorted(allowed))}",
+            )
+
+        row = Source(
+            type=source_type,
+            title=(title or Path(safe).stem).strip() or Path(safe).stem,
+            filename=safe,
+            status="pending",
+            stage="queued",
+            progress=0,
+        )
+        db.add(row)
+        await db.commit()
+        await db.refresh(row)
+
+        folder = _data_root() / "uploads" / str(row.id)
+        folder.mkdir(parents=True, exist_ok=True)
+        dest = folder / f"original{suffix}"
+        dest.write_bytes(data)
+
+        row.storage_path = str(dest.relative_to(_data_root())).replace("\\", "/")
+        row.status = "pending"
+        row.stage = "saved"
+        row.progress = 5
+        await db.commit()
+        await db.refresh(row)
+        return row
+
     async def create_paste(self, db: AsyncSession, payload: PasteIn) -> Source:
         content = payload.content.strip()
         if not content:
@@ -215,10 +267,24 @@ class SourcesService:
             select(Source).where(Source.status.in_(["ready", "failed", "committed"]))
         )
         rows = list(result.scalars().all())
+        ids = [row.id for row in rows]
         for row in rows:
             await db.delete(row)
         await db.commit()
-        return len(rows)
+        for sid in ids:
+            folder = _data_root() / "uploads" / str(sid)
+            if folder.exists():
+                shutil.rmtree(folder, ignore_errors=True)
+        return len(ids)
+
+    async def delete_source(self, db: AsyncSession, source_id: int) -> None:
+        row = await self.get(db, source_id)
+        sid = row.id
+        await db.delete(row)
+        await db.commit()
+        folder = _data_root() / "uploads" / str(sid)
+        if folder.exists():
+            shutil.rmtree(folder, ignore_errors=True)
 
     async def _ensure_category(self, db: AsyncSession, name: str) -> Category:
         result = await db.execute(select(Category).where(Category.name == name))

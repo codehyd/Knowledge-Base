@@ -167,8 +167,6 @@
     linear-gradient(180deg, rgba(247, 249, 250, 0.9), rgba(255, 255, 255, 0.4)),
     #f7f9fa;
   scrollbar-gutter: stable;
-  scrollbar-width: thin;
-  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
 .messages::-webkit-scrollbar {

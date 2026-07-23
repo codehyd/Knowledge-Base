@@ -2,7 +2,7 @@
   "name": "kongku-desktop",
   "version": "0.1.5",
   "private": true,
-  "description": "空库桌面端（Electron）。dev 会同步拉起本机 API，关闭窗口结束自己拉起的 API。",
+  "description": "空库桌面端。npm run dev 自动拉起 Vite；仅 Electron 自动拉起 Python（默认可 SQLite）。",
   "author": "kongku",
   "repository": {
     "type": "git",
@@ -11,7 +11,8 @@
   "main": "electron/main.cjs",
   "type": "commonjs",
   "scripts": {
-    "dev": "electron .",
+    "dev": "node scripts/dev.cjs",
+    "dev:electron": "electron .",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
