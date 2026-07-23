@@ -1,4 +1,8 @@
+from datetime import datetime
+from urllib.parse import quote
+
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi.responses import Response
 
 from app.modules.open_books.providers import DEFAULT_SOURCE
 from app.modules.open_books.schemas import (
@@ -12,6 +16,26 @@ from app.modules.open_books.schemas import (
 from app.modules.open_books.service import open_books_service
 
 router = APIRouter(prefix="/open-books", tags=["公版电子书"])
+
+
+def _safe_filename_stem(name: str) -> str:
+    import re
+
+    s = re.sub(r'[\\/:*?"<>|\r\n]+', "_", (name or "").strip())
+    s = re.sub(r"_+", "_", s).strip(" ._")
+    return (s[:60] or "book")
+
+
+def _attachment_name(*, title: str, original_filename: str) -> str:
+    """书名 + 时间戳，保留原扩展名。"""
+    ext = ""
+    if "." in (original_filename or ""):
+        ext = original_filename.rsplit(".", 1)[-1].lower()
+    if ext not in {"txt", "epub", "md", "html", "htm"}:
+        ext = "txt"
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stem = _safe_filename_stem(title) or "book"
+    return f"{stem}_{stamp}.{ext}"
 
 
 @router.get(
@@ -54,10 +78,50 @@ async def search_open_books(
     return await open_books_service.search(q, source=source, page=page)
 
 
+@router.get(
+    "/file",
+    summary="另存为：拉取电子书文件到本机",
+    description="直接返回文件流，不进入喂养队列。",
+)
+async def download_open_book_file(
+    source: str = Query(DEFAULT_SOURCE, description="书源 id"),
+    book_id: str = Query(..., min_length=1, max_length=500, description="源内书籍 id"),
+    title_hint: str = Query("", max_length=200, description="可选：前端传入的书名，用于文件名"),
+) -> Response:
+    try:
+        data, filename, title = await open_books_service.fetch_file(
+            source=source, book_id=book_id
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"下载失败：{exc}") from exc
+
+    display_title = (title_hint or title or "").strip() or "book"
+    safe_name = _attachment_name(title=display_title, original_filename=filename or "book.txt")
+    ascii_name = safe_name.encode("ascii", "ignore").decode("ascii") or f"book_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    encoded = quote(safe_name)
+    media = (
+        "application/epub+zip"
+        if safe_name.lower().endswith(".epub")
+        else "text/plain; charset=utf-8"
+    )
+    return Response(
+        content=data,
+        media_type=media,
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded}"
+            ),
+            "X-Kongku-Filename": encoded,
+        },
+    )
+
+
 @router.post(
     "/import",
     response_model=OpenBookImportJobOut,
-    summary="开始下载公版书（异步，可查进度）",
+    summary="开始下载公版书到喂养队列（异步，可查进度）",
 )
 async def import_open_book(
     payload: OpenBookImportIn,

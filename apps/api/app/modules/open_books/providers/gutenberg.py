@@ -18,7 +18,7 @@ class GutenbergProvider:
     info = OpenBookSourceInfo(
         id="gutenberg",
         name="Gutenberg",
-        description="Project Gutenberg / Gutendex。偏英文与欧洲语言公版书，中文原著很少。",
+        description="搜索英文书名或作者，如 Pride and Prejudice、Shakespeare。",
         languages=["en"],
     )
 

@@ -359,6 +359,45 @@ export const api = {
     }>(
       `/api/open-books/search?q=${encodeURIComponent(q)}&source=${encodeURIComponent(source)}&page=${page}`,
     ),
+  /** 另存为：拉取文件到本机（不进喂养队列） */
+  saveOpenBookFile: async (source: string, bookId: string, titleHint?: string) => {
+    const qs = new URLSearchParams({
+      source,
+      book_id: bookId,
+    });
+    if (titleHint?.trim()) qs.set("title_hint", titleHint.trim());
+    const path = `/api/open-books/file?${qs.toString()}`;
+    const url = path.startsWith("http") ? path : `${apiBase}${path}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(parseErrorBody(text, res.status));
+    }
+    const blob = await res.blob();
+    const cd = res.headers.get("Content-Disposition") || "";
+    const headerName = res.headers.get("X-Kongku-Filename");
+    let filename = "book.txt";
+    if (headerName) {
+      try {
+        filename = decodeURIComponent(headerName);
+      } catch {
+        filename = headerName;
+      }
+    } else {
+      const star = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+      const plain = /filename="?([^";]+)"?/i.exec(cd);
+      if (star?.[1]) {
+        try {
+          filename = decodeURIComponent(star[1]);
+        } catch {
+          filename = star[1];
+        }
+      } else if (plain?.[1]) {
+        filename = plain[1];
+      }
+    }
+    return { blob, filename };
+  },
   importOpenBook: (body: { source: string; book_id: string; direct_ingest?: boolean }) =>
     request<{
       job_id: string;

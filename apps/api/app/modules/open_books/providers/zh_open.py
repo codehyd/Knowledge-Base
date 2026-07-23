@@ -79,10 +79,7 @@ class ZhOpenProvider:
     info = OpenBookSourceInfo(
         id="zh_open",
         name="中文公版",
-        description=(
-            "智能中文公版：先按镜像仓库动态目录搜索（国内 CDN 加速），"
-            "未命中再搜维基文库。默认推荐镜像即可，无需维护本地书单。"
-        ),
+        description="输入中文书名搜索，如红楼梦、论语；简繁均可。",
         languages=["zh"],
     )
 

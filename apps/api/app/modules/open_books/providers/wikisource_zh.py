@@ -24,7 +24,7 @@ class WikisourceZhProvider:
     info = OpenBookSourceInfo(
         id="wikisource_zh",
         name="维基文库",
-        description="中文维基文库开放文本。可搜红楼梦等古籍；下载为纯文本，篇幅很长时会拼接子页面。",
+        description="搜索维基文库中的开放文本，适合古籍与长篇；下载为纯文本。",
         languages=["zh"],
     )
 

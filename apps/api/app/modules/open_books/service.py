@@ -67,6 +67,11 @@ class OpenBooksService:
     def sources(self) -> OpenBookSourcesOut:
         return OpenBookSourcesOut(items=list_sources(), default_source=DEFAULT_SOURCE)
 
+    async def fetch_file(self, *, source: str, book_id: str) -> tuple[bytes, str, str]:
+        """拉取文件内容，供另存为（不进入喂养队列）。"""
+        provider = get_provider(source)
+        return await provider.fetch(str(book_id))
+
     async def search(self, query: str, *, source: str, page: int = 1) -> OpenBookSearchOut:
         provider = get_provider(source)
         items, total = await provider.search(query, page=page)
@@ -75,8 +80,7 @@ class OpenBooksService:
             source=provider.info.id,
             total=total,
             items=items,
-            notice=provider.info.description
-            + " 非全网任意图书；下载后进入喂养队列，默认需抽取后才能预览与入库。",
+            notice=provider.info.description,
         )
 
     def get_job(self, job_id: str) -> OpenBookImportJobOut:

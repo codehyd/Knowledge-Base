@@ -23,11 +23,7 @@ class CtextProvider:
     info = OpenBookSourceInfo(
         id="ctext",
         name="中国哲书库",
-        description=(
-            "中国哲学书电子化计划（ctext.org）。可搜书名。"
-            "全文下载需配置 ctext Key；未配置时可点提示前往设置。"
-            "无密钥时也可改用「中文公版」。"
-        ),
+        description="适合搜先秦诸子、经典古籍书名。下载全文前请先在设置中填写 Key。",
         languages=["zh"],
     )
 

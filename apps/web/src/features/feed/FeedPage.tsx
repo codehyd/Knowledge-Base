@@ -86,6 +86,7 @@ export function FeedPage() {
   const [directIngestEnabled, setDirectIngestEnabled] = useState(false);
   const [ctextConfigured, setCtextConfigured] = useState(false);
   const [importingId, setImportingId] = useState<string | null>(null);
+  const [savingAsId, setSavingAsId] = useState<string | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<number>(0);
   const [downloadMessage, setDownloadMessage] = useState("");
   const ebookRef = useRef<HTMLInputElement>(null);
@@ -247,6 +248,45 @@ export function FeedPage() {
       setImportingId(null);
       setDownloadProgress(0);
       setDownloadMessage("");
+    }
+  }
+
+  async function onSaveOpenBookAs(book: OpenBookItem) {
+    if (openSource === "ctext" && !ctextConfigured) {
+      message.warning("请先配置 ctext API Key");
+      navigate(CTEXT_SETTINGS_HREF);
+      return;
+    }
+    setSavingAsId(book.id);
+    setDownloadMessage(`正在另存为「${book.title}」…`);
+    try {
+      const { blob, filename } = await api.saveOpenBookFile(
+        openSource,
+        book.id,
+        book.title,
+      );
+      const href = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = href;
+      a.download = filename || `${book.title}.txt`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(href);
+      setDownloadMessage(`另存为成功：${filename}`);
+      modal.success({
+        title: "另存为成功",
+        content: `文件已保存为「${filename}」。可在浏览器下载目录中查看。`,
+        okText: "知道了",
+      });
+    } catch (err) {
+      setDownloadMessage("");
+      message.error(formatError(err, "另存为失败"));
+    } finally {
+      setSavingAsId(null);
+      window.setTimeout(() => {
+        setDownloadMessage((prev) => (prev.startsWith("另存为成功") ? "" : prev));
+      }, 2500);
     }
   }
 
@@ -707,10 +747,9 @@ export function FeedPage() {
           <Alert
             type="info"
             showIcon
-            message="仅公版 / 开放电子书"
+            message="使用提示"
             description={
-              openNotice ||
-              "可切换书源搜索。默认「下载」后进入喂养队列；开启设置后才显示「直接入库」。"
+              openNotice || "切换上方书源后输入书名搜索；可加入喂养队列，或另存到本机。"
             }
           />
           <Tabs
@@ -750,14 +789,14 @@ export function FeedPage() {
                     : "输入书名，如：红楼梦、道德经（简繁均可）"
               }
               allowClear
-              disabled={openSearching || importingId != null}
+              disabled={openSearching || importingId != null || savingAsId != null}
               autoFocus
             />
             <Button
               type="primary"
               htmlType="submit"
               loading={openSearching}
-              disabled={importingId != null || !openQuery.trim()}
+              disabled={importingId != null || savingAsId != null || !openQuery.trim()}
             >
               搜索
             </Button>
@@ -770,10 +809,12 @@ export function FeedPage() {
               </Link>
             </p>
           ) : null}
-          {importingId ? (
+          {importingId || savingAsId ? (
             <div className={styles.openProgress}>
-              <Progress percent={downloadProgress} status="active" size="small" />
-              <p>{downloadMessage || "下载中…"}</p>
+              {importingId ? (
+                <Progress percent={downloadProgress} status="active" size="small" />
+              ) : null}
+              <p>{downloadMessage || (savingAsId ? "正在另存为…" : "下载中…")}</p>
             </div>
           ) : null}
           {openSearched && openResults.length === 0 ? (
@@ -801,16 +842,24 @@ export function FeedPage() {
                         size="small"
                         type="primary"
                         loading={importingId === book.id}
-                        disabled={!canDownload || importingId != null}
+                        disabled={!canDownload || importingId != null || savingAsId != null}
                         onClick={() => void onImportOpenBook(book.id, false)}
                       >
-                        下载
+                        加入队列
+                      </Button>
+                      <Button
+                        size="small"
+                        loading={savingAsId === book.id}
+                        disabled={!canDownload || importingId != null || savingAsId != null}
+                        onClick={() => void onSaveOpenBookAs(book)}
+                      >
+                        另存为
                       </Button>
                       {directIngestEnabled ? (
                         <Button
                           size="small"
                           loading={importingId === book.id}
-                          disabled={!canDownload || importingId != null}
+                          disabled={!canDownload || importingId != null || savingAsId != null}
                           onClick={() => void onImportOpenBook(book.id, true)}
                         >
                           直接入库
@@ -823,7 +872,7 @@ export function FeedPage() {
             </ul>
           ) : null}
           <p className={styles.openHint}>
-            「直接入库」仅在设置 → 喂养开启后显示；默认只提供「下载」。
+            「加入队列」进入喂养；「另存为」保存到本机。
           </p>
         </div>
       </Modal>
