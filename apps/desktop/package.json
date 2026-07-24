@@ -2,8 +2,11 @@
   "name": "kongku-desktop",
   "version": "0.1.6",
   "private": true,
-  "description": "空库桌面端。npm run dev 自动拉起 Vite；仅 Electron 自动拉起 Python（默认可 SQLite）。",
-  "author": "kongku",
+  "description": "空库 — 本地知识库桌面应用",
+  "author": {
+    "name": "kongku",
+    "email": "2303885822@qq.com"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/codehyd/Knowledge-Base.git"
@@ -98,6 +101,8 @@
     },
     "linux": {
       "icon": "build/icon.png",
+      "desktopName": "kongku",
+      "syncDesktopName": true,
       "target": [
         {
           "target": "AppImage",
