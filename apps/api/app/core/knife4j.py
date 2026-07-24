@@ -64,8 +64,20 @@ def custom_openapi(app: FastAPI):
 
 def setup_knife4j(app: FastAPI) -> None:
     """挂载 Knife4j UI，并关闭默认 /docs（保留 /openapi.json）。"""
+    import os
+
     if not STATIC_ROOT.exists():
-        raise RuntimeError(f"Knife4j 静态资源缺失: {STATIC_ROOT}")
+        # 桌面 sidecar 若未打进静态资源，不能阻断 API 启动
+        desktop = os.environ.get("KONGKU_DESKTOP", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+        msg = f"Knife4j 静态资源缺失: {STATIC_ROOT}"
+        if desktop:
+            print(f"[kongku] {msg}（桌面端已跳过 /doc.html）")
+            return
+        raise RuntimeError(msg)
 
     app.mount(
         "/webjars",

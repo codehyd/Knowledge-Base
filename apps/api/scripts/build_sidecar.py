@@ -29,6 +29,14 @@ def main() -> int:
         elif old.is_dir():
             shutil.rmtree(old, ignore_errors=True)
 
+    knife4j_dir = API_ROOT / "app" / "static" / "knife4j"
+    if not knife4j_dir.is_dir():
+        raise SystemExit(f"缺少 Knife4j 静态资源目录: {knife4j_dir}")
+
+    # PyInstaller --add-data 分隔符：Windows 用 ;，Unix 用 :
+    data_sep = ";" if sys.platform == "win32" else ":"
+    knife4j_data = f"{knife4j_dir}{data_sep}app/static/knife4j"
+
     cmd = [
         sys.executable,
         "-m",
@@ -44,6 +52,8 @@ def main() -> int:
         str(API_ROOT / "build" / "pyinstaller" / "work"),
         "--specpath",
         str(API_ROOT / "build" / "pyinstaller"),
+        "--add-data",
+        knife4j_data,
         # FastAPI / SQLAlchemy / 提取链路常见动态导入
         "--collect-all",
         "uvicorn",
@@ -73,6 +83,8 @@ def main() -> int:
         "app.modules.knowledge.router",
         "--hidden-import",
         "app.modules.chat.router",
+        "--hidden-import",
+        "app.modules.open_books.router",
         str(ENTRY),
     ]
 
@@ -80,7 +92,6 @@ def main() -> int:
     subprocess.check_call(cmd, cwd=str(API_ROOT))
     print(f"Sidecar written to: {OUT_DIR}")
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())
