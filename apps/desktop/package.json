@@ -59,6 +59,7 @@
       }
     ],
     "asar": true,
+    "afterPack": "scripts/afterPack.cjs",
     "publish": [
       {
         "provider": "github",
@@ -97,7 +98,9 @@
       "category": "public.app-category.productivity",
       "artifactName": "Kongku-${version}-mac-${arch}.${ext}",
       "hardenedRuntime": true,
-      "gatekeeperAssess": false
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
     },
     "linux": {
       "icon": "build/icon.png",

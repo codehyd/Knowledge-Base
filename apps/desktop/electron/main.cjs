@@ -64,6 +64,47 @@ function sidecarLogPath() {
   return path.join(appDataRoot(), "api-sidecar.log");
 }
 
+/** 清理会污染 PyInstaller/子进程的 Electron 运行环境变量 */
+function sanitizeSidecarEnv(baseEnv) {
+  const env = { ...baseEnv };
+
+  // 各平台 Electron 都可能注入这些，导致 sidecar 加载到错误的动态库
+  delete env.PYTHONHOME;
+  delete env.PYTHONPATH;
+  delete env.ELECTRON_RUN_AS_NODE;
+
+  if (process.platform === "linux") {
+    delete env.LD_LIBRARY_PATH;
+    delete env.LD_PRELOAD;
+  }
+
+  if (process.platform === "darwin") {
+    delete env.DYLD_LIBRARY_PATH;
+    delete env.DYLD_INSERT_LIBRARIES;
+    delete env.DYLD_FALLBACK_LIBRARY_PATH;
+    delete env.DYLD_FRAMEWORK_PATH;
+  }
+
+  // PyInstaller onefile 解压目录：避免系统临时目录 noexec / 权限问题
+  if (app.isPackaged) {
+    const tmp = path.join(appDataRoot(), "tmp");
+    fs.mkdirSync(tmp, { recursive: true });
+    env.TMPDIR = tmp;
+    env.TEMP = tmp;
+    env.TMP = tmp;
+  }
+  return env;
+}
+
+function ensureSidecarExecutable(sidecarPath) {
+  if (process.platform === "win32") return;
+  try {
+    fs.chmodSync(sidecarPath, 0o755);
+  } catch (err) {
+    console.warn("[kongku] chmod sidecar failed:", err);
+  }
+}
+
 function repoRoot() {
   // apps/desktop/electron -> 仓库根
   return path.resolve(__dirname, "..", "..", "..");
@@ -139,18 +180,22 @@ function spawnApiProcess(command, args, options) {
   /** @type {import('child_process').SpawnOptions} */
   const opts = {
     ...options,
+    env: sanitizeSidecarEnv(options?.env || process.env),
     windowsHide: true,
+    shell: false,
   };
   // 开发/打包都写日志，避免子进程静默退出后无法排查
+  const log = app.isPackaged
+    ? sidecarLogPath()
+    : path.join(repoRoot(), "data", "api-dev.log");
   try {
-    const log = app.isPackaged
-      ? sidecarLogPath()
-      : path.join(repoRoot(), "data", "api-dev.log");
     fs.mkdirSync(path.dirname(log), { recursive: true });
     const fd = fs.openSync(log, "a");
     fs.writeSync(
       fd,
-      `\n==== ${new Date().toISOString()} spawn ${command} ${args.join(" ")}\n`,
+      `\n==== ${new Date().toISOString()} spawn ${command} ${args.join(" ")}\n` +
+        `cwd=${opts.cwd || ""}\n` +
+        `platform=${process.platform} packaged=${app.isPackaged}\n`,
     );
     opts.stdio = ["ignore", fd, fd];
   } catch {
@@ -160,18 +205,20 @@ function spawnApiProcess(command, args, options) {
   console.log("[kongku] spawn API:", command, args.join(" "));
   apiChild = spawn(command, args, opts);
   apiSpawnedByUs = true;
-  apiChild.on("exit", (code) => {
+  apiChild.on("exit", (code, signal) => {
     apiChild = null;
     if (apiSpawnedByUs) {
       apiStatus = "failed";
-      apiLastError = `后端进程已退出${code != null ? ` (code=${code})` : ""}；详见 data/api-dev.log 或 userData/api-sidecar.log`;
+      apiLastError = `后端进程已退出${code != null ? ` (code=${code})` : ""}${
+        signal ? ` signal=${signal}` : ""
+      }；日志：${log}`;
       console.warn("[kongku]", apiLastError);
     }
     apiSpawnedByUs = false;
   });
   apiChild.on("error", (err) => {
     apiStatus = "failed";
-    apiLastError = `后端启动失败：${err.message}`;
+    apiLastError = `后端启动失败：${err.message}；日志：${log}`;
     console.error("[kongku]", apiLastError);
   });
 }
@@ -233,25 +280,29 @@ async function startApiSynced() {
   });
   if (process.env.KONGKU_USE_ENV_DB !== "1") {
     delete env.DATABASE_URL;
-    // 显式 SQLite，避免 cwd 下找不到 .env 时行为不一致
-    const dbFile = path.join(dataDir, "kongku.db").replace(/\\/g, "/");
+    // Windows 也用正斜杠；盘符路径保持 sqlite+aiosqlite:///C:/...
+    const dbFile = path.resolve(dataDir, "kongku.db").replace(/\\/g, "/");
     env.DATABASE_URL = `sqlite+aiosqlite:///${dbFile}`;
   }
 
   const sidecar = apiSidecarPath();
+  console.log("[kongku] sidecar path:", sidecar, "exists=", fs.existsSync(sidecar));
   if (fs.existsSync(sidecar)) {
+    ensureSidecarExecutable(sidecar);
     spawnApiProcess(sidecar, [], {
       env,
       cwd: app.isPackaged ? appDataRoot() : path.join(root, "apps", "api"),
     });
     try {
-      await waitForHealth(45000);
+      // 冷启动 / 杀软首次扫描 sidecar 可能较慢
+      await waitForHealth(process.platform === "win32" ? 90000 : 60000);
       apiStatus = "ready";
       console.log("[kongku] API ready (sidecar):", API_ORIGIN);
       return { ready: true, spawnedByUs: true };
     } catch (err) {
       apiStatus = "failed";
-      apiLastError = String(err);
+      const logHint = app.isPackaged ? sidecarLogPath() : path.join(root, "data", "api-dev.log");
+      apiLastError = `${String(err)}；请查看日志：${logHint}`;
       return { ready: false, spawnedByUs: apiSpawnedByUs };
     }
   }

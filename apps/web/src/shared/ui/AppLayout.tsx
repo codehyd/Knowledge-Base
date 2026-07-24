@@ -10,6 +10,7 @@ import {
   WarningOutlined,
 } from "@ant-design/icons";
 import { api } from "@/shared/api/client";
+import { getDesktopBridge } from "@/shared/desktop";
 import styles from "./AppLayout.module.css";
 
 /** 对齐 figma/01：主导航为喂养 / 对话 / 知识 / 设置；点品牌回首页 */
@@ -23,6 +24,19 @@ const nav = [
 const DEFAULT_DB_HINT =
   "未检测到可用数据库。请到「设置 → 数据库」检查连接；默认使用本地 SQLite。";
 
+async function waitForHealthReady(retries = 20, intervalMs = 500) {
+  let lastErr: unknown;
+  for (let i = 0; i < retries; i += 1) {
+    try {
+      return await api.health();
+    } catch (err) {
+      lastErr = err;
+      await new Promise((r) => setTimeout(r, intervalMs));
+    }
+  }
+  throw lastErr;
+}
+
 export function AppLayout() {
   const location = useLocation();
   const [keyConfigured, setKeyConfigured] = useState<boolean | null>(null);
@@ -31,15 +45,30 @@ export function AppLayout() {
   useEffect(() => {
     void (async () => {
       try {
-        const health = await api.health();
+        const health = await waitForHealthReady();
         if (!health.database) {
           setServiceBanner(health.database_message || DEFAULT_DB_HINT);
         } else {
           setServiceBanner(null);
         }
       } catch {
+        const desktop = getDesktopBridge();
+        let detail = "";
+        if (desktop) {
+          try {
+            const cfg = await desktop.getConfig();
+            if (cfg.apiLastError) detail = cfg.apiLastError;
+            else if (cfg.apiStatus && cfg.apiStatus !== "ready") {
+              detail = `状态：${cfg.apiStatus}`;
+            }
+          } catch {
+            /* ignore */
+          }
+        }
         setServiceBanner(
-          "后端服务未就绪。请确认 Electron 已拉起 API，或本机 18765 端口有空库 API 在运行。",
+          detail
+            ? `后端服务未就绪。${detail}`
+            : "后端服务未就绪。请确认 Electron 已拉起 API，或本机 18765 端口有空库 API 在运行。",
         );
       }
 
