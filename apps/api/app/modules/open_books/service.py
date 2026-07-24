@@ -144,6 +144,7 @@ class OpenBooksService:
                     filename=filename,
                     title=title,
                     source_type="ebook",
+                    provenance="open_book",
                 )
                 source_id = row.id
 

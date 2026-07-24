@@ -10,6 +10,8 @@ class SourceOut(BaseModel):
     title: str
     filename: str
     source_uri: str
+    provenance: str = ""
+    book_kind: str = ""
     status: str
     stage: str
     progress: float

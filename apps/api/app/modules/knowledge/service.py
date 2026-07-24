@@ -13,6 +13,8 @@ from app.modules.knowledge.schemas import (
     AnnotationListOut,
     AnnotationOut,
     AnnotationUpdate,
+    BookshelfItemOut,
+    BookshelfListOut,
     CategoryListOut,
     CategoryOut,
     EntryDetailOut,
@@ -137,6 +139,56 @@ class KnowledgeService:
             for r in rows
         ]
         return EntryListOut(items=items, total=total, page=page, page_size=page_size)
+
+    async def list_bookshelf(self, db: AsyncSession) -> BookshelfListOut:
+        """确认书籍书架：仅 book_kind=confirmed；含已抽取/已入库。"""
+        result = await db.execute(
+            select(Source)
+            .where(
+                Source.type == "ebook",
+                Source.book_kind == "confirmed",
+                Source.status.in_(("ready", "committed")),
+            )
+            .order_by(desc(Source.created_at))
+        )
+        sources = list(result.scalars().all())
+        if not sources:
+            return BookshelfListOut(items=[], total=0)
+
+        source_ids = [s.id for s in sources]
+        entry_rows = (
+            await db.execute(
+                select(Entry.id, Entry.source_id)
+                .where(Entry.source_id.in_(source_ids))
+                .order_by(desc(Entry.created_at))
+            )
+        ).all()
+        entry_by_source: dict[int, int] = {}
+        for entry_id, source_id in entry_rows:
+            if source_id is None:
+                continue
+            # 同一来源取最新一条条目
+            if source_id not in entry_by_source:
+                entry_by_source[source_id] = int(entry_id)
+
+        items: list[BookshelfItemOut] = []
+        for src in sources:
+            suffix = Path(src.filename or "").suffix.lower().lstrip(".")
+            items.append(
+                BookshelfItemOut(
+                    source_id=src.id,
+                    entry_id=entry_by_source.get(src.id),
+                    title=(src.title or Path(src.filename or "").stem or f"书 #{src.id}"),
+                    filename=src.filename or "",
+                    format=suffix,
+                    provenance=src.provenance or "upload",
+                    book_kind=src.book_kind or "confirmed",
+                    status=src.status or "",
+                    char_count=int(src.char_count or 0),
+                    created_at=src.created_at,
+                )
+            )
+        return BookshelfListOut(items=items, total=len(items))
 
     async def get_entry(self, db: AsyncSession, entry_id: int) -> EntryDetailOut:
         row = await db.get(Entry, entry_id)

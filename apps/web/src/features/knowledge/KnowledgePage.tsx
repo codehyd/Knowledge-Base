@@ -4,6 +4,7 @@ import {
   BookOutlined,
   DeleteOutlined,
   EyeOutlined,
+  ReadOutlined,
   SearchOutlined,
 } from "@ant-design/icons";
 import { App, Button, Empty, Input, Popconfirm, Tag, Typography } from "antd";
@@ -15,6 +16,7 @@ import {
 } from "@/shared/api/client";
 import { formatError } from "@/shared/ui/feedback";
 import { TextPreviewModal } from "@/shared/ui/TextPreviewModal";
+import { BookshelfModal } from "./BookshelfModal";
 import styles from "./KnowledgePage.module.css";
 
 function formatDate(value?: string | null) {
@@ -44,7 +46,9 @@ export function KnowledgePage() {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewEntryId, setPreviewEntryId] = useState<number | null>(null);
+  const [previewSourceId, setPreviewSourceId] = useState<number | null>(null);
   const [previewTitle, setPreviewTitle] = useState("");
+  const [bookshelfOpen, setBookshelfOpen] = useState(false);
 
   const refreshCategories = useCallback(async () => {
     const res = await api.listCategories();
@@ -140,6 +144,11 @@ export function KnowledgePage() {
   async function openPreview(entryId: number) {
     setPreviewLoading(true);
     setPreviewEntryId(entryId);
+    setPreviewSourceId(
+      detail?.id === entryId
+        ? detail.source_id ?? null
+        : items.find((i) => i.id === entryId)?.source_id ?? null,
+    );
     setPreviewTitle(
       detail?.id === entryId
         ? detail.title
@@ -153,12 +162,19 @@ export function KnowledgePage() {
     return (
       <section className={styles.page}>
         <header className={styles.header}>
-          <h1>
-            <BookOutlined /> 知识浏览
-          </h1>
-          <Typography.Paragraph type="secondary" className={styles.subtitle}>
-            按分类浏览已入库材料，查看摘要与原文预览。
-          </Typography.Paragraph>
+          <div>
+            <h1>
+              <BookOutlined /> 知识浏览
+            </h1>
+            <Typography.Paragraph type="secondary" className={styles.subtitle}>
+              按分类浏览已入库材料，查看摘要与原文预览。
+            </Typography.Paragraph>
+          </div>
+          <div className={styles.headerActions}>
+            <Button icon={<ReadOutlined />} onClick={() => setBookshelfOpen(true)}>
+              书架
+            </Button>
+          </div>
         </header>
         <div className={styles.emptyBox}>
           <Empty description="知识库仍为空">
@@ -167,6 +183,7 @@ export function KnowledgePage() {
             </Link>
           </Empty>
         </div>
+        <BookshelfModal open={bookshelfOpen} onClose={() => setBookshelfOpen(false)} />
       </section>
     );
   }
@@ -180,14 +197,19 @@ export function KnowledgePage() {
           </h1>
           <p className={styles.subtitle}>共 {totalEntries} 条知识 · 当前列表 {total} 条</p>
         </div>
-        <Input
-          allowClear
-          className={styles.search}
-          prefix={<SearchOutlined />}
-          placeholder="搜索标题或摘要"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-        />
+        <div className={styles.headerActions}>
+          <Button icon={<ReadOutlined />} onClick={() => setBookshelfOpen(true)}>
+            书架
+          </Button>
+          <Input
+            allowClear
+            className={styles.search}
+            prefix={<SearchOutlined />}
+            placeholder="搜索标题或摘要"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+        </div>
       </header>
 
       <div className={styles.layout}>
@@ -357,9 +379,11 @@ export function KnowledgePage() {
         open={previewOpen}
         title={previewTitle || detail?.title || "正文预览"}
         entryId={previewEntryId}
+        sourceId={previewSourceId}
         onClose={() => {
           setPreviewOpen(false);
           setPreviewEntryId(null);
+          setPreviewSourceId(null);
         }}
         loadSegment={async (offset, limit) => {
           if (previewEntryId == null) {
@@ -374,8 +398,7 @@ export function KnowledgePage() {
               truncated: res.truncated,
             };
           } catch (err) {
-            const sourceId =
-              detail?.id === previewEntryId ? detail.source_id : null;
+            const sourceId = previewSourceId ?? (detail?.id === previewEntryId ? detail.source_id : null);
             if (!sourceId) throw err;
             const res = await api.previewSource(sourceId, { offset, limit });
             return {
@@ -392,14 +415,14 @@ export function KnowledgePage() {
             const res = await api.searchEntryPreview(previewEntryId, q, params);
             return { total: res.total, offset: res.offset, hits: res.hits };
           } catch (err) {
-            const sourceId =
-              detail?.id === previewEntryId ? detail.source_id : null;
+            const sourceId = previewSourceId ?? (detail?.id === previewEntryId ? detail.source_id : null);
             if (!sourceId) throw err;
             const res = await api.searchSourcePreview(sourceId, q, params);
             return { total: res.total, offset: res.offset, hits: res.hits };
           }
         }}
       />
+      <BookshelfModal open={bookshelfOpen} onClose={() => setBookshelfOpen(false)} />
     </section>
   );
 }

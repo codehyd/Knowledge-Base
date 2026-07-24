@@ -43,8 +43,31 @@ PREVIEWABLE_STATUS = {"ready", "committed", "need_transcript"}
 ALLOWED_EBOOK = {".pdf", ".epub", ".txt"}
 ALLOWED_NOTE = {".md", ".markdown", ".txt"}
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
+# 确认书籍：公版书库导入，或本地 EPUB/PDF（用户以 ebook 投递）
+# 可能为书：本地 TXT 以 ebook 投递 —— 可标识，但不进书架
+CONFIRMED_EBOOK_SUFFIX = {".epub", ".pdf"}
 # service.py → sources → modules → app → api → apps → 仓库根
 _REPO_ROOT = Path(__file__).resolve().parents[5]
+
+
+def resolve_book_meta(
+    *,
+    source_type: str,
+    filename: str,
+    provenance: str = "",
+) -> tuple[str, str]:
+    """返回 (provenance, book_kind)。book_kind=confirmed 才可上书架。"""
+    if source_type != "ebook":
+        return "", ""
+    prov = (provenance or "upload").strip() or "upload"
+    if prov == "open_book":
+        return "open_book", "confirmed"
+    suffix = Path(filename or "").suffix.lower()
+    if suffix in CONFIRMED_EBOOK_SUFFIX:
+        return "upload", "confirmed"
+    if suffix == ".txt":
+        return "upload", "possible"
+    return "upload", "possible"
 
 
 def _data_root() -> Path:
@@ -105,10 +128,15 @@ class SourcesService:
         if len(data) > MAX_UPLOAD_BYTES:
             raise HTTPException(status_code=400, detail="文件超过 200MB 限制")
 
+        provenance, book_kind = resolve_book_meta(
+            source_type=source_type, filename=filename, provenance="upload"
+        )
         row = Source(
             type=source_type,
             title=Path(filename).stem,
             filename=filename,
+            provenance=provenance,
+            book_kind=book_kind,
             status="pending",
             stage="queued",
             progress=0,
@@ -138,6 +166,7 @@ class SourcesService:
         filename: str,
         title: str = "",
         source_type: str = "ebook",
+        provenance: str = "upload",
     ) -> Source:
         """由公版书下载等内部路径投递文件（不经 UploadFile）。"""
         if source_type not in {"ebook", "note"}:
@@ -156,10 +185,15 @@ class SourcesService:
                 detail=f"不支持的扩展名 {suffix or '(无)'}，允许：{', '.join(sorted(allowed))}",
             )
 
+        resolved_prov, book_kind = resolve_book_meta(
+            source_type=source_type, filename=safe, provenance=provenance
+        )
         row = Source(
             type=source_type,
             title=(title or Path(safe).stem).strip() or Path(safe).stem,
             filename=safe,
+            provenance=resolved_prov,
+            book_kind=book_kind,
             status="pending",
             stage="queued",
             progress=0,

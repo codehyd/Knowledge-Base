@@ -43,11 +43,102 @@ type Props = {
   ) => Promise<PreviewSearchPage>;
   /** 传入后启用高亮/笔记（知识库条目） */
   entryId?: number | null;
+  /** 喂养来源 id；优先用于阅读进度键（比 entry 更稳定） */
+  sourceId?: number | null;
 };
 
 const WINDOW = 10000;
 const PAD = 1800;
 const PAGE_SIZE = 100;
+const PROGRESS_KEY_PREFIX = "kongku.preview.progress.";
+const PROGRESS_SAVE_MS = 500;
+/** 恢复滚动后短暂禁止写进度，避免未定位完成时把进度冲成更靠前的位置 */
+const PROGRESS_RESUME_GUARD_MS = 900;
+
+type StoredProgress = { offset: number; updatedAt: number };
+
+function progressStorageKey(sourceId?: number | null, entryId?: number | null): string | null {
+  if (sourceId != null && sourceId > 0) return `${PROGRESS_KEY_PREFIX}source:${sourceId}`;
+  if (entryId != null && entryId > 0) return `${PROGRESS_KEY_PREFIX}entry:${entryId}`;
+  return null;
+}
+
+function readStoredProgress(key: string | null): number {
+  if (!key) return 0;
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return 0;
+    const parsed = JSON.parse(raw) as StoredProgress;
+    const offset = Number(parsed?.offset);
+    return Number.isFinite(offset) && offset > 0 ? Math.floor(offset) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function writeStoredProgress(key: string | null, offset: number) {
+  if (!key) return;
+  const pos = Math.max(0, Math.floor(offset));
+  try {
+    const payload: StoredProgress = { offset: pos, updatedAt: Date.now() };
+    localStorage.setItem(key, JSON.stringify(payload));
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+/** 按正文相对字符偏移滚动；比「整段比例估算」更接近真实阅读位置 */
+function scrollToTextOffset(
+  container: HTMLElement,
+  localOffset: number,
+  options?: { align?: "start" | "center" },
+): boolean {
+  const align = options?.align ?? "start";
+  const target = Math.max(0, Math.floor(localOffset));
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  let seen = 0;
+  let node = walker.nextNode() as Text | null;
+  while (node) {
+    const len = node.data.length;
+    if (seen + len >= target) {
+      const range = document.createRange();
+      const at = Math.min(Math.max(0, target - seen), Math.max(0, len - 1));
+      try {
+        range.setStart(node, at);
+        range.collapse(true);
+      } catch {
+        return false;
+      }
+      const rect = range.getBoundingClientRect();
+      const box = container.getBoundingClientRect();
+      if (rect.height === 0 && rect.top === 0 && rect.bottom === 0) {
+        // 尚未完成布局时放弃，交给重试
+        return false;
+      }
+      const pad =
+        align === "center" ? Math.min(box.height * 0.35, 120) : Math.min(24, box.height * 0.08);
+      container.scrollTop += rect.top - box.top - pad;
+      return true;
+    }
+    seen += len;
+    node = walker.nextNode() as Text | null;
+  }
+  return false;
+}
+
+function applyAnchorScroll(
+  el: HTMLDivElement,
+  textLen: number,
+  segOffset: number,
+  anchorChar: number,
+) {
+  const local = Math.max(0, Math.min(textLen, anchorChar - segOffset));
+  if (scrollToTextOffset(el, local, { align: "start" })) return;
+  // 回退：比例定位（去掉向下偏移，避免系统性偏上）
+  const ratio = Math.min(1, Math.max(0, local / Math.max(1, textLen)));
+  const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
+  el.scrollTop = Math.min(maxScroll, Math.max(0, ratio * maxScroll));
+}
 const OVERLAP = 1200;
 const SCROLL_EDGE = 72;
 const PAGE_CHARS = 8000;
@@ -333,6 +424,7 @@ export function TextPreviewModal({
   loadSegment,
   searchAll,
   entryId = null,
+  sourceId = null,
 }: Props) {
   const { message } = App.useApp();
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -341,8 +433,14 @@ export function TextPreviewModal({
   const segmentRef = useRef("");
   const charCountRef = useRef(0);
   const scrollCoolDownRef = useRef(0);
+  const progressKeyRef = useRef<string | null>(null);
+  const progressTimerRef = useRef<number | null>(null);
+  const lastProgressRef = useRef(0);
+  const suppressProgressRef = useRef(false);
+  const resumeGuardTimerRef = useRef<number | null>(null);
 
   const [loading, setLoading] = useState(false);
+  const [resumedHint, setResumedHint] = useState(false);
   const [edgeHint, setEdgeHint] = useState<"up" | "down" | null>(null);
   const [query, setQuery] = useState("");
   const [charCount, setCharCount] = useState(0);
@@ -421,6 +519,60 @@ export function TextPreviewModal({
     setAnnotations(res.items);
   }
 
+  function flushProgress(pos?: number) {
+    if (suppressProgressRef.current && pos == null) return;
+    const key = progressKeyRef.current;
+    if (!key) return;
+    let anchor: number;
+    if (pos != null && Number.isFinite(pos)) {
+      anchor = pos;
+    } else if (bodyRef.current) {
+      anchor = getViewportAnchorChar("top");
+    } else {
+      anchor = lastProgressRef.current;
+    }
+    const total = charCountRef.current;
+    const clamped =
+      total > 0 ? Math.min(Math.max(0, Math.floor(anchor)), Math.max(0, total - 1)) : 0;
+    lastProgressRef.current = clamped;
+    writeStoredProgress(key, clamped);
+  }
+
+  function scheduleProgressSave() {
+    if (suppressProgressRef.current || !progressKeyRef.current) return;
+    if (bodyRef.current) {
+      lastProgressRef.current = getViewportAnchorChar("top");
+    }
+    if (progressTimerRef.current != null) {
+      window.clearTimeout(progressTimerRef.current);
+    }
+    progressTimerRef.current = window.setTimeout(() => {
+      progressTimerRef.current = null;
+      flushProgress(lastProgressRef.current);
+    }, PROGRESS_SAVE_MS);
+  }
+
+  function beginResumeGuard() {
+    suppressProgressRef.current = true;
+    if (resumeGuardTimerRef.current != null) {
+      window.clearTimeout(resumeGuardTimerRef.current);
+    }
+    resumeGuardTimerRef.current = window.setTimeout(() => {
+      resumeGuardTimerRef.current = null;
+      suppressProgressRef.current = false;
+    }, PROGRESS_RESUME_GUARD_MS);
+  }
+
+  function handleClose() {
+    if (progressTimerRef.current != null) {
+      window.clearTimeout(progressTimerRef.current);
+      progressTimerRef.current = null;
+    }
+    suppressProgressRef.current = false;
+    flushProgress();
+    onClose();
+  }
+
   function updatePageByScroll() {
     const el = bodyRef.current;
     const segLen = Math.max(1, segmentRef.current.length);
@@ -444,16 +596,19 @@ export function TextPreviewModal({
     setTotalPages(info.totalPages);
   }
 
-  function getViewportAnchorChar(edge: "top" | "bottom" = "top") {
+  function getViewportAnchorChar(edge: "top" | "mid" | "bottom" = "mid") {
     const el = bodyRef.current;
     const oldBase = baseOffsetRef.current;
     const oldLen = Math.max(1, segmentRef.current.length);
     if (!el) return oldBase;
     const maxScroll = Math.max(1, el.scrollHeight - el.clientHeight);
     const topRatio = Math.min(1, Math.max(0, el.scrollTop / maxScroll));
+    const visibleRatio = el.clientHeight / Math.max(1, el.scrollHeight);
     if (edge === "bottom") {
-      const visibleRatio = el.clientHeight / Math.max(1, el.scrollHeight);
       return oldBase + Math.min(oldLen, (topRatio + visibleRatio) * oldLen);
+    }
+    if (edge === "mid") {
+      return oldBase + Math.min(oldLen, (topRatio + visibleRatio * 0.45) * oldLen);
     }
     return oldBase + topRatio * oldLen;
   }
@@ -464,10 +619,27 @@ export function TextPreviewModal({
     segOffset: number,
     anchorChar: number,
   ) {
-    const rel = anchorChar - segOffset;
-    const ratio = Math.min(1, Math.max(0, rel / Math.max(1, textLen)));
-    const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
-    el.scrollTop = Math.min(maxScroll, Math.max(0, ratio * maxScroll - 36));
+    applyAnchorScroll(el, textLen, segOffset, anchorChar);
+  }
+
+  function settleAnchorScroll(
+    el: HTMLDivElement,
+    textLen: number,
+    segOffset: number,
+    anchorChar: number,
+  ) {
+    const run = () => applyAnchorScroll(el, textLen, segOffset, anchorChar);
+    run();
+    requestAnimationFrame(() => {
+      run();
+      window.setTimeout(run, 40);
+      window.setTimeout(() => {
+        run();
+        updatePageByScroll();
+        // 固定为恢复目标，避免测量误差把进度往前推
+        lastProgressRef.current = anchorChar;
+      }, 120);
+    });
   }
 
   async function loadAt(
@@ -514,8 +686,7 @@ export function TextPreviewModal({
           }
 
           if (options?.preserve === "anchor" && options.anchorChar != null) {
-            scrollToAnchorChar(el, res.text.length, res.offset, options.anchorChar);
-            updatePageByScroll();
+            settleAnchorScroll(el, res.text.length, res.offset, options.anchorChar);
             return;
           }
 
@@ -556,6 +727,9 @@ export function TextPreviewModal({
 
   useEffect(() => {
     if (!open) return;
+    const key = progressStorageKey(sourceId, entryId);
+    progressKeyRef.current = key;
+    setResumedHint(false);
     setQuery("");
     setHits([]);
     setHitTotal(0);
@@ -567,7 +741,21 @@ export function TextPreviewModal({
     setDraftOpen(false);
     setDraftSel(null);
     setActiveAnnId(null);
-    void loadAt(0, { preserve: "top" });
+
+    const saved = readStoredProgress(key);
+    lastProgressRef.current = saved;
+    if (saved > 0) {
+      beginResumeGuard();
+      // 让目标落在窗口前半段，便于精确定位到视口顶部附近
+      const windowStart = Math.max(0, saved - Math.floor(WINDOW / 4));
+      setResumedHint(true);
+      void loadAt(windowStart, { preserve: "anchor", anchorChar: saved });
+      window.setTimeout(() => setResumedHint(false), 3200);
+    } else {
+      suppressProgressRef.current = false;
+      void loadAt(0, { preserve: "top" });
+    }
+
     if (notesEnabled) {
       void refreshAnnotations().catch((err) => {
         message.error(formatError(err, "加载笔记失败"));
@@ -575,8 +763,23 @@ export function TextPreviewModal({
     } else {
       setAnnotations([]);
     }
+
+    return () => {
+      if (progressTimerRef.current != null) {
+        window.clearTimeout(progressTimerRef.current);
+        progressTimerRef.current = null;
+      }
+      if (resumeGuardTimerRef.current != null) {
+        window.clearTimeout(resumeGuardTimerRef.current);
+        resumeGuardTimerRef.current = null;
+      }
+      // 恢复过程中不写回，避免把进度冲到更靠前
+      if (!suppressProgressRef.current) {
+        flushProgress();
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, entryId]);
+  }, [open, entryId, sourceId]);
 
   useEffect(() => {
     if (!pendingSel || draftOpen) return;
@@ -593,6 +796,7 @@ export function TextPreviewModal({
   function onBodyScroll() {
     dismissPendingIfIdle();
     updatePageByScroll();
+    scheduleProgressSave();
     const el = bodyRef.current;
     if (!el || loadingRef.current) return;
     if (Date.now() < scrollCoolDownRef.current) return;
@@ -909,7 +1113,7 @@ export function TextPreviewModal({
       <Modal
         title={title || "正文预览"}
         open={open}
-        onCancel={onClose}
+        onCancel={handleClose}
         width={notesEnabled ? 980 : 820}
         destroyOnHidden
         footer={
@@ -917,8 +1121,9 @@ export function TextPreviewModal({
             <Typography.Text type="secondary" className={styles.scrollTip}>
               {notesEnabled ? "划选后选色并确认高亮 · " : ""}
               滚到顶部/底部可自动加载
+              {progressKeyRef.current ? " · 自动记住阅读位置" : ""}
             </Typography.Text>
-            <Button type="primary" onClick={onClose}>
+            <Button type="primary" onClick={handleClose}>
               关闭
             </Button>
           </Space>
@@ -992,6 +1197,7 @@ export function TextPreviewModal({
           </span>
           共 {charCount.toLocaleString()} 字
           {notesEnabled ? ` · 笔记 ${annotations.length}` : ""}
+          {resumedHint ? " · 已回到上次阅读位置" : ""}
           {loading ? " · 加载中…" : ""}
         </Typography.Paragraph>
 

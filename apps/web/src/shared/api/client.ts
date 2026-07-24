@@ -70,6 +70,8 @@ export type SourceItem = {
   title: string;
   filename: string;
   source_uri: string;
+  provenance?: string;
+  book_kind?: string;
   status: string;
   stage: string;
   progress: number;
@@ -137,6 +139,19 @@ export type CategoryItem = {
   id: number;
   name: string;
   count: number;
+};
+
+export type BookshelfItem = {
+  source_id: number;
+  entry_id?: number | null;
+  title: string;
+  filename: string;
+  format: string;
+  provenance: string;
+  book_kind: string;
+  status: string;
+  char_count: number;
+  created_at?: string | null;
 };
 
 export type ChatCitation = {
@@ -489,6 +504,8 @@ export const api = {
 
   listCategories: () =>
     request<{ items: CategoryItem[]; total_entries: number }>("/api/categories"),
+  listBookshelf: () =>
+    request<{ items: BookshelfItem[]; total: number }>("/api/bookshelf"),
   listEntries: (params?: { q?: string; category?: string; page?: number; page_size?: number }) => {
     const qs = new URLSearchParams();
     if (params?.q) qs.set("q", params.q);

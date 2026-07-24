@@ -167,6 +167,39 @@ async def _ensure_entry_columns(conn) -> None:
     )
 
 
+async def _ensure_source_book_columns(conn) -> None:
+    await _add_column_if_missing(
+        conn, "sources", "provenance", "VARCHAR(40) DEFAULT ''"
+    )
+    await _add_column_if_missing(
+        conn, "sources", "book_kind", "VARCHAR(20) DEFAULT ''"
+    )
+    await conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_sources_provenance ON sources (provenance)")
+    )
+    await conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_sources_book_kind ON sources (book_kind)")
+    )
+    # 存量电子书按扩展名回填（无法还原公版书出处，统一按本地上传规则）
+    await conn.execute(
+        text(
+            """
+            UPDATE sources
+            SET provenance = 'upload',
+                book_kind = CASE
+                    WHEN lower(filename) LIKE '%.epub' OR lower(filename) LIKE '%.pdf'
+                        THEN 'confirmed'
+                    WHEN lower(filename) LIKE '%.txt'
+                        THEN 'possible'
+                    ELSE 'possible'
+                END
+            WHERE type = 'ebook'
+              AND (book_kind IS NULL OR book_kind = '')
+            """
+        )
+    )
+
+
 async def _ensure_seed_rows() -> None:
     """保证基础配置行存在（幂等）。"""
     if SessionLocal is None:
@@ -224,6 +257,7 @@ async def init_db() -> dict[str, Any]:
         await conn.run_sync(Base.metadata.create_all)
         await _ensure_ai_settings_columns(conn)
         await _ensure_entry_columns(conn)
+        await _ensure_source_book_columns(conn)
 
     await _ensure_seed_rows()
 

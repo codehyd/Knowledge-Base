@@ -38,6 +38,14 @@
   margin-top: 4px;
 }
 
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .layout {
   flex: 1;
   min-height: 0;

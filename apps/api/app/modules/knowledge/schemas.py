@@ -117,3 +117,21 @@ class ReindexOut(BaseModel):
     entries: int = 0
     chunks: int = 0
     mode: str = "missing"
+
+
+class BookshelfItemOut(BaseModel):
+    source_id: int
+    entry_id: Optional[int] = None
+    title: str
+    filename: str = ""
+    format: str = ""
+    provenance: str = ""
+    book_kind: str = "confirmed"
+    status: str = ""
+    char_count: int = 0
+    created_at: Optional[datetime] = None
+
+
+class BookshelfListOut(BaseModel):
+    items: list[BookshelfItemOut]
+    total: int = 0

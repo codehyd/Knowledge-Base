@@ -15,6 +15,10 @@ class Source(Base):
     title = mapped_column(String(500), default="")
     filename = mapped_column(String(500), default="")
     source_uri = mapped_column(String(2000), default="")  # 原始 URL（若有）
+    # 投递出处：open_book（公版书库）| upload（本地上传）| ""（笔记/链接等）
+    provenance = mapped_column(String(40), default="", index=True)
+    # 书籍可信度：confirmed（上书架）| possible（可能为书，不上架）| ""
+    book_kind = mapped_column(String(20), default="", index=True)
     # pending | extracting | processing | ready | failed | need_transcript | committed
     status = mapped_column(String(50), index=True, default="pending")
     stage = mapped_column(String(80), default="")  # 当前阶段文案/枚举

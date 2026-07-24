@@ -610,6 +610,13 @@ export function FeedPage() {
                 <li key={item.id} className={styles.queueItem}>
                   <div className={styles.queueTitle}>
                     <strong>{item.title || item.filename || `来源 #${item.id}`}</strong>
+                    {item.book_kind === "confirmed" ? (
+                      <Tag color="geekblue">
+                        {item.provenance === "open_book" ? "确认书籍 · 书库" : "确认书籍"}
+                      </Tag>
+                    ) : item.book_kind === "possible" ? (
+                      <Tag>可能为书籍</Tag>
+                    ) : null}
                     {item.status === "committed" ? (
                       <Tag color="success">已入库</Tag>
                     ) : (item.type === "video_url" || item.status === "extracting") ? (
@@ -941,6 +948,7 @@ export function FeedPage() {
       <TextPreviewModal
         open={previewOpen}
         title={previewTitle || "正文预览"}
+        sourceId={previewSourceId}
         onClose={() => {
           setPreviewOpen(false);
           setPreviewSourceId(null);

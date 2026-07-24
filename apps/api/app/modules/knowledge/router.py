@@ -7,6 +7,7 @@ from app.modules.knowledge.schemas import (
     AnnotationListOut,
     AnnotationOut,
     AnnotationUpdate,
+    BookshelfListOut,
     CategoryListOut,
     EntryDetailOut,
     EntryListOut,
@@ -27,6 +28,16 @@ router = APIRouter(tags=["知识浏览"])
 )
 async def list_categories(db: AsyncSession = Depends(get_db)) -> CategoryListOut:
     return await knowledge_service.list_categories(db)
+
+
+@router.get(
+    "/bookshelf",
+    response_model=BookshelfListOut,
+    summary="确认书籍书架",
+    description="仅返回 book_kind=confirmed 的电子书（公版书库导入 / 本地 EPUB·PDF）。本地 TXT 可能为书，不上架。",
+)
+async def list_bookshelf(db: AsyncSession = Depends(get_db)) -> BookshelfListOut:
+    return await knowledge_service.list_bookshelf(db)
 
 
 @router.get(
