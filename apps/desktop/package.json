@@ -1,6 +1,6 @@
 {
   "name": "kongku-desktop",
-  "version": "0.1.7",
+  "version": "0.1.6",
   "private": true,
   "description": "空库桌面端。npm run dev 自动拉起 Vite；仅 Electron 自动拉起 Python（默认可 SQLite）。",
   "author": "kongku",
