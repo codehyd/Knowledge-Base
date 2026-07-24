@@ -5,6 +5,8 @@ contextBridge.exposeInMainWorld("kongkuDesktop", {
   checkForUpdates: () => ipcRenderer.invoke("updater:check"),
   downloadUpdate: () => ipcRenderer.invoke("updater:download"),
   installUpdate: () => ipcRenderer.invoke("updater:install"),
+  openReleasesPage: (version) =>
+    ipcRenderer.invoke("updater:open-releases", version || ""),
   onUpdateAvailable: (cb) => {
     const listener = (_event, info) => cb(info);
     ipcRenderer.on("updater:available", listener);

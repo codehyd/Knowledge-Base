@@ -309,7 +309,10 @@ export function SettingsPage() {
       desktop.onUpdateError((msg) => {
         setCheckingUpdate(false);
         setDownloadingUpdate(false);
-        setUpdateStatus({ type: "error", message: msg || "检查更新失败" });
+        setUpdateStatus({
+          type: "error",
+          message: formatError(msg, "检查更新失败"),
+        });
       }),
     ];
     return () => {
@@ -351,7 +354,10 @@ export function SettingsPage() {
     if (!desktop) return;
     setDownloadingUpdate(true);
     setUpdatePercent(0);
-    setUpdateStatus({ type: "info", message: "正在下载更新…" });
+    setUpdateStatus({
+      type: "info",
+      message: "正在下载更新（网络不稳会自动重试）…",
+    });
     try {
       await desktop.downloadUpdate();
     } catch (err) {
@@ -369,6 +375,24 @@ export function SettingsPage() {
       await desktop.installUpdate();
     } catch (err) {
       message.error(formatError(err, "安装更新失败"));
+    }
+  }
+
+  async function onOpenReleases() {
+    if (!desktop?.openReleasesPage) {
+      window.open(
+        remoteVersion
+          ? `https://github.com/codehyd/Knowledge-Base/releases/tag/v${remoteVersion}`
+          : "https://github.com/codehyd/Knowledge-Base/releases/latest",
+        "_blank",
+        "noopener,noreferrer",
+      );
+      return;
+    }
+    try {
+      await desktop.openReleasesPage(remoteVersion || undefined);
+    } catch (err) {
+      message.error(formatError(err, "打开下载页失败"));
     }
   }
 
@@ -1400,6 +1424,9 @@ export function SettingsPage() {
                     重启并安装
                   </Button>
                 ) : null}
+                <Button onClick={() => void onOpenReleases()}>
+                  浏览器下载安装包
+                </Button>
               </Space>
 
               {!desktop ? (
@@ -1416,8 +1443,7 @@ export function SettingsPage() {
           <aside className={styles.tips}>
             <Card size="small" title={<><InfoCircleOutlined /> 说明</>}>
               <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-                更新来自 GitHub Releases。公开仓库可直接检查；安装包需由发版流水线上传完整产物（含
-                latest.yml）。
+                更新来自 GitHub Releases。安装包约 200MB，国内网络可能中途断开；可点「下载更新」自动重试，或「浏览器下载安装包」手动安装。
               </Typography.Paragraph>
             </Card>
             <Card size="small" title={<><SafetyCertificateOutlined /> 注意</>}>

@@ -32,8 +32,9 @@ export type UpdateCheckResult = {
 export type KongkuDesktopBridge = {
   getConfig: () => Promise<DesktopConfig>;
   checkForUpdates: () => Promise<UpdateCheckResult>;
-  downloadUpdate: () => Promise<boolean>;
+  downloadUpdate: () => Promise<boolean | { ok: boolean; attempts?: number }>;
   installUpdate: () => Promise<void>;
+  openReleasesPage: (version?: string) => Promise<boolean>;
   onUpdateAvailable: (cb: (info: UpdateInfo) => void) => () => void;
   onUpdateNotAvailable: (cb: (info: UpdateInfo) => void) => () => void;
   onUpdateProgress: (cb: (info: UpdateProgress) => void) => () => void;
