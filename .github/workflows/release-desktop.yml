@@ -3,13 +3,13 @@
 # 触发：推送 v* tag，例如：
 #   git tag v0.1.0 && git push origin v0.1.0
 #
-# 产物：GitHub Release 附件（供 electron-updater 后续升级）
+# 产物：统一挂到同一个 GitHub Release（供 electron-updater 升级）
 #
 # 注意：
-# 1. macOS 正式公证需配置 Apple 证书；当前关闭自动签名探测以便 CI 能出包
-# 2. 各平台先 PyInstaller 打 API sidecar，再 electron-builder 打进安装包
-# 3. 无 Postgres 时安装包仍可起 Python；界面会提示「没有数据库服务」
-# 4. publish 使用 github provider，仓库信息取自当前 git remote
+# 1. 矩阵任务只构建（--publish never），避免并行 publish 竞态拆成多个 Release
+# 2. 全部构建成功后，由 publish job 一次性上传到该 tag 的 Release
+# 3. macOS 正式公证需配置 Apple 证书；当前关闭自动签名探测以便 CI 能出包
+# 4. 各平台先 PyInstaller 打 API sidecar，再 electron-builder 打进安装包
 
 name: Release Desktop
 
@@ -26,7 +26,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  release:
+  build:
     name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -34,10 +34,13 @@ jobs:
       matrix:
         include:
           - os: windows-latest
+            artifact: desktop-windows
             electron_args: --win --x64
           - os: macos-latest
+            artifact: desktop-macos
             electron_args: --mac --x64 --arm64
           - os: ubuntu-22.04
+            artifact: desktop-linux
             electron_args: --linux --x64
 
     steps:
@@ -98,9 +101,57 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y rpm fakeroot dpkg
 
-      - name: Build & publish Electron
+      - name: Build Electron (no publish)
         working-directory: apps/desktop
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: npx electron-builder ${{ matrix.electron_args }} --publish always
+        run: npx electron-builder ${{ matrix.electron_args }} --publish never
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            apps/desktop/release/*.exe
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+            apps/desktop/release/*.AppImage
+            apps/desktop/release/*.deb
+            apps/desktop/release/*.yml
+            apps/desktop/release/*.blockmap
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List release files
+        run: |
+          echo "Files to attach:"
+          find dist -type f -printf '%p\t%s\n' | sort
+          # 粗检：必须有各平台主安装包，避免只挂上 blockmap
+          test -n "$(find dist -name 'Kongku-*-win-*.exe' | head -n1)"
+          test -n "$(find dist -name 'Kongku-*-mac-*.dmg' | head -n1)"
+          test -n "$(find dist -name 'Kongku-*-linux-*.AppImage' | head -n1)"
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: dist/**
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

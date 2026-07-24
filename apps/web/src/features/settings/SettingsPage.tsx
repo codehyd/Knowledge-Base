@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ApiOutlined,
+  CloudDownloadOutlined,
   DatabaseOutlined,
   DollarOutlined,
   InfoCircleOutlined,
   ReadOutlined,
   SafetyCertificateOutlined,
+  SyncOutlined,
 } from "@ant-design/icons";
 import {
   Alert,
@@ -14,6 +16,7 @@ import {
   Card,
   Form,
   Input,
+  Progress,
   Radio,
   Select,
   Space,
@@ -25,6 +28,7 @@ import {
 } from "antd";
 import { useSearchParams } from "react-router-dom";
 import { api, type ProviderOption } from "@/shared/api/client";
+import { getDesktopBridge } from "@/shared/desktop";
 import { formatError } from "@/shared/ui/feedback";
 import styles from "./SettingsPage.module.css";
 
@@ -56,8 +60,21 @@ export function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
-  const [subNav, setSubNav] = useState<"model" | "database" | "feed">("model");
+  const [subNav, setSubNav] = useState<"model" | "database" | "feed" | "about">("model");
   const [keyTab, setKeyTab] = useState<"ai" | "books">("ai");
+
+  const desktop = getDesktopBridge();
+  const [appVersion, setAppVersion] = useState("");
+  const [isPackaged, setIsPackaged] = useState(false);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [downloadingUpdate, setDownloadingUpdate] = useState(false);
+  const [updatePercent, setUpdatePercent] = useState(0);
+  const [remoteVersion, setRemoteVersion] = useState("");
+  const [updateReady, setUpdateReady] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<{
+    type: "info" | "success" | "warning" | "error";
+    message: string;
+  } | null>(null);
 
   const [dbMode, setDbMode] = useState<"sqlite" | "postgres">("sqlite");
   const [sqlitePath, setSqlitePath] = useState("data/kongku.db");
@@ -239,6 +256,121 @@ export function SettingsPage() {
       cancelled = true;
     };
   }, [subNav, message]);
+
+  useEffect(() => {
+    if (!desktop) return;
+    let cancelled = false;
+    void desktop.getConfig().then((cfg) => {
+      if (cancelled) return;
+      setAppVersion(cfg.version || "");
+      setIsPackaged(Boolean(cfg.isPackaged));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [desktop]);
+
+  useEffect(() => {
+    if (!desktop) return;
+    const offs = [
+      desktop.onUpdateAvailable((info) => {
+        const ver = info.version || "";
+        setRemoteVersion(ver);
+        setUpdateReady(false);
+        setUpdateStatus({
+          type: "info",
+          message: ver ? `发现新版本 ${ver}` : "发现新版本",
+        });
+        setCheckingUpdate(false);
+      }),
+      desktop.onUpdateNotAvailable(() => {
+        setRemoteVersion("");
+        setUpdateReady(false);
+        setUpdateStatus({ type: "success", message: "当前已是最新版本" });
+        setCheckingUpdate(false);
+      }),
+      desktop.onUpdateProgress((p) => {
+        setDownloadingUpdate(true);
+        setUpdatePercent(Math.max(0, Math.min(100, Math.round(p.percent || 0))));
+      }),
+      desktop.onUpdateDownloaded((info) => {
+        setDownloadingUpdate(false);
+        setUpdatePercent(100);
+        setUpdateReady(true);
+        const ver = info.version || "";
+        if (ver) setRemoteVersion(ver);
+        setUpdateStatus({
+          type: "success",
+          message: ver
+            ? `版本 ${ver} 已下载，重启后完成安装`
+            : "更新已下载，重启后完成安装",
+        });
+      }),
+      desktop.onUpdateError((msg) => {
+        setCheckingUpdate(false);
+        setDownloadingUpdate(false);
+        setUpdateStatus({ type: "error", message: msg || "检查更新失败" });
+      }),
+    ];
+    return () => {
+      for (const off of offs) off();
+    };
+  }, [desktop]);
+
+  async function onCheckUpdate() {
+    if (!desktop) {
+      message.info("请在桌面客户端中检查更新");
+      return;
+    }
+    setCheckingUpdate(true);
+    setUpdateStatus({ type: "info", message: "正在检查更新…" });
+    setUpdateReady(false);
+    setUpdatePercent(0);
+    try {
+      const result = await desktop.checkForUpdates();
+      if (!result.ok) {
+        setUpdateStatus({
+          type: result.reason === "dev" ? "warning" : "error",
+          message: result.message || "检查更新失败",
+        });
+        setCheckingUpdate(false);
+        return;
+      }
+      // 有/无更新由事件回调收尾；兜底超时避免一直转圈
+      window.setTimeout(() => setCheckingUpdate(false), 8000);
+    } catch (err) {
+      setCheckingUpdate(false);
+      setUpdateStatus({
+        type: "error",
+        message: formatError(err, "检查更新失败"),
+      });
+    }
+  }
+
+  async function onDownloadUpdate() {
+    if (!desktop) return;
+    setDownloadingUpdate(true);
+    setUpdatePercent(0);
+    setUpdateStatus({ type: "info", message: "正在下载更新…" });
+    try {
+      await desktop.downloadUpdate();
+    } catch (err) {
+      setDownloadingUpdate(false);
+      setUpdateStatus({
+        type: "error",
+        message: formatError(err, "下载更新失败"),
+      });
+    }
+  }
+
+  async function onInstallUpdate() {
+    if (!desktop) return;
+    try {
+      await desktop.installUpdate();
+    } catch (err) {
+      message.error(formatError(err, "安装更新失败"));
+    }
+  }
 
   async function onSaveFeedSettings() {
     setFeedSaving(true);
@@ -538,8 +670,12 @@ export function SettingsPage() {
         <button type="button" className={styles.subItem} disabled>
           备份导出
         </button>
-        <button type="button" className={styles.subItem} disabled>
-          关于
+        <button
+          type="button"
+          className={subNav === "about" ? styles.subActive : styles.subItem}
+          onClick={() => setSubNav("about")}
+        >
+          <InfoCircleOutlined /> 关于
         </button>
       </aside>
 
@@ -1137,7 +1273,7 @@ export function SettingsPage() {
             </Card>
           </aside>
         </>
-      ) : (
+      ) : subNav === "feed" ? (
         <>
           <div className={styles.content}>
             <div className={styles.contentHead}>
@@ -1186,6 +1322,110 @@ export function SettingsPage() {
               <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
                 配置保存在 data/runtime-feed.json。与数据库连接配置相互独立。
               </Typography.Paragraph>
+            </Card>
+          </aside>
+        </>
+      ) : (
+        <>
+          <div className={styles.content}>
+            <div className={styles.contentHead}>
+              <div>
+                <h1>关于</h1>
+                <p className={styles.desc}>查看版本信息，并从 GitHub Releases 检查桌面端更新。</p>
+              </div>
+              {appVersion ? <Tag color="processing">v{appVersion}</Tag> : null}
+            </div>
+
+            <Form layout="vertical" className={styles.form}>
+              <Form.Item label="应用">
+                <Typography.Text>空库（Kongku）</Typography.Text>
+              </Form.Item>
+              <Form.Item label="当前版本">
+                <Typography.Text>
+                  {appVersion ? `v${appVersion}` : desktop ? "读取中…" : "浏览器模式（无桌面版本号）"}
+                </Typography.Text>
+              </Form.Item>
+              <Form.Item label="运行环境">
+                <Typography.Text>
+                  {!desktop
+                    ? "网页"
+                    : isPackaged
+                      ? "桌面安装包"
+                      : "桌面开发模式"}
+                </Typography.Text>
+              </Form.Item>
+
+              {updateStatus ? (
+                <Alert
+                  className={styles.testAlert}
+                  type={updateStatus.type}
+                  showIcon
+                  message={updateStatus.message}
+                  description={
+                    remoteVersion ? `远端版本：v${remoteVersion}` : undefined
+                  }
+                />
+              ) : null}
+
+              {downloadingUpdate || updatePercent > 0 ? (
+                <Progress
+                  percent={updatePercent}
+                  status={updateReady ? "success" : downloadingUpdate ? "active" : "normal"}
+                  style={{ marginBottom: 16 }}
+                />
+              ) : null}
+
+              <Space wrap>
+                <Button
+                  type="primary"
+                  icon={<SyncOutlined spin={checkingUpdate} />}
+                  loading={checkingUpdate}
+                  disabled={!desktop || downloadingUpdate}
+                  onClick={() => void onCheckUpdate()}
+                >
+                  检查更新
+                </Button>
+                {remoteVersion && !updateReady ? (
+                  <Button
+                    icon={<CloudDownloadOutlined />}
+                    loading={downloadingUpdate}
+                    disabled={!desktop || checkingUpdate}
+                    onClick={() => void onDownloadUpdate()}
+                  >
+                    下载更新
+                  </Button>
+                ) : null}
+                {updateReady ? (
+                  <Button type="primary" danger onClick={() => void onInstallUpdate()}>
+                    重启并安装
+                  </Button>
+                ) : null}
+              </Space>
+
+              {!desktop ? (
+                <Alert
+                  style={{ marginTop: 16 }}
+                  type="info"
+                  showIcon
+                  message="自动更新仅在桌面客户端可用"
+                />
+              ) : null}
+            </Form>
+          </div>
+
+          <aside className={styles.tips}>
+            <Card size="small" title={<><InfoCircleOutlined /> 说明</>}>
+              <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+                更新来自 GitHub Releases。公开仓库可直接检查；安装包需由发版流水线上传完整产物（含
+                latest.yml）。
+              </Typography.Paragraph>
+            </Card>
+            <Card size="small" title={<><SafetyCertificateOutlined /> 注意</>}>
+              <ul className={styles.checklist}>
+                <li>Windows 安装包支持下载后重启安装</li>
+                <li>Linux 建议使用 AppImage 以支持自动更新</li>
+                <li>macOS 未签名时更新后可能被系统拦截</li>
+              </ul>
             </Card>
           </aside>
         </>

@@ -420,30 +420,88 @@ npm run dev</pre>
 }
 
 function setupAutoUpdater() {
-  if (!app.isPackaged) return;
+  if (!app.isPackaged) {
+    ipcMain.handle("updater:check", async () => ({
+      ok: false,
+      reason: "dev",
+      message: "开发模式不检查更新，请使用安装包验证",
+    }));
+    return;
+  }
+
   let autoUpdater;
   try {
     ({ autoUpdater } = require("electron-updater"));
-  } catch {
+  } catch (err) {
+    ipcMain.handle("updater:check", async () => ({
+      ok: false,
+      reason: "missing",
+      message: `未加载更新模块：${String(err)}`,
+    }));
     return;
   }
+
   autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = true;
+
   autoUpdater.on("update-available", (info) => {
-    mainWindow?.webContents.send("updater:available", info);
+    mainWindow?.webContents.send("updater:available", {
+      version: info.version,
+      releaseDate: info.releaseDate,
+      releaseNotes: info.releaseNotes,
+    });
+  });
+  autoUpdater.on("update-not-available", (info) => {
+    mainWindow?.webContents.send("updater:not-available", {
+      version: info.version,
+    });
+  });
+  autoUpdater.on("download-progress", (progress) => {
+    mainWindow?.webContents.send("updater:progress", {
+      percent: progress.percent,
+      transferred: progress.transferred,
+      total: progress.total,
+      bytesPerSecond: progress.bytesPerSecond,
+    });
+  });
+  autoUpdater.on("update-downloaded", (info) => {
+    mainWindow?.webContents.send("updater:downloaded", {
+      version: info.version,
+    });
   });
   autoUpdater.on("error", (err) => {
-    mainWindow?.webContents.send("updater:error", String(err));
+    mainWindow?.webContents.send("updater:error", String(err?.message || err));
   });
+
+  // 启动稍后静默检查一次
   setTimeout(() => {
     void autoUpdater.checkForUpdates().catch(() => undefined);
   }, 5000);
+
+  ipcMain.handle("updater:check", async () => {
+    try {
+      const result = await autoUpdater.checkForUpdates();
+      const remote = result?.updateInfo?.version;
+      const current = app.getVersion();
+      return {
+        ok: true,
+        currentVersion: current,
+        remoteVersion: remote,
+      };
+    } catch (err) {
+      const message = String(err?.message || err);
+      mainWindow?.webContents.send("updater:error", message);
+      return { ok: false, reason: "error", message };
+    }
+  });
 
   ipcMain.handle("updater:download", async () => {
     await autoUpdater.downloadUpdate();
     return true;
   });
+
   ipcMain.handle("updater:install", () => {
-    autoUpdater.quitAndInstall();
+    autoUpdater.quitAndInstall(false, true);
   });
 }
 
