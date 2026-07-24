@@ -142,13 +142,18 @@ function loadDotEnvInto(env) {
   return env;
 }
 
-function waitForHttp(url, timeoutMs = 60000, label = "服务") {
+function waitForHttp(url, timeoutMs = 60000, label = "服务", { okStatuses } = {}) {
   const started = Date.now();
+  const allow = Array.isArray(okStatuses) && okStatuses.length
+    ? new Set(okStatuses)
+    : null;
   return new Promise((resolve, reject) => {
     const tick = () => {
       const req = http.get(url, (res) => {
         res.resume();
-        if (res.statusCode && res.statusCode < 500) {
+        const code = res.statusCode || 0;
+        const ok = allow ? allow.has(code) : code > 0 && code < 500;
+        if (ok) {
           resolve(true);
           return;
         }
@@ -171,9 +176,11 @@ function waitForHttp(url, timeoutMs = 60000, label = "服务") {
   });
 }
 
-function waitForHealth(timeoutMs = 60000) {
+function waitForHealth(timeoutMs = 90000) {
   // /health 在无 DB 时也应返回 200（database=false）
-  return waitForHttp(`${API_ORIGIN}/health`, timeoutMs, "API");
+  return waitForHttp(`${API_ORIGIN}/health`, timeoutMs, "API", {
+    okStatuses: [200],
+  });
 }
 
 function spawnApiProcess(command, args, options) {
@@ -285,6 +292,13 @@ async function startApiSynced() {
     env.DATABASE_URL = `sqlite+aiosqlite:///${dbFile}`;
   }
 
+  if (app.isPackaged) {
+    const webDir = path.join(process.resourcesPath, "web");
+    if (fs.existsSync(webDir)) {
+      env.KONGKU_WEB_DIR = webDir;
+    }
+  }
+
   const sidecar = apiSidecarPath();
   console.log("[kongku] sidecar path:", sidecar, "exists=", fs.existsSync(sidecar));
   if (fs.existsSync(sidecar)) {
@@ -294,8 +308,8 @@ async function startApiSynced() {
       cwd: app.isPackaged ? appDataRoot() : path.join(root, "apps", "api"),
     });
     try {
-      // 冷启动 / 杀软首次扫描 sidecar 可能较慢
-      await waitForHealth(process.platform === "win32" ? 90000 : 60000);
+      // Win / Mac / Linux：onefile 冷启动与杀软扫描都可能较慢
+      await waitForHealth(90000);
       apiStatus = "ready";
       console.log("[kongku] API ready (sidecar):", API_ORIGIN);
       return { ready: true, spawnedByUs: true };
@@ -462,6 +476,32 @@ npm run dev</pre>
     }
   }
 
+  // 打包态：优先走本机 API 同源页面（避免 file:// CORS → Failed to fetch）
+  // 若 API 尚未就绪，先显示启动页，由 loadAppUi 在 API ready 后再跳转
+  await mainWindow.loadURL(
+    `data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html><meta charset="utf-8"/>
+<title>空库</title>
+<body style="font-family:sans-serif;padding:48px;color:#1f2933;background:#f7f8f9;line-height:1.6">
+<h1 style="margin:0 0 12px">空库启动中…</h1>
+<p style="margin:0;color:#6b7280">正在拉起本机服务，首次启动可能需要几十秒。</p>
+</body>`)}`,
+  );
+}
+
+async function loadAppUi() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (!app.isPackaged) return;
+
+  try {
+    // 必须是 200 的首页（确认静态资源已挂载），避免把 FastAPI 404 当成成功
+    await waitForHttp(`${API_ORIGIN}/`, 15000, "Web", { okStatuses: [200] });
+    await mainWindow.loadURL(`${API_ORIGIN}/`);
+    console.log("[kongku] UI loaded from API origin");
+    return;
+  } catch (err) {
+    console.warn("[kongku] API 未托管前端，回退 loadFile:", err);
+  }
+
   const indexHtml = webDistIndex();
   if (fs.existsSync(indexHtml)) {
     await mainWindow.loadFile(indexHtml);
@@ -567,7 +607,7 @@ app.whenReady().then(async () => {
     dataDir: app.isPackaged ? path.join(appDataRoot(), "data") : undefined,
   }));
 
-  // 先开窗口，再并行拉 API，避免 Win 上长时间「有进程无界面」
+  // 先开窗口（显示启动中），再拉 API；就绪后同源加载 UI，避免 Win 上长时间无界面 + file:// CORS
   const apiPromise = startApiSynced().catch((err) => {
     apiStatus = "failed";
     apiLastError = String(err);
@@ -581,11 +621,19 @@ app.whenReady().then(async () => {
   }
 
   await apiPromise;
+  try {
+    await loadAppUi();
+  } catch (err) {
+    console.error("[kongku] loadAppUi:", err);
+  }
   setupAutoUpdater();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      void createWindow();
+      void (async () => {
+        await createWindow();
+        await loadAppUi();
+      })();
     }
   });
 });

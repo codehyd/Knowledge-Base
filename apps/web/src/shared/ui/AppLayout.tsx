@@ -25,8 +25,10 @@ const DEFAULT_DB_HINT =
   "未检测到可用数据库。请到「设置 → 数据库」检查连接；默认使用本地 SQLite。";
 
 async function waitForHealthReady(retries = 20, intervalMs = 500) {
+  const desktop = getDesktopBridge();
+  const maxRetries = desktop ? 60 : retries; // 桌面端 sidecar 冷启动更慢
   let lastErr: unknown;
-  for (let i = 0; i < retries; i += 1) {
+  for (let i = 0; i < maxRetries; i += 1) {
     try {
       return await api.health();
     } catch (err) {

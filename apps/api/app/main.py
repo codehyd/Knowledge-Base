@@ -1,6 +1,7 @@
 """空库 API 入口：只负责组装各功能模块路由，不含业务逻辑。"""
 
 from contextlib import asynccontextmanager
+import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -57,6 +58,7 @@ async def lifespan(_: FastAPI):
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    desktop = os.environ.get("KONGKU_DESKTOP", "").strip() in {"1", "true", "TRUE", "yes"}
     app = FastAPI(
         title="空库 API",
         version="0.1.0",
@@ -72,14 +74,40 @@ def create_app() -> FastAPI:
         redoc_url=None,
     )
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-        expose_headers=["Content-Disposition", "X-Kongku-Filename"],
-    )
+    # 桌面端 loadFile → Origin 为 "null"；仅放行 Vite 源会导致 Failed to fetch
+    cors_kwargs: dict = {
+        "allow_methods": ["*"],
+        "allow_headers": ["*"],
+        "expose_headers": ["Content-Disposition", "X-Kongku-Filename"],
+    }
+    if desktop:
+        # 明确放行 Electron file://（Origin: null）与本机开发页
+        origins = list(settings.cors_origins)
+        for extra in (
+            "null",
+            "file://",
+            "http://127.0.0.1:41779",
+            "http://localhost:41779",
+            "http://127.0.0.1:18765",
+            "http://localhost:18765",
+        ):
+            if extra not in origins:
+                origins.append(extra)
+        cors_kwargs.update(
+            {
+                "allow_origins": origins,
+                "allow_credentials": True,
+                "allow_origin_regex": r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+            }
+        )
+    else:
+        cors_kwargs.update(
+            {
+                "allow_origins": settings.cors_origins,
+                "allow_credentials": True,
+            }
+        )
+    app.add_middleware(CORSMiddleware, **cors_kwargs)
 
     # Knife4j：/doc.html + /v3/api-docs（兼容 springdoc 拉取方式）
     setup_knife4j(app)
@@ -93,6 +121,22 @@ def create_app() -> FastAPI:
     app.include_router(sources_router, prefix="/api")
     app.include_router(knowledge_router, prefix="/api")
     app.include_router(chat_router, prefix="/api")
+
+    # 桌面端：由 API 同源托管前端静态资源，避免 file:// 跨域
+    web_dir = os.environ.get("KONGKU_WEB_DIR", "").strip()
+    if web_dir:
+        from pathlib import Path
+
+        from fastapi.staticfiles import StaticFiles
+
+        web_path = Path(web_dir)
+        if web_path.is_dir():
+            app.mount(
+                "/",
+                StaticFiles(directory=str(web_path), html=True),
+                name="web",
+            )
+            print(f"[kongku] serving web UI from {web_path}")
 
     return app
 
