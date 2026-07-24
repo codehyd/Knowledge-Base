@@ -24,6 +24,12 @@ export type AiSettings = {
   chat_model: string;
   embed_model: string;
   configured: boolean;
+  asr_mode?: string;
+  asr_base_url?: string;
+  asr_api_key_masked?: string;
+  asr_model?: string;
+  asr_local_model?: string;
+  asr_cloud_configured?: boolean;
 };
 
 export type DbSettings = {
@@ -275,6 +281,11 @@ export const api = {
     api_key?: string;
     chat_model: string;
     embed_model: string;
+    asr_mode?: string;
+    asr_base_url?: string;
+    asr_api_key?: string;
+    asr_model?: string;
+    asr_local_model?: string;
   }) =>
     request<AiSettings>("/api/settings/ai", {
       method: "PUT",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import shutil
 from pathlib import Path
@@ -19,9 +20,11 @@ from app.modules.sources.classify import (
 )
 from app.modules.sources.extractors import (
     extract_local_file,
+    extract_video_audio_transcript_sync,
     extract_video_subs_sync,
     extract_webpage,
     looks_like_video_url,
+    parse_share_input,
 )
 from app.modules.sources.models import Source
 from app.modules.sources.preview_search import search_text_hits
@@ -246,14 +249,16 @@ class SourcesService:
         return row
 
     async def create_url(self, db: AsyncSession, payload: UrlIn) -> Source:
-        url = payload.url.strip()
-        if not (url.startswith("http://") or url.startswith("https://")):
-            raise HTTPException(status_code=400, detail="请输入 http(s) 链接")
+        try:
+            url, share_title = parse_share_input(payload.url)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         is_video = looks_like_video_url(url)
+        title = share_title or urlparse_title(url)
         row = Source(
             type="video_url" if is_video else "url",
-            title=urlparse_title(url),
+            title=title,
             filename="",
             source_uri=url,
             status="pending",
@@ -267,6 +272,10 @@ class SourcesService:
         folder = _data_root() / "uploads" / str(row.id)
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "source.url").write_text(url, encoding="utf-8")
+        # 保留原始粘贴，便于排查分享口令
+        raw = payload.url.strip()
+        if raw != url:
+            (folder / "share_raw.txt").write_text(raw, encoding="utf-8")
         row.storage_path = str((folder / "source.url").relative_to(_data_root())).replace("\\", "/")
         row.stage = "saved"
         row.progress = 5
@@ -582,16 +591,45 @@ class SourcesService:
                 row.progress = 30
                 await db.commit()
                 work = _data_root() / "uploads" / str(row.id) / "subs"
+                audio_work = _data_root() / "uploads" / str(row.id) / "audio"
                 try:
-                    text = extract_video_subs_sync(row.source_uri, work)
-                except ValueError as exc:
-                    row.status = "need_transcript"
-                    row.stage = "need_transcript"
-                    row.progress = 40
-                    row.error_message = str(exc)
+                    text = await asyncio.to_thread(
+                        extract_video_subs_sync, row.source_uri, work
+                    )
+                except ValueError as sub_exc:
+                    # 无字幕 → 下载音轨语音转写（本地 Whisper / 云端 ASR）
+                    asr_cfg = await settings_ai_service.asr_config(db)
+                    if (asr_cfg.get("asr_mode") or "auto") == "off":
+                        row.status = "need_transcript"
+                        row.stage = "need_transcript"
+                        row.progress = 40
+                        row.error_message = (
+                            f"{sub_exc} 语音转写已关闭，请在设置开启或「补贴文案」。"
+                        )[:500]
+                        await db.commit()
+                        await db.refresh(row)
+                        return row
+                    row.stage = "asr"
+                    row.progress = 55
+                    row.error_message = ""
                     await db.commit()
-                    await db.refresh(row)
-                    return row
+                    try:
+                        text = await asyncio.to_thread(
+                            extract_video_audio_transcript_sync,
+                            row.source_uri,
+                            audio_work,
+                            asr_cfg,
+                        )
+                    except ValueError as asr_exc:
+                        row.status = "need_transcript"
+                        row.stage = "need_transcript"
+                        row.progress = 40
+                        row.error_message = (
+                            f"{sub_exc} 语音转写失败：{asr_exc}"
+                        )[:500]
+                        await db.commit()
+                        await db.refresh(row)
+                        return row
             else:
                 raise ValueError(f"未知类型 {row.type}")
 

@@ -68,6 +68,12 @@ export function SettingsPage() {
   const [customEmbed, setCustomEmbed] = useState(false);
   const [masked, setMasked] = useState("");
   const [configured, setConfigured] = useState(false);
+  const [asrMode, setAsrMode] = useState("auto");
+  const [asrBaseUrl, setAsrBaseUrl] = useState("");
+  const [asrApiKey, setAsrApiKey] = useState("");
+  const [asrMasked, setAsrMasked] = useState("");
+  const [asrModel, setAsrModel] = useState("");
+  const [asrLocalModel, setAsrLocalModel] = useState("base");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -166,6 +172,11 @@ export function SettingsPage() {
           setEmbedModel(settings.embed_model);
           setMasked(settings.api_key_masked);
           setConfigured(settings.configured);
+          setAsrMode(settings.asr_mode || "auto");
+          setAsrBaseUrl(settings.asr_base_url || "");
+          setAsrMasked(settings.asr_api_key_masked || "");
+          setAsrModel(settings.asr_model || "");
+          setAsrLocalModel(settings.asr_local_model || "base");
 
           const p = listRes.providers.find((x) => x.id === settings.provider);
           if (p) {
@@ -525,10 +536,21 @@ export function SettingsPage() {
         api_key: apiKey || undefined,
         chat_model: chatModel,
         embed_model: embedModel,
+        asr_mode: asrMode,
+        asr_base_url: asrBaseUrl,
+        asr_api_key: asrApiKey || undefined,
+        asr_model: asrModel,
+        asr_local_model: asrLocalModel,
       });
       setMasked(data.api_key_masked);
       setConfigured(data.configured);
+      setAsrMode(data.asr_mode || "auto");
+      setAsrBaseUrl(data.asr_base_url || "");
+      setAsrMasked(data.asr_api_key_masked || "");
+      setAsrModel(data.asr_model || "");
+      setAsrLocalModel(data.asr_local_model || "base");
       setApiKey("");
+      setAsrApiKey("");
       message.success("已保存");
     } catch (err) {
       message.error(formatError(err, "保存失败"));
@@ -958,6 +980,72 @@ export function SettingsPage() {
                               ]}
                             />
                           )}
+                        </Form.Item>
+
+                        <Typography.Title level={5} style={{ marginTop: 8 }}>
+                          视频语音转写
+                        </Typography.Title>
+                        <p className={styles.tabHint}>
+                          抖音等视频多数没有字幕轨。无字幕时会下载音轨做语音转写：可走本地
+                          Whisper（不换 DeepSeek），或单独配置硅基流动 / OpenAI。
+                        </p>
+                        <Form.Item label="转写方式" extra="自动：优先云端（若已配置），否则本地。">
+                          <Select
+                            value={asrMode}
+                            onChange={setAsrMode}
+                            options={[
+                              { value: "auto", label: "自动（推荐）" },
+                              { value: "local", label: "仅本地 Whisper" },
+                              { value: "cloud", label: "仅云端 ASR" },
+                              { value: "off", label: "关闭（只能补贴文案）" },
+                            ]}
+                          />
+                        </Form.Item>
+                        <Form.Item
+                          label="本地模型"
+                          extra="首次会下载到 data/models；base 较快，small 更准。"
+                        >
+                          <Select
+                            value={asrLocalModel}
+                            onChange={setAsrLocalModel}
+                            options={[
+                              { value: "tiny", label: "tiny（最快）" },
+                              { value: "base", label: "base（推荐）" },
+                              { value: "small", label: "small（更准）" },
+                              { value: "medium", label: "medium（慢）" },
+                            ]}
+                          />
+                        </Form.Item>
+                        <Form.Item
+                          label="云端转写 Base URL"
+                          extra="可空。常用：https://api.siliconflow.cn/v1 或 https://api.openai.com/v1"
+                        >
+                          <Input
+                            value={asrBaseUrl}
+                            onChange={(e) => setAsrBaseUrl(e.target.value)}
+                            placeholder="https://api.siliconflow.cn/v1"
+                          />
+                        </Form.Item>
+                        <Form.Item
+                          label={`云端转写 API Key${asrMasked ? `（当前 ${asrMasked}）` : ""}`}
+                          extra="可与对话 Key 分开；DeepSeek 不能用于转写。"
+                        >
+                          <Input.Password
+                            value={asrApiKey}
+                            onChange={(e) => setAsrApiKey(e.target.value)}
+                            placeholder={asrMasked ? "留空则保持原 Key" : "可选，硅基流动 / OpenAI"}
+                            autoComplete="off"
+                          />
+                        </Form.Item>
+                        <Form.Item
+                          label="云端转写模型"
+                          extra="可空自动选择。硅基流动可用 FunAudioLLM/SenseVoiceSmall"
+                        >
+                          <Input
+                            value={asrModel}
+                            onChange={(e) => setAsrModel(e.target.value)}
+                            placeholder="留空则自动"
+                          />
                         </Form.Item>
 
                         <Space wrap>

@@ -34,7 +34,8 @@ class PasteIn(BaseModel):
 
 
 class UrlIn(BaseModel):
-    url: str = Field(min_length=8, max_length=2000)
+    # 允许粘贴抖音等「复制分享」整段文案，后端会自动抽链
+    url: str = Field(min_length=8, max_length=4000)
 
 
 class TranscriptIn(BaseModel):

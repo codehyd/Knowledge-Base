@@ -38,6 +38,8 @@ class SettingsAiService:
             api_key=env.llm_api_key,
             chat_model=env.llm_chat_model,
             embed_model=env.llm_embed_model,
+            asr_mode="auto",
+            asr_local_model="base",
         )
         db.add(row)
         await db.commit()
@@ -47,6 +49,18 @@ class SettingsAiService:
     async def is_configured(self, db: AsyncSession) -> bool:
         row = await self._get_or_create(db)
         return bool((row.api_key or "").strip())
+
+    def _asr_out_fields(self, row: AiSettings) -> dict[str, Any]:
+        asr_key = getattr(row, "asr_api_key", None) or ""
+        return {
+            "asr_mode": (getattr(row, "asr_mode", None) or "auto").strip() or "auto",
+            "asr_base_url": (getattr(row, "asr_base_url", None) or "").strip(),
+            "asr_api_key_masked": mask_key(asr_key),
+            "asr_model": (getattr(row, "asr_model", None) or "").strip(),
+            "asr_local_model": (getattr(row, "asr_local_model", None) or "base").strip()
+            or "base",
+            "asr_cloud_configured": bool(asr_key.strip()),
+        }
 
     async def get(self, db: AsyncSession) -> AiSettingsOut:
         row = await self._get_or_create(db)
@@ -58,7 +72,22 @@ class SettingsAiService:
             chat_model=row.chat_model,
             embed_model=row.embed_model,
             configured=bool((row.api_key or "").strip()),
+            **self._asr_out_fields(row),
         )
+
+    async def asr_config(self, db: AsyncSession) -> dict[str, str]:
+        """供喂养流水线使用的转写配置。"""
+        row = await self._get_or_create(db)
+        return {
+            "asr_mode": (getattr(row, "asr_mode", None) or "auto").strip() or "auto",
+            "asr_base_url": (getattr(row, "asr_base_url", None) or "").strip(),
+            "asr_api_key": (getattr(row, "asr_api_key", None) or "").strip(),
+            "asr_model": (getattr(row, "asr_model", None) or "").strip(),
+            "asr_local_model": (getattr(row, "asr_local_model", None) or "base").strip()
+            or "base",
+            "chat_base_url": (row.base_url or "").rstrip("/"),
+            "chat_api_key": (row.api_key or "").strip(),
+        }
 
     async def update(self, db: AsyncSession, payload: AiSettingsUpdate) -> AiSettingsOut:
         row = await self._get_or_create(db)
@@ -68,6 +97,19 @@ class SettingsAiService:
         row.embed_model = payload.embed_model
         if payload.api_key is not None and payload.api_key.strip():
             row.api_key = payload.api_key.strip()
+        if payload.asr_mode is not None:
+            mode = payload.asr_mode.strip().lower() or "auto"
+            if mode not in {"auto", "local", "cloud", "off"}:
+                mode = "auto"
+            row.asr_mode = mode
+        if payload.asr_base_url is not None:
+            row.asr_base_url = payload.asr_base_url.strip().rstrip("/")
+        if payload.asr_api_key is not None and payload.asr_api_key.strip():
+            row.asr_api_key = payload.asr_api_key.strip()
+        if payload.asr_model is not None:
+            row.asr_model = payload.asr_model.strip()
+        if payload.asr_local_model is not None:
+            row.asr_local_model = payload.asr_local_model.strip() or "base"
         await db.commit()
         await db.refresh(row)
         return await self.get(db)

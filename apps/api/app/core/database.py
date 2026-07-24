@@ -154,6 +154,19 @@ async def _ensure_ai_settings_columns(conn) -> None:
     await _add_column_if_missing(
         conn, "ai_settings", "provider", "VARCHAR(100) DEFAULT 'deepseek'"
     )
+    await _add_column_if_missing(
+        conn, "ai_settings", "asr_mode", "VARCHAR(20) DEFAULT 'auto'"
+    )
+    await _add_column_if_missing(
+        conn, "ai_settings", "asr_base_url", "VARCHAR(500) DEFAULT ''"
+    )
+    await _add_column_if_missing(conn, "ai_settings", "asr_api_key", "TEXT DEFAULT ''")
+    await _add_column_if_missing(
+        conn, "ai_settings", "asr_model", "VARCHAR(200) DEFAULT ''"
+    )
+    await _add_column_if_missing(
+        conn, "ai_settings", "asr_local_model", "VARCHAR(50) DEFAULT 'base'"
+    )
 
 
 async def _ensure_entry_columns(conn) -> None:

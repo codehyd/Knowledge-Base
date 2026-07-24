@@ -67,6 +67,8 @@ def main() -> int:
         "asyncpg",
         "--collect-all",
         "aiosqlite",
+        "--collect-all",
+        "yt_dlp",
         "--hidden-import",
         "app.main",
         "--hidden-import",

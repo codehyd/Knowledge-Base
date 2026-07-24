@@ -43,6 +43,24 @@ npm run dev
 
 ## 本地打 sidecar + 安装包
 
+一键脚本（推荐）：
+
+```bash
+# Git Bash / macOS / Linux
+bash scripts/pack-desktop.sh win
+bash scripts/pack-desktop.sh mac
+bash scripts/pack-desktop.sh linux
+bash scripts/pack-desktop.sh win --skip-sidecar --skip-web   # 只重打 Electron
+```
+
+```powershell
+# Windows PowerShell
+.\scripts\pack-desktop.ps1 win
+.\scripts\pack-desktop.ps1 win -SkipSidecar -SkipWeb
+```
+
+手动步骤：
+
 ```powershell
 cd apps/api
 .\.venv\Scripts\activate
@@ -58,7 +76,7 @@ npm install
 npm run dist
 ```
 
-产物在 `apps/desktop/release/`。
+产物在 `apps/desktop/release/`。本机一般只能打当前系统对应平台；三端齐全请推 `v*` tag 走 GitHub Actions。
 
 ## 应用图标
 

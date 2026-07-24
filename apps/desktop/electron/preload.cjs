@@ -7,6 +7,13 @@ contextBridge.exposeInMainWorld("kongkuDesktop", {
   installUpdate: () => ipcRenderer.invoke("updater:install"),
   openReleasesPage: (version) =>
     ipcRenderer.invoke("updater:open-releases", version || ""),
+  loginMediaSite: (site) => ipcRenderer.invoke("media:login", site || "douyin"),
+  exportMediaCookies: () => ipcRenderer.invoke("media:export-cookies"),
+  onMediaCookiesExported: (cb) => {
+    const listener = (_event, info) => cb(info);
+    ipcRenderer.on("media:cookies-exported", listener);
+    return () => ipcRenderer.removeListener("media:cookies-exported", listener);
+  },
   onUpdateAvailable: (cb) => {
     const listener = (_event, info) => cb(info);
     ipcRenderer.on("updater:available", listener);

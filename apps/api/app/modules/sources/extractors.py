@@ -197,10 +197,85 @@ def looks_like_video_url(url: str) -> bool:
         "b23.tv",
         "v.qq.com",
         "douyin.com",
+        "iesdouyin.com",
         "tiktok.com",
         "vimeo.com",
     )
     return any(n in host for n in needles)
+
+
+_SHARE_URL_RE = re.compile(r"https?://[^\s<>\"'\]）)」』]+", re.IGNORECASE)
+
+
+def _clean_extracted_url(raw: str) -> str:
+    u = raw.strip()
+    # 分享文案常把「复制此链接」粘在 URL 后且无空格
+    for marker in ("复制此链接", "复制链接", "打开Dou音", "打开抖音", "打开抖音搜索"):
+        idx = u.find(marker)
+        if idx > 0:
+            u = u[:idx]
+    u = u.rstrip("，。！？；：、）)」』\"'.,;:!?/\\")
+    return u
+
+
+def extract_urls_from_text(text: str) -> list[str]:
+    """从纯 URL 或抖音/B站等「复制分享」整段文案中抽出 http(s) 链接。"""
+    found: list[str] = []
+    seen: set[str] = set()
+    for m in _SHARE_URL_RE.finditer(text or ""):
+        u = _clean_extracted_url(m.group(0))
+        if not u.startswith(("http://", "https://")):
+            continue
+        if u in seen:
+            continue
+        seen.add(u)
+        found.append(u)
+    return found
+
+
+def guess_title_from_share(text: str, url: str) -> str:
+    """从分享文案里猜标题（如抖音「标题 #标签 https://…」）。"""
+    head = (text or "").split(url, 1)[0]
+    head = re.split(r"\s+#", head, maxsplit=1)[0].strip()
+    if not head:
+        return ""
+    # 取末尾偏中文的一段，去掉抖音口令前缀噪声
+    m = re.search(
+        r"([\u4e00-\u9fffA-Za-z0-9][\u4e00-\u9fffA-Za-z0-9，。！？、：；《》【】（）\-\s]{0,120})$",
+        head,
+    )
+    title = (m.group(1) if m else head).strip(" /:：.-")
+    # 过滤过短或纯口令
+    if len(title) < 2:
+        return ""
+    if re.fullmatch(r"[\d\s\./@:a-zA-Z]+", title):
+        return ""
+    return title[:200]
+
+
+def parse_share_input(raw: str) -> tuple[str, str]:
+    """
+    解析用户粘贴内容 → (规范 URL, 可选标题)。
+    支持：
+    - 纯链接
+    - 抖音/视频 App「复制分享」整段口令文案
+    """
+    text = (raw or "").strip()
+    if not text:
+        raise ValueError("请输入链接或粘贴分享文案")
+
+    if text.startswith(("http://", "https://")) and not re.search(r"\s", text):
+        url = _clean_extracted_url(text)
+        return url, ""
+
+    urls = extract_urls_from_text(text)
+    if not urls:
+        raise ValueError("未识别到 http(s) 链接；请粘贴完整分享内容或直接粘贴网址")
+
+    # 优先视频站短链
+    url = next((u for u in urls if looks_like_video_url(u)), urls[0])
+    title = guess_title_from_share(text, url)
+    return url, title
 
 
 async def extract_webpage(url: str) -> str:
@@ -234,37 +309,7 @@ async def extract_webpage(url: str) -> str:
     return text
 
 
-def extract_video_subs_sync(url: str, work_dir: Path) -> str:
-    """用 yt-dlp 拉字幕；失败抛错。"""
-    work_dir.mkdir(parents=True, exist_ok=True)
-    outtmpl = str(work_dir / "sub")
-    cmd = [
-        "yt-dlp",
-        "--skip-download",
-        "--write-auto-sub",
-        "--write-sub",
-        "--sub-lang",
-        "zh-Hans,zh-CN,zh,en",
-        "--sub-format",
-        "vtt/srt/best",
-        "-o",
-        outtmpl,
-        url,
-    ]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120, check=False)
-    except FileNotFoundError as exc:
-        raise ValueError("未安装 yt-dlp，无法自动提取视频字幕；请补贴文案或安装 yt-dlp") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise ValueError("提取字幕超时") from exc
-
-    subs = list(work_dir.glob("*.vtt")) + list(work_dir.glob("*.srt"))
-    if not subs:
-        err = (proc.stderr or proc.stdout or "").strip()[-300:]
-        raise ValueError("未拿到字幕" + (f"：{err}" if err else "，可补贴文案后重试"))
-
-    raw = decode_bytes(subs[0].read_bytes())
-    # 粗清洗 VTT/SRT
+def _clean_subtitle_text(raw: str) -> str:
     lines: list[str] = []
     for line in raw.splitlines():
         s = line.strip()
@@ -272,7 +317,232 @@ def extract_video_subs_sync(url: str, work_dir: Path) -> str:
             continue
         s = re.sub(r"<[^>]+>", "", s)
         lines.append(s)
-    text = "\n".join(lines).strip()
+    return "\n".join(lines).strip()
+
+
+def _yt_dlp_cli() -> list[str] | None:
+    """解析本机 yt-dlp 可执行文件（venv Scripts / PATH）。"""
+    import shutil
+    import sys
+
+    which = shutil.which("yt-dlp") or shutil.which("yt-dlp.exe")
+    if which:
+        return [which]
+    scripts = Path(sys.executable).resolve().parent
+    for name in ("yt-dlp.exe", "yt-dlp"):
+        candidate = scripts / name
+        if candidate.is_file():
+            return [str(candidate)]
+    return None
+
+
+def _is_cookie_gated_host(url: str) -> bool:
+    host = (urlparse(url).hostname or "").lower()
+    return any(
+        n in host
+        for n in ("douyin.com", "iesdouyin.com", "tiktok.com", "xiaohongshu.com", "xhslink.com")
+    )
+
+
+def _is_dpapi_error(err: str) -> bool:
+    low = (err or "").lower()
+    return "dpapi" in low or "failed to decrypt" in low or "app-bound" in low
+
+
+def _cookies_needed(err: str) -> bool:
+    low = (err or "").lower()
+    return (
+        "cookie" in low
+        or "登录" in (err or "")
+        or "login" in low
+        or _is_dpapi_error(err)
+    )
+
+
+def _friendly_subs_error(err: str, url: str) -> str:
+    if _is_dpapi_error(err):
+        return (
+            "无法从系统 Chrome/Edge 读取 Cookie（Windows DPAPI）。"
+            "请在桌面端喂养页点「应用内登录抖音」，登录后关闭窗口，再点队列「重试」；"
+            "或直接「补贴文案」。"
+        )
+    if _cookies_needed(err) and _is_cookie_gated_host(url):
+        return (
+            "抖音需要登录态才能抓取。"
+            "请在桌面端点「应用内登录抖音」后重试，或「补贴文案」。"
+        )
+    msg = (err or "").strip()
+    low = msg.lower()
+    if (not msg) or "no subtitles" in low or "requested languages" in low:
+        if _is_cookie_gated_host(url):
+            return "该视频没有可下载字幕轨（抖音多数如此），将改用音轨语音转写。"
+        return "该视频没有可下载字幕，将改用音轨语音转写。"
+    return f"未拿到字幕：{msg[-280:]}"
+
+
+def extract_video_audio_transcript_sync(
+    url: str,
+    work_dir: Path,
+    asr_cfg: dict[str, str] | None = None,
+    creds: dict[str, str] | None = None,
+) -> str:
+    """下载音轨并转写。asr_cfg 优先；兼容只传对话 creds。"""
+    from app.modules.sources.asr import transcribe_video_audio_sync
+
+    cfg = dict(asr_cfg or {})
+    if creds:
+        cfg.setdefault("chat_base_url", creds.get("base_url") or "")
+        cfg.setdefault("chat_api_key", creds.get("api_key") or "")
+        if creds.get("asr_model"):
+            cfg.setdefault("asr_model", creds["asr_model"])
+    cfg.setdefault("asr_mode", cfg.get("asr_mode") or "auto")
+    return transcribe_video_audio_sync(
+        url, work_dir, cfg, cookie_file=_resolve_cookie_file()
+    )
+
+
+def _resolve_cookie_file() -> Path | None:
+    import os
+
+    env = (os.environ.get("KONGKU_YTDLP_COOKIES") or "").strip()
+    if env:
+        p = Path(env)
+        if p.is_file():
+            return p
+    data_dir = (os.environ.get("DATA_DIR") or "data").strip() or "data"
+    for name in ("yt-dlp-cookies.txt", "cookies.txt"):
+        p = Path(data_dir) / name
+        if p.is_file():
+            return p
+    return None
+
+
+def _yt_dlp_option_sets(url: str) -> list[dict]:
+    """生成尝试顺序：无 cookie → cookies 文件 → Firefox（避 DPAPI）→ Edge/Chrome。"""
+    import os
+
+    base = {
+        "skip_download": True,
+        "writesubtitles": True,
+        "writeautomaticsub": True,
+        "subtitleslangs": ["zh-Hans", "zh-CN", "zh", "en"],
+        "subtitlesformat": "vtt/srt/best",
+        "quiet": True,
+        "no_warnings": True,
+    }
+    sets: list[dict] = []
+    cookie_file = _resolve_cookie_file()
+    gated = _is_cookie_gated_host(url)
+
+    # 抖音等站点：优先用桌面端导出的 Cookie 文件，避免先无 Cookie 白跑
+    if cookie_file is not None:
+        sets.append({**base, "cookiefile": str(cookie_file)})
+    if not gated:
+        sets.append(dict(base))
+
+    browser = (os.environ.get("KONGKU_YTDLP_BROWSER") or "").strip().lower()
+    if browser:
+        sets.append({**base, "cookiesfrombrowser": (browser,)})
+
+    if gated:
+        # Firefox 不走 Chromium DPAPI，Windows 上更稳；再试 edge/chrome
+        for b in ("firefox", "edge", "chrome"):
+            if b == browser:
+                continue
+            sets.append({**base, "cookiesfrombrowser": (b,)})
+        # 最后再试一次无 Cookie（少数公开页）
+        if cookie_file is not None:
+            sets.append(dict(base))
+    elif not sets:
+        sets.append(dict(base))
+    return sets
+
+
+def extract_video_subs_sync(url: str, work_dir: Path) -> str:
+    """用 yt-dlp 拉字幕；失败抛错。优先 Python API（开发/打包均可），再回退 CLI。"""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    outtmpl = str(work_dir / "sub")
+    err_tail = ""
+
+    # 1) Python API（pip install yt-dlp / PyInstaller collect-all）
+    try:
+        import yt_dlp
+    except ImportError:
+        yt_dlp = None  # type: ignore[assignment]
+
+    if yt_dlp is not None:
+        last_exc = ""
+        skip_chromium_cookies = False
+        for opts in _yt_dlp_option_sets(url):
+            browser = None
+            if "cookiesfrombrowser" in opts:
+                browser = (opts.get("cookiesfrombrowser") or (None,))[0]
+                if skip_chromium_cookies and browser in {"edge", "chrome"}:
+                    continue
+            # 清理上次残留，避免误读旧字幕
+            for old in work_dir.glob("sub*"):
+                try:
+                    old.unlink()
+                except OSError:
+                    pass
+            attempt = {**opts, "outtmpl": outtmpl}
+            try:
+                with yt_dlp.YoutubeDL(attempt) as ydl:
+                    ydl.download([url])
+                last_exc = ""
+                break
+            except Exception as exc:  # noqa: BLE001
+                last_exc = str(exc)
+                if _is_dpapi_error(last_exc) and browser in {"edge", "chrome"}:
+                    skip_chromium_cookies = True
+                    continue
+                if not _cookies_needed(last_exc):
+                    break
+                continue
+        err_tail = last_exc
+    else:
+        cli = _yt_dlp_cli()
+        if not cli:
+            raise ValueError(
+                "未安装 yt-dlp，无法自动提取视频字幕；"
+                "请执行：apps/api 下 pip install yt-dlp，或补贴文案后重试"
+            )
+        cmd = [
+            *cli,
+            "--skip-download",
+            "--write-auto-sub",
+            "--write-sub",
+            "--sub-lang",
+            "zh-Hans,zh-CN,zh,en",
+            "--sub-format",
+            "vtt/srt/best",
+            "-o",
+            outtmpl,
+            url,
+        ]
+        cookie_file = _resolve_cookie_file()
+        if cookie_file is not None:
+            cmd[1:1] = ["--cookies", str(cookie_file)]
+        else:
+            import os
+
+            browser = (os.environ.get("KONGKU_YTDLP_BROWSER") or "firefox").strip()
+            if _is_cookie_gated_host(url) or browser:
+                cmd[1:1] = ["--cookies-from-browser", browser or "firefox"]
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=180, check=False
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ValueError("提取字幕超时") from exc
+        err_tail = (proc.stderr or proc.stdout or "").strip()[-300:]
+
+    subs = list(work_dir.glob("*.vtt")) + list(work_dir.glob("*.srt"))
+    if not subs:
+        raise ValueError(_friendly_subs_error(err_tail, url))
+
+    raw = decode_bytes(subs[0].read_bytes())
+    text = _clean_subtitle_text(raw)
     if len(text) < 20:
         raise ValueError("字幕几乎为空，可补贴文案后重试")
     return text

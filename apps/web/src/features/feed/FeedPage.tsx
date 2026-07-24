@@ -25,6 +25,7 @@ import {
   Typography,
 } from "antd";
 import { api, type OpenBookItem, type OpenBookSourceInfo, type SourceItem } from "@/shared/api/client";
+import { getDesktopBridge } from "@/shared/desktop";
 import { formatError } from "@/shared/ui/feedback";
 import { TextPreviewModal } from "@/shared/ui/TextPreviewModal";
 import styles from "./FeedPage.module.css";
@@ -39,6 +40,8 @@ function statusLabel(item: SourceItem): string {
     case "pending":
       return "等待中";
     case "extracting":
+      if (item.stage === "asr") return "语音转写中…";
+      if (item.stage === "extract_caption") return "拉取字幕中…";
       return "提取文案中…";
     case "processing":
       return "解析中…";
@@ -49,7 +52,7 @@ function statusLabel(item: SourceItem): string {
     case "failed":
       return "失败";
     case "need_transcript":
-      return "需补贴文案";
+      return "需补贴文案 / 转写";
     default:
       if (item.stage === "extract_or_ocr") return "抽取/OCR 识别中…";
       return item.status;
@@ -89,8 +92,10 @@ export function FeedPage() {
   const [savingAsId, setSavingAsId] = useState<string | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<number>(0);
   const [downloadMessage, setDownloadMessage] = useState("");
+  const [mediaCookiesReady, setMediaCookiesReady] = useState(false);
   const ebookRef = useRef<HTMLInputElement>(null);
   const noteRef = useRef<HTMLInputElement>(null);
+  const desktop = getDesktopBridge();
 
   const refresh = useCallback(async () => {
     try {
@@ -105,6 +110,48 @@ export function FeedPage() {
     void refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    if (!desktop?.getConfig) return;
+    let cancelled = false;
+    void desktop.getConfig().then((cfg) => {
+      if (!cancelled) setMediaCookiesReady(Boolean(cfg.mediaCookiesReady));
+    });
+    const off = desktop.onMediaCookiesExported?.((info) => {
+      if (info.ok && info.loggedIn !== false) {
+        setMediaCookiesReady(true);
+        message.success(
+          info.message ||
+            (info.count
+              ? `已保存登录态（${info.count} 条 Cookie），可对失败项点「重试」`
+              : "已保存登录态，可对失败项点「重试」"),
+        );
+      } else if (info.ok && info.loggedIn === false) {
+        setMediaCookiesReady(false);
+        message.warning(
+          info.message || "未检测到抖音登录，请在弹窗内完成网页登录后再关闭",
+        );
+      } else if (info.message) {
+        message.warning(info.message);
+      }
+    });
+    return () => {
+      cancelled = true;
+      off?.();
+    };
+  }, [desktop, message]);
+
+  async function onLoginDouyin() {
+    if (!desktop?.loginMediaSite) {
+      message.info("请在桌面客户端使用「应用内登录抖音」");
+      return;
+    }
+    try {
+      await desktop.loginMediaSite("douyin");
+      message.info("请在弹出窗口登录抖音，完成后关闭该窗口");
+    } catch (err) {
+      message.error(formatError(err, "打开登录窗口失败"));
+    }
+  }
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -177,7 +224,7 @@ export function FeedPage() {
     await withBusy(async () => {
       await api.urlSource(url.trim());
       setUrl("");
-    }, "链接已投递，后台自动提取文案");
+    }, "已识别链接并投递，后台自动提取文案");
   }
 
   async function onOpenBookSearch() {
@@ -539,7 +586,7 @@ export function FeedPage() {
                     size="large"
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
-                    placeholder="https://www.bilibili.com/video/… 或网页地址"
+                    placeholder="粘贴视频链接，或抖音「复制分享」整段文案"
                     required
                   />
                   <Button
@@ -551,13 +598,31 @@ export function FeedPage() {
                     添加链接
                   </Button>
                 </form>
+                <Space wrap style={{ marginTop: 10 }}>
+                  <Button
+                    size="middle"
+                    disabled={!desktop?.loginMediaSite}
+                    onClick={() => void onLoginDouyin()}
+                  >
+                    应用内登录抖音
+                  </Button>
+                  {mediaCookiesReady ? (
+                    <Tag color="success">已保存应用内登录态</Tag>
+                  ) : (
+                    <Tag>未登录（抖音抓取可能失败）</Tag>
+                  )}
+                </Space>
                 <div className={styles.platforms}>
                   <Tag>YouTube</Tag>
                   <Tag>Bilibili</Tag>
                   <Tag>腾讯视频</Tag>
                   <Tag>抖音</Tag>
                 </div>
-                <p className={styles.urlHint}>支持视频字幕抓取与网页正文提取</p>
+                <p className={styles.urlHint}>
+                  请用「应用内登录抖音」完成网页登录。无字幕时会<strong>下载音轨做语音转写</strong>
+                  （设置里默认「自动」：本地 Whisper，或单独配置硅基流动/OpenAI；对话用 DeepSeek
+                  也没关系）。也可「补贴文案」。
+                </p>
               </article>
 
               <p id="feed-help" className={styles.footNote}>
@@ -680,15 +745,24 @@ export function FeedPage() {
                       </Button>
                     )}
                     {item.status === "need_transcript" && (
-                      <Button
-                        size="small"
-                        onClick={() => {
-                          setTranscriptFor(item.id);
-                          setTranscriptText("");
-                        }}
-                      >
-                        补贴文案
-                      </Button>
+                      <>
+                        <Button
+                          size="small"
+                          disabled={!desktop?.loginMediaSite}
+                          onClick={() => void onLoginDouyin()}
+                        >
+                          登录抖音后重试
+                        </Button>
+                        <Button
+                          size="small"
+                          onClick={() => {
+                            setTranscriptFor(item.id);
+                            setTranscriptText("");
+                          }}
+                        >
+                          补贴文案
+                        </Button>
+                      </>
                     )}
                     <Button
                       size="small"
