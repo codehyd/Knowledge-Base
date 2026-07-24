@@ -101,8 +101,6 @@
     },
     "linux": {
       "icon": "build/icon.png",
-      "desktopName": "kongku",
-      "syncDesktopName": true,
       "target": [
         {
           "target": "AppImage",
