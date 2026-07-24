@@ -32,6 +32,18 @@ import { getDesktopBridge } from "@/shared/desktop";
 import { formatError } from "@/shared/ui/feedback";
 import styles from "./SettingsPage.module.css";
 
+function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  return `${v >= 10 || i === 0 ? v.toFixed(0) : v.toFixed(1)} ${units[i]}`;
+}
+
 function pickRecommended(models: { id: string; recommended?: boolean }[], fallback: string) {
   return models.find((m) => m.recommended)?.id ?? models[0]?.id ?? fallback;
 }
@@ -69,6 +81,9 @@ export function SettingsPage() {
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [downloadingUpdate, setDownloadingUpdate] = useState(false);
   const [updatePercent, setUpdatePercent] = useState(0);
+  const [updateTransferred, setUpdateTransferred] = useState(0);
+  const [updateTotal, setUpdateTotal] = useState(0);
+  const [updateSpeed, setUpdateSpeed] = useState(0);
   const [remoteVersion, setRemoteVersion] = useState("");
   const [updateReady, setUpdateReady] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<{
@@ -290,12 +305,29 @@ export function SettingsPage() {
         setCheckingUpdate(false);
       }),
       desktop.onUpdateProgress((p) => {
+        const percent = Math.max(0, Math.min(100, Math.round(p.percent || 0)));
+        const transferred = Number(p.transferred) || 0;
+        const total = Number(p.total) || 0;
+        const speed = Number(p.bytesPerSecond) || 0;
         setDownloadingUpdate(true);
-        setUpdatePercent(Math.max(0, Math.min(100, Math.round(p.percent || 0))));
+        setUpdatePercent(percent);
+        setUpdateTransferred(transferred);
+        setUpdateTotal(total);
+        setUpdateSpeed(speed);
+        const sizeText =
+          total > 0
+            ? `${formatBytes(transferred)} / ${formatBytes(total)}`
+            : formatBytes(transferred);
+        const speedText = speed > 0 ? ` · ${formatBytes(speed)}/s` : "";
+        setUpdateStatus({
+          type: "info",
+          message: `正在下载更新 ${percent}%（${sizeText}${speedText}）`,
+        });
       }),
       desktop.onUpdateDownloaded((info) => {
         setDownloadingUpdate(false);
         setUpdatePercent(100);
+        setUpdateSpeed(0);
         setUpdateReady(true);
         const ver = info.version || "";
         if (ver) setRemoteVersion(ver);
@@ -309,6 +341,7 @@ export function SettingsPage() {
       desktop.onUpdateError((msg) => {
         setCheckingUpdate(false);
         setDownloadingUpdate(false);
+        setUpdateSpeed(0);
         setUpdateStatus({
           type: "error",
           message: formatError(msg, "检查更新失败"),
@@ -329,6 +362,9 @@ export function SettingsPage() {
     setUpdateStatus({ type: "info", message: "正在检查更新…" });
     setUpdateReady(false);
     setUpdatePercent(0);
+    setUpdateTransferred(0);
+    setUpdateTotal(0);
+    setUpdateSpeed(0);
     try {
       const result = await desktop.checkForUpdates();
       if (!result.ok) {
@@ -354,6 +390,9 @@ export function SettingsPage() {
     if (!desktop) return;
     setDownloadingUpdate(true);
     setUpdatePercent(0);
+    setUpdateTransferred(0);
+    setUpdateTotal(0);
+    setUpdateSpeed(0);
     setUpdateStatus({
       type: "info",
       message: "正在下载更新（网络不稳会自动重试）…",
@@ -362,6 +401,7 @@ export function SettingsPage() {
       await desktop.downloadUpdate();
     } catch (err) {
       setDownloadingUpdate(false);
+      setUpdateSpeed(0);
       setUpdateStatus({
         type: "error",
         message: formatError(err, "下载更新失败"),
@@ -1392,11 +1432,23 @@ export function SettingsPage() {
               ) : null}
 
               {downloadingUpdate || updatePercent > 0 ? (
-                <Progress
-                  percent={updatePercent}
-                  status={updateReady ? "success" : downloadingUpdate ? "active" : "normal"}
-                  style={{ marginBottom: 16 }}
-                />
+                <div style={{ marginBottom: 16 }}>
+                  <Progress
+                    percent={updatePercent}
+                    status={updateReady ? "success" : downloadingUpdate ? "active" : "normal"}
+                  />
+                  <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                    {updateReady
+                      ? "下载完成"
+                      : updateTotal > 0
+                        ? `${formatBytes(updateTransferred)} / ${formatBytes(updateTotal)}${
+                            updateSpeed > 0 ? ` · ${formatBytes(updateSpeed)}/s` : ""
+                          }`
+                        : downloadingUpdate
+                          ? "正在连接并开始下载…"
+                          : null}
+                  </Typography.Text>
+                </div>
               ) : null}
 
               <Space wrap>
