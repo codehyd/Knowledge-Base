@@ -4,6 +4,7 @@ import {
   CloudDownloadOutlined,
   DatabaseOutlined,
   DollarOutlined,
+  FolderOpenOutlined,
   InfoCircleOutlined,
   ReadOutlined,
   SafetyCertificateOutlined,
@@ -27,7 +28,7 @@ import {
   Typography,
 } from "antd";
 import { useSearchParams } from "react-router-dom";
-import { api, type ProviderOption } from "@/shared/api/client";
+import { api, type LibraryOut, type ProviderOption } from "@/shared/api/client";
 import { getDesktopBridge } from "@/shared/desktop";
 import { formatError } from "@/shared/ui/feedback";
 import styles from "./SettingsPage.module.css";
@@ -74,12 +75,19 @@ export function SettingsPage() {
   const [asrMasked, setAsrMasked] = useState("");
   const [asrModel, setAsrModel] = useState("");
   const [asrLocalModel, setAsrLocalModel] = useState("base");
+  const [allowLocalAudio, setAllowLocalAudio] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
-  const [subNav, setSubNav] = useState<"model" | "database" | "feed" | "about">("model");
+  const [subNav, setSubNav] = useState<"model" | "database" | "feed" | "library" | "about">(
+    "model",
+  );
   const [keyTab, setKeyTab] = useState<"ai" | "books">("ai");
+  const [library, setLibrary] = useState<LibraryOut | null>(null);
+  const [libraryLoading, setLibraryLoading] = useState(false);
+  const [libraryRebuilding, setLibraryRebuilding] = useState(false);
+  const [libraryCatKey, setLibraryCatKey] = useState<string>("");
 
   const desktop = getDesktopBridge();
   const [appVersion, setAppVersion] = useState("");
@@ -177,6 +185,7 @@ export function SettingsPage() {
           setAsrMasked(settings.asr_api_key_masked || "");
           setAsrModel(settings.asr_model || "");
           setAsrLocalModel(settings.asr_local_model || "base");
+          setAllowLocalAudio(Boolean(settings.allow_local_audio));
 
           const p = listRes.providers.find((x) => x.id === settings.provider);
           if (p) {
@@ -276,6 +285,35 @@ export function SettingsPage() {
         if (!cancelled) message.error(formatError(err, "读取喂养设置失败"));
       } finally {
         if (!cancelled) setFeedLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [subNav, message]);
+
+  useEffect(() => {
+    if (subNav !== "library") return;
+    let cancelled = false;
+    void (async () => {
+      setLibraryLoading(true);
+      try {
+        const data = await api.getLibrary();
+        if (!cancelled) {
+          setLibrary(data);
+          setLibraryCatKey((prev) => {
+            if (prev && data.categories.some((c) => c.key === prev || c.label === prev)) {
+              return prev;
+            }
+            const preferred =
+              data.categories.find((c) => c.item_count > 0) ?? data.categories[0];
+            return preferred?.key || preferred?.label || "";
+          });
+        }
+      } catch (err) {
+        if (!cancelled) message.error(formatError(err, "读取资源库失败"));
+      } finally {
+        if (!cancelled) setLibraryLoading(false);
       }
     })();
     return () => {
@@ -464,6 +502,33 @@ export function SettingsPage() {
     }
   }
 
+  async function onRebuildLibrary() {
+    setLibraryRebuilding(true);
+    try {
+      const out = await api.rebuildLibrary();
+      const data = await api.getLibrary();
+      setLibrary(data);
+      message.success(out.message || `已同步 ${out.synced} 项`);
+    } catch (err) {
+      message.error(formatError(err, "重建资源库失败"));
+    } finally {
+      setLibraryRebuilding(false);
+    }
+  }
+
+  async function onOpenLibraryPath(targetPath: string) {
+    if (!desktop?.openPath) {
+      message.info("请在桌面端打开资源文件夹；网页模式可到 data/library 查看");
+      return;
+    }
+    try {
+      const res = await desktop.openPath(targetPath);
+      if (!res.ok) message.error(res.message || "打开失败");
+    } catch (err) {
+      message.error(formatError(err, "打开文件夹失败"));
+    }
+  }
+
   async function onSaveCtextKey() {
     if (!ctextKey.trim()) {
       message.info("请粘贴新 Key；若要删除已存 Key，请点「清除」");
@@ -541,6 +606,7 @@ export function SettingsPage() {
         asr_api_key: asrApiKey || undefined,
         asr_model: asrModel,
         asr_local_model: asrLocalModel,
+        allow_local_audio: allowLocalAudio,
       });
       setMasked(data.api_key_masked);
       setConfigured(data.configured);
@@ -549,6 +615,7 @@ export function SettingsPage() {
       setAsrMasked(data.asr_api_key_masked || "");
       setAsrModel(data.asr_model || "");
       setAsrLocalModel(data.asr_local_model || "base");
+      setAllowLocalAudio(Boolean(data.allow_local_audio));
       setApiKey("");
       setAsrApiKey("");
       message.success("已保存");
@@ -724,6 +791,14 @@ export function SettingsPage() {
 
   const chatOptions = current?.chat_models ?? [];
   const embedOptions = current?.embed_models ?? [];
+  const libraryCats = library?.categories ?? [];
+  const activeLibraryCat = useMemo(() => {
+    return (
+      libraryCats.find((c) => c.key === libraryCatKey || c.label === libraryCatKey) ??
+      libraryCats[0] ??
+      null
+    );
+  }, [libraryCats, libraryCatKey]);
 
   return (
     <section className={styles.page}>
@@ -749,6 +824,13 @@ export function SettingsPage() {
           onClick={() => setSubNav("feed")}
         >
           <ReadOutlined /> 喂养
+        </button>
+        <button
+          type="button"
+          className={subNav === "library" ? styles.subActive : styles.subItem}
+          onClick={() => setSubNav("library")}
+        >
+          <FolderOpenOutlined /> 我的资源
         </button>
         <button type="button" className={styles.subItem} disabled>
           拒答规则
@@ -986,13 +1068,25 @@ export function SettingsPage() {
                           视频语音转写
                         </Typography.Title>
                         <p className={styles.tabHint}>
-                          抖音等视频多数没有字幕轨。无字幕时会下载音轨做语音转写：可走本地
-                          Whisper（不换 DeepSeek），或单独配置硅基流动 / OpenAI。
+                          抖音等视频多数没有字幕轨。无字幕时需下载音轨做语音转写；跟读功能也会缓存音轨。
+                          默认不下载，需你在下方明确授权。Mac 首次本地转写还需下载 Whisper 模型。
                         </p>
-                        <Form.Item label="转写方式" extra="自动：优先云端（若已配置），否则本地。">
+                        <Form.Item
+                          label="允许下载音轨到本机"
+                          extra="开启后：无字幕可自动语音转写，并缓存音轨供「文案跟读」。关闭时仅尝试拉字幕，否则需补贴文案。音轨保存在本机 data/uploads，删除来源会一并清理。"
+                        >
+                          <Switch
+                            checked={allowLocalAudio}
+                            onChange={setAllowLocalAudio}
+                            checkedChildren="已授权"
+                            unCheckedChildren="未授权"
+                          />
+                        </Form.Item>
+                        <Form.Item label="转写方式" extra="自动：优先云端（若已配置），否则本地。需先开启「允许下载音轨」。">
                           <Select
                             value={asrMode}
                             onChange={setAsrMode}
+                            disabled={!allowLocalAudio}
                             options={[
                               { value: "auto", label: "自动（推荐）" },
                               { value: "local", label: "仅本地 Whisper" },
@@ -1008,6 +1102,7 @@ export function SettingsPage() {
                           <Select
                             value={asrLocalModel}
                             onChange={setAsrLocalModel}
+                            disabled={!allowLocalAudio}
                             options={[
                               { value: "tiny", label: "tiny（最快）" },
                               { value: "base", label: "base（推荐）" },
@@ -1473,6 +1568,123 @@ export function SettingsPage() {
             <Card size="small" title={<><InfoCircleOutlined /> 说明</>}>
               <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
                 配置保存在 data/runtime-feed.json。与数据库连接配置相互独立。
+              </Typography.Paragraph>
+            </Card>
+          </aside>
+        </>
+      ) : subNav === "library" ? (
+        <>
+          <div className={styles.content}>
+            <div className={styles.contentHead}>
+              <div>
+                <h1>我的资源</h1>
+                <p className={styles.desc}>
+                  顶部按「书籍 / 视频 / 网页 / 笔记」切换；每项以书名或标题建文件夹，内含正文、音轨等。
+                </p>
+              </div>
+              <Space wrap>
+                <Tag>{library?.total_items ?? 0} 项</Tag>
+                <Button
+                  icon={<SyncOutlined />}
+                  loading={libraryRebuilding}
+                  onClick={() => void onRebuildLibrary()}
+                >
+                  重建目录
+                </Button>
+                <Button
+                  type="primary"
+                  icon={<FolderOpenOutlined />}
+                  disabled={!library?.absolute_root}
+                  onClick={() => {
+                    if (library?.absolute_root) void onOpenLibraryPath(library.absolute_root);
+                  }}
+                >
+                  打开资源根目录
+                </Button>
+              </Space>
+            </div>
+
+            {libraryLoading ? (
+              <div className={styles.loading}>
+                <Spin /> 正在加载资源库…
+              </div>
+            ) : (
+              <Tabs
+                className={styles.libraryTabs}
+                activeKey={
+                  activeLibraryCat
+                    ? activeLibraryCat.key || activeLibraryCat.label
+                    : undefined
+                }
+                onChange={(key) => setLibraryCatKey(key)}
+                tabBarExtraContent={
+                  activeLibraryCat ? (
+                    <Button
+                      size="small"
+                      icon={<FolderOpenOutlined />}
+                      onClick={() =>
+                        void onOpenLibraryPath(activeLibraryCat.absolute_path)
+                      }
+                    >
+                      打开此分类
+                    </Button>
+                  ) : null
+                }
+                items={libraryCats.map((cat) => ({
+                  key: cat.key || cat.label,
+                  label: (
+                    <span className={styles.libraryTabLabel}>
+                      {cat.label}
+                      <Tag>{cat.item_count}</Tag>
+                    </span>
+                  ),
+                  children:
+                    cat.items.length === 0 ? (
+                      <p className={styles.libraryEmpty}>暂无资源</p>
+                    ) : (
+                      <div className={styles.libraryItems}>
+                        {cat.items.map((item) => (
+                          <div
+                            key={`${cat.label}-${item.source_id}-${item.folder_name}`}
+                            className={styles.libraryItem}
+                          >
+                            <p className={styles.libraryItemTitle}>{item.title}</p>
+                            <ul className={styles.libraryFiles}>
+                              {item.files.length === 0 ? (
+                                <li>空文件夹</li>
+                              ) : (
+                                item.files.map((f) => (
+                                  <li key={f.name}>
+                                    {f.name}
+                                    {f.size > 0 ? ` · ${formatBytes(f.size)}` : ""}
+                                  </li>
+                                ))
+                              )}
+                            </ul>
+                          </div>
+                        ))}
+                      </div>
+                    ),
+                }))}
+              />
+            )}
+          </div>
+
+          <aside className={styles.tips}>
+            <Card size="small" title={<><FolderOpenOutlined /> 目录说明</>}>
+              <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
+                物理路径：data/library/分类/标题/
+              </Typography.Paragraph>
+              <ul className={styles.checklist}>
+                <li>正文.txt · 抽取或转写文案</li>
+                <li>音轨.* · 授权后下载的跟读音频</li>
+                <li>时间轴.json · 跟读高亮</li>
+                <li>原件.* · 电子书等原始文件</li>
+              </ul>
+            </Card>
+            <Card size="small" title={<><InfoCircleOutlined /> 提示</>}>
+              <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+                顶部切换分类，用「打开此分类」在访达查看该目录。单项无需单独打开。
               </Typography.Paragraph>
             </Card>
           </aside>

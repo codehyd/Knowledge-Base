@@ -47,6 +47,11 @@ export type KongkuDesktopBridge = {
   openReleasesPage: (version?: string) => Promise<boolean>;
   loginMediaSite: (site?: string) => Promise<{ ok: boolean; reused?: boolean }>;
   exportMediaCookies: () => Promise<MediaCookiesExportResult>;
+  openVideoPreview: (
+    url: string,
+    title?: string,
+  ) => Promise<{ ok: boolean; reused?: boolean; message?: string }>;
+  openPath: (targetPath: string) => Promise<{ ok: boolean; message?: string }>;
   onMediaCookiesExported: (
     cb: (info: MediaCookiesExportResult) => void,
   ) => () => void;

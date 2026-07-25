@@ -45,15 +45,21 @@ export function AppLayout() {
   const [serviceBanner, setServiceBanner] = useState<string | null>(null);
 
   useEffect(() => {
-    void (async () => {
+    let cancelled = false;
+    let retryTimer: number | undefined;
+
+    async function probeHealth(showFailure = true) {
       try {
         const health = await waitForHealthReady();
+        if (cancelled) return;
         if (!health.database) {
           setServiceBanner(health.database_message || DEFAULT_DB_HINT);
         } else {
           setServiceBanner(null);
         }
+        return true;
       } catch {
+        if (cancelled || !showFailure) return false;
         const desktop = getDesktopBridge();
         let detail = "";
         if (desktop) {
@@ -72,15 +78,36 @@ export function AppLayout() {
             ? `后端服务未就绪。${detail}`
             : "后端服务未就绪。请确认 Electron 已拉起 API，或本机 18765 端口有空库 API 在运行。",
         );
+        return false;
       }
+    }
 
+    void (async () => {
+      const ok = await probeHealth(true);
+      if (cancelled || ok) return;
+      retryTimer = window.setInterval(() => {
+        void probeHealth(false).then((ready) => {
+          if (ready && retryTimer != null) {
+            window.clearInterval(retryTimer);
+            retryTimer = undefined;
+          }
+        });
+      }, 3000);
+    })();
+
+    void (async () => {
       try {
         const overview = await api.overview();
-        setKeyConfigured(overview.key_configured);
+        if (!cancelled) setKeyConfigured(overview.key_configured);
       } catch {
-        setKeyConfigured(null);
+        if (!cancelled) setKeyConfigured(null);
       }
     })();
+
+    return () => {
+      cancelled = true;
+      if (retryTimer != null) window.clearInterval(retryTimer);
+    };
   }, [location.pathname]);
 
   return (

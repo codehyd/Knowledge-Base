@@ -12,6 +12,7 @@ from app.core.knife4j import setup_knife4j
 from app.modules.chat.router import router as chat_router
 from app.modules.health.router import router as health_router
 from app.modules.knowledge.router import router as knowledge_router
+from app.modules.library.router import router as library_router
 from app.modules.overview.router import router as overview_router
 from app.modules.settings_ai.router import router as settings_ai_router
 from app.modules.settings_db.router import router as settings_db_router
@@ -119,6 +120,7 @@ def create_app() -> FastAPI:
     app.include_router(settings_db_router, prefix="/api")
     app.include_router(open_books_router, prefix="/api")
     app.include_router(sources_router, prefix="/api")
+    app.include_router(library_router, prefix="/api")
     app.include_router(knowledge_router, prefix="/api")
     app.include_router(chat_router, prefix="/api")
 

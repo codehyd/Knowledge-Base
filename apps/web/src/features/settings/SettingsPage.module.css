@@ -116,6 +116,78 @@
   line-height: 1.7;
 }
 
+.libraryCats {
+  display: grid;
+  gap: 16px;
+}
+
+.libraryTabs {
+  margin-top: 4px;
+}
+
+.libraryTabLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.libraryCat {
+  border: 1px solid #e8ecef;
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+
+.libraryCatHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.libraryCatTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 16px;
+}
+
+.libraryEmpty {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
+.libraryItems {
+  display: grid;
+  gap: 8px;
+}
+
+.libraryItem {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f7f9f9;
+}
+
+.libraryItemTitle {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.libraryFiles {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
 @media (max-width: 1100px) {
   .page {
     grid-template-columns: 160px minmax(0, 1fr);

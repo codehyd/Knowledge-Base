@@ -4,8 +4,10 @@ import {
   BookOutlined,
   DeleteOutlined,
   EyeOutlined,
+  PlayCircleOutlined,
   ReadOutlined,
   SearchOutlined,
+  VideoCameraOutlined,
 } from "@ant-design/icons";
 import { App, Button, Empty, Input, Popconfirm, Tag, Typography } from "antd";
 import {
@@ -16,8 +18,26 @@ import {
 } from "@/shared/api/client";
 import { formatError } from "@/shared/ui/feedback";
 import { TextPreviewModal } from "@/shared/ui/TextPreviewModal";
+import { VideoPreviewPanel } from "@/shared/ui/VideoPreviewPanel";
+import { FollowAlongPlayer } from "@/shared/ui/FollowAlongPlayer";
 import { BookshelfModal } from "./BookshelfModal";
+import { MediaShelfModal } from "./MediaShelfModal";
 import styles from "./KnowledgePage.module.css";
+
+function sourceTypeLabel(type?: string) {
+  switch (type) {
+    case "video_url":
+      return "视频";
+    case "url":
+      return "网页";
+    case "ebook":
+      return "书籍";
+    case "note":
+      return "笔记";
+    default:
+      return "";
+  }
+}
 
 function formatDate(value?: string | null) {
   if (!value) return "";
@@ -49,6 +69,8 @@ export function KnowledgePage() {
   const [previewSourceId, setPreviewSourceId] = useState<number | null>(null);
   const [previewTitle, setPreviewTitle] = useState("");
   const [bookshelfOpen, setBookshelfOpen] = useState(false);
+  const [mediaOpen, setMediaOpen] = useState(false);
+  const [kind, setKind] = useState("");
 
   const refreshCategories = useCallback(async () => {
     const res = await api.listCategories();
@@ -62,6 +84,7 @@ export function KnowledgePage() {
       const res = await api.listEntries({
         q: search,
         category,
+        kind,
         page: 1,
         page_size: 50,
       });
@@ -75,7 +98,7 @@ export function KnowledgePage() {
     } finally {
       setLoading(false);
     }
-  }, [category, search]);
+  }, [category, kind, search]);
 
   useEffect(() => {
     void (async () => {
@@ -167,12 +190,15 @@ export function KnowledgePage() {
               <BookOutlined /> 知识浏览
             </h1>
             <Typography.Paragraph type="secondary" className={styles.subtitle}>
-              按分类浏览已入库材料，查看摘要与原文预览。
+              按分类浏览已入库材料；书籍进书架，视频/链接进媒体库，均可预览正文。
             </Typography.Paragraph>
           </div>
           <div className={styles.headerActions}>
             <Button icon={<ReadOutlined />} onClick={() => setBookshelfOpen(true)}>
               书架
+            </Button>
+            <Button icon={<VideoCameraOutlined />} onClick={() => setMediaOpen(true)}>
+              媒体库
             </Button>
           </div>
         </header>
@@ -184,6 +210,7 @@ export function KnowledgePage() {
           </Empty>
         </div>
         <BookshelfModal open={bookshelfOpen} onClose={() => setBookshelfOpen(false)} />
+        <MediaShelfModal open={mediaOpen} onClose={() => setMediaOpen(false)} />
       </section>
     );
   }
@@ -198,8 +225,27 @@ export function KnowledgePage() {
           <p className={styles.subtitle}>共 {totalEntries} 条知识 · 当前列表 {total} 条</p>
         </div>
         <div className={styles.headerActions}>
+          <div className={styles.kindTabs}>
+            {[
+              { value: "", label: "全部" },
+              { value: "book", label: "书籍" },
+              { value: "media", label: "视频与链接" },
+            ].map((tab) => (
+              <button
+                key={tab.value || "all"}
+                type="button"
+                className={`${styles.kindTab}${kind === tab.value ? ` ${styles.kindTabActive}` : ""}`}
+                onClick={() => setKind(tab.value)}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
           <Button icon={<ReadOutlined />} onClick={() => setBookshelfOpen(true)}>
             书架
+          </Button>
+          <Button icon={<VideoCameraOutlined />} onClick={() => setMediaOpen(true)}>
+            媒体库
           </Button>
           <Input
             allowClear
@@ -269,6 +315,17 @@ export function KnowledgePage() {
                     <strong>{item.title || `条目 #${item.id}`}</strong>
                     <p>{item.summary || "暂无摘要"}</p>
                     <div className={styles.listMeta}>
+                      {sourceTypeLabel(item.source_type) ? (
+                        <Tag
+                          icon={
+                            item.source_type === "video_url" ? (
+                              <PlayCircleOutlined />
+                            ) : undefined
+                          }
+                        >
+                          {sourceTypeLabel(item.source_type)}
+                        </Tag>
+                      ) : null}
                       {item.categories.map((name) => (
                         <Tag key={name}>{name}</Tag>
                       ))}
@@ -318,32 +375,67 @@ export function KnowledgePage() {
                   ))}
                 </div>
                 <p className={styles.detailMeta}>
+                  {detail.source_type ? `类型：${sourceTypeLabel(detail.source_type)}` : ""}
                   {detail.source_filename
-                    ? `来源：${detail.source_filename}`
-                    : detail.source_type
-                      ? `类型：${detail.source_type}`
-                      : ""}
+                    ? `${detail.source_type ? " · " : ""}来源：${detail.source_filename}`
+                    : ""}
+                  {detail.source_uri ? (
+                    <>
+                      {" · "}
+                      <a href={detail.source_uri} target="_blank" rel="noreferrer">
+                        原始链接
+                      </a>
+                    </>
+                  ) : null}
                   {detail.created_at ? ` · ${formatDate(detail.created_at)}` : ""}
                 </p>
               </div>
 
               <div className={styles.detailScroll}>
-                <div className={styles.detailSection}>
-                  <div className={styles.sectionHead}>
-                    <h3>原文预览</h3>
+                {detail.source_type === "video_url" && detail.source_uri ? (
+                  <div className={`${styles.detailSection} ${styles.detailSectionVideo}`}>
+                    <div className={styles.sectionHead}>
+                      <h3>视频预览</h3>
+                    </div>
+                    <VideoPreviewPanel
+                      title={detail.title}
+                      url={detail.source_uri}
+                      compact
+                    />
                   </div>
-                  <pre className={styles.preview}>{detail.preview || "暂无原文"}</pre>
-                  {detail.preview_truncated && (
-                    <Button
-                      type="link"
-                      size="small"
-                      className={styles.moreLink}
-                      onClick={() => void openPreview(detail.id)}
-                    >
-                      内容已截断，点击查看更多
-                    </Button>
-                  )}
-                </div>
+                ) : null}
+
+                {detail.source_type === "video_url" &&
+                detail.source_id &&
+                detail.has_follow_along ? (
+                  <div className={`${styles.detailSection} ${styles.detailSectionFill}`}>
+                    <div className={styles.sectionHead}>
+                      <h3>文案跟读</h3>
+                    </div>
+                    <FollowAlongPlayer
+                      sourceId={detail.source_id}
+                      title={detail.title}
+                      compact
+                    />
+                  </div>
+                ) : (
+                  <div className={`${styles.detailSection} ${styles.detailSectionFill}`}>
+                    <div className={styles.sectionHead}>
+                      <h3>原文预览</h3>
+                    </div>
+                    <pre className={styles.preview}>{detail.preview || "暂无原文"}</pre>
+                    {detail.preview_truncated && (
+                      <Button
+                        type="link"
+                        size="small"
+                        className={styles.moreLink}
+                        onClick={() => void openPreview(detail.id)}
+                      >
+                        内容已截断，点击查看更多
+                      </Button>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className={styles.detailActions}>
@@ -423,6 +515,7 @@ export function KnowledgePage() {
         }}
       />
       <BookshelfModal open={bookshelfOpen} onClose={() => setBookshelfOpen(false)} />
+      <MediaShelfModal open={mediaOpen} onClose={() => setMediaOpen(false)} />
     </section>
   );
 }

@@ -12,6 +12,7 @@ from app.modules.knowledge.schemas import (
     EntryDetailOut,
     EntryListOut,
     EntryPreviewOut,
+    MediaListOut,
     ReindexOut,
 )
 from app.modules.knowledge.service import knowledge_service
@@ -41,6 +42,16 @@ async def list_bookshelf(db: AsyncSession = Depends(get_db)) -> BookshelfListOut
 
 
 @router.get(
+    "/media",
+    response_model=MediaListOut,
+    summary="视频与链接媒体库",
+    description="展示 video_url / url 来源（已抽取或已入库），可预览转写文案。",
+)
+async def list_media(db: AsyncSession = Depends(get_db)) -> MediaListOut:
+    return await knowledge_service.list_media(db)
+
+
+@router.get(
     "/entries",
     response_model=EntryListOut,
     summary="知识条目列表",
@@ -48,12 +59,13 @@ async def list_bookshelf(db: AsyncSession = Depends(get_db)) -> BookshelfListOut
 async def list_entries(
     q: str = Query("", description="标题/摘要关键词"),
     category: str = Query("", description="按分类名过滤"),
+    kind: str = Query("", description="类型：book | media | note"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
 ) -> EntryListOut:
     return await knowledge_service.list_entries(
-        db, q=q, category=category, page=page, page_size=page_size
+        db, q=q, category=category, kind=kind, page=page, page_size=page_size
     )
 
 

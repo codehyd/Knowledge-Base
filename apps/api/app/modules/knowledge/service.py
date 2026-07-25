@@ -21,6 +21,8 @@ from app.modules.knowledge.schemas import (
     EntryListItem,
     EntryListOut,
     EntryPreviewOut,
+    MediaItemOut,
+    MediaListOut,
     normalize_ann_color,
 )
 from app.modules.sources.models import Source
@@ -31,6 +33,8 @@ from app.modules.sources.service import PREVIEW_DEFAULT_LIMIT, sources_service
 # service.py → knowledge → modules → app → api → apps → 仓库根
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 PREVIEW_CHARS = 4000
+MEDIA_TYPES = ("video_url", "url")
+BOOK_TYPES = ("ebook",)
 
 
 def _data_root() -> Path:
@@ -42,6 +46,33 @@ def _data_root() -> Path:
 
 
 class KnowledgeService:
+    async def _sources_for_entries(
+        self, db: AsyncSession, entry_rows: list[Entry]
+    ) -> dict[int, Source]:
+        ids = [int(r.source_id) for r in entry_rows if r.source_id]
+        if not ids:
+            return {}
+        result = await db.execute(select(Source).where(Source.id.in_(ids)))
+        return {int(s.id): s for s in result.scalars().all()}
+
+    def _entry_list_item(
+        self,
+        row: Entry,
+        cats: dict[int, list[str]],
+        sources: dict[int, Source],
+    ) -> EntryListItem:
+        src = sources.get(int(row.source_id)) if row.source_id else None
+        return EntryListItem(
+            id=row.id,
+            title=row.title,
+            summary=row.summary,
+            source_id=row.source_id,
+            source_type=(src.type if src else "") or "",
+            source_uri=(src.source_uri if src else "") or "",
+            categories=cats.get(row.id, []),
+            created_at=row.created_at,
+        )
+
     async def _categories_for_entries(
         self, db: AsyncSession, entry_ids: list[int]
     ) -> dict[int, list[str]]:
@@ -94,14 +125,29 @@ class KnowledgeService:
         *,
         q: str = "",
         category: str = "",
+        kind: str = "",
         page: int = 1,
         page_size: int = 20,
     ) -> EntryListOut:
         page = max(1, page)
         page_size = min(max(1, page_size), 100)
+        kind_norm = (kind or "").strip().lower()
 
         stmt = select(Entry)
         count_stmt = select(func.count()).select_from(Entry)
+
+        if kind_norm in {"book", "media", "note"}:
+            stmt = stmt.join(Source, Source.id == Entry.source_id)
+            count_stmt = count_stmt.join(Source, Source.id == Entry.source_id)
+            if kind_norm == "book":
+                stmt = stmt.where(Source.type.in_(BOOK_TYPES))
+                count_stmt = count_stmt.where(Source.type.in_(BOOK_TYPES))
+            elif kind_norm == "media":
+                stmt = stmt.where(Source.type.in_(MEDIA_TYPES))
+                count_stmt = count_stmt.where(Source.type.in_(MEDIA_TYPES))
+            else:
+                stmt = stmt.where(Source.type == "note")
+                count_stmt = count_stmt.where(Source.type == "note")
 
         if category.strip():
             cat_filter = (
@@ -127,18 +173,55 @@ class KnowledgeService:
         )
         rows = list(result.scalars().all())
         cats = await self._categories_for_entries(db, [r.id for r in rows])
-        items = [
-            EntryListItem(
-                id=r.id,
-                title=r.title,
-                summary=r.summary,
-                source_id=r.source_id,
-                categories=cats.get(r.id, []),
-                created_at=r.created_at,
-            )
-            for r in rows
-        ]
+        sources = await self._sources_for_entries(db, rows)
+        items = [self._entry_list_item(r, cats, sources) for r in rows]
         return EntryListOut(items=items, total=total, page=page, page_size=page_size)
+
+    async def list_media(self, db: AsyncSession) -> MediaListOut:
+        """视频 / 网页链接：含已抽取待入库与已入库。"""
+        result = await db.execute(
+            select(Source)
+            .where(
+                Source.type.in_(MEDIA_TYPES),
+                Source.status.in_(("ready", "committed")),
+            )
+            .order_by(desc(Source.created_at))
+        )
+        sources = list(result.scalars().all())
+        if not sources:
+            return MediaListOut(items=[], total=0)
+
+        source_ids = [s.id for s in sources]
+        entry_rows = (
+            await db.execute(
+                select(Entry.id, Entry.source_id)
+                .where(Entry.source_id.in_(source_ids))
+                .order_by(desc(Entry.created_at))
+            )
+        ).all()
+        entry_by_source: dict[int, int] = {}
+        for entry_id, source_id in entry_rows:
+            if source_id is None:
+                continue
+            if source_id not in entry_by_source:
+                entry_by_source[source_id] = int(entry_id)
+
+        items: list[MediaItemOut] = []
+        for src in sources:
+            items.append(
+                MediaItemOut(
+                    source_id=src.id,
+                    entry_id=entry_by_source.get(src.id),
+                    title=(src.title or src.source_uri or f"媒体 #{src.id}").strip()[:500],
+                    source_uri=src.source_uri or "",
+                    media_type=src.type or "",
+                    status=src.status or "",
+                    char_count=int(src.char_count or 0),
+                    has_follow_along=sources_service.follow_along_ready(src.id),
+                    created_at=src.created_at,
+                )
+            )
+        return MediaListOut(items=items, total=len(items))
 
     async def list_bookshelf(self, db: AsyncSession) -> BookshelfListOut:
         """确认书籍书架：仅 book_kind=confirmed；含已抽取/已入库。"""
@@ -201,11 +284,16 @@ class KnowledgeService:
         char_count = 0
         source_filename = ""
         source_type = ""
+        source_uri = ""
+        has_follow_along = False
         if row.source_id:
             source = await db.get(Source, row.source_id)
             if source:
                 source_filename = source.filename or ""
                 source_type = source.type or ""
+                source_uri = source.source_uri or ""
+                if source.type == "video_url":
+                    has_follow_along = sources_service.follow_along_ready(int(row.source_id))
                 if source.text_path:
                     path = _data_root() / source.text_path
                     if path.is_file():
@@ -228,6 +316,8 @@ class KnowledgeService:
             char_count=char_count or len(row.summary or ""),
             source_filename=source_filename,
             source_type=source_type,
+            source_uri=source_uri,
+            has_follow_along=has_follow_along,
         )
 
     async def get_preview(

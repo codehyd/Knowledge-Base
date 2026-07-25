@@ -23,6 +23,8 @@ class EntryListItem(BaseModel):
     title: str
     summary: str
     source_id: Optional[int] = None
+    source_type: str = ""
+    source_uri: str = ""
     categories: list[str] = Field(default_factory=list)
     created_at: Optional[datetime] = None
 
@@ -48,6 +50,8 @@ class EntryDetailOut(BaseModel):
     char_count: int = 0
     source_filename: str = ""
     source_type: str = ""
+    source_uri: str = ""
+    has_follow_along: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -134,4 +138,21 @@ class BookshelfItemOut(BaseModel):
 
 class BookshelfListOut(BaseModel):
     items: list[BookshelfItemOut]
+    total: int = 0
+
+
+class MediaItemOut(BaseModel):
+    source_id: int
+    entry_id: Optional[int] = None
+    title: str
+    source_uri: str = ""
+    media_type: str = ""  # video_url | url
+    status: str = ""
+    char_count: int = 0
+    has_follow_along: bool = False
+    created_at: Optional[datetime] = None
+
+
+class MediaListOut(BaseModel):
+    items: list[MediaItemOut]
     total: int = 0

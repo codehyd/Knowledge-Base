@@ -80,3 +80,17 @@ class PreviewSearchOut(BaseModel):
     offset: int = 0
     limit: int = 0
     hits: list[PreviewSearchHit] = Field(default_factory=list)
+
+
+class TimedCueOut(BaseModel):
+    start: float
+    end: float
+    text: str
+
+
+class SourceCuesOut(BaseModel):
+    source_id: int
+    title: str = ""
+    has_media: bool = False
+    media_url: str = ""
+    cues: list[TimedCueOut] = Field(default_factory=list)

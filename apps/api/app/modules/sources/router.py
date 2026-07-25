@@ -1,4 +1,5 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -7,6 +8,7 @@ from app.modules.sources.schemas import (
     IngestReadyOut,
     PasteIn,
     PreviewSearchOut,
+    SourceCuesOut,
     SourceListOut,
     SourceOut,
     SourcePreviewOut,
@@ -171,6 +173,44 @@ async def post_transcript(
 ) -> SourceOut:
     row = await sources_service.attach_transcript(db, source_id, payload)
     return sources_service.to_out(row)
+
+
+@router.get(
+    "/{source_id}/cues",
+    response_model=SourceCuesOut,
+    summary="视频跟读时间轴",
+    description="返回句级时间轴与音轨是否就绪，供前端音频跟读高亮。",
+)
+async def get_source_cues(
+    source_id: int, db: AsyncSession = Depends(get_db)
+) -> SourceCuesOut:
+    return await sources_service.get_cues(db, source_id)
+
+
+@router.get(
+    "/{source_id}/media",
+    summary="视频跟读音轨",
+    description="返回提取时缓存的音轨文件（支持 Range）。",
+)
+async def get_source_media(
+    source_id: int, db: AsyncSession = Depends(get_db)
+) -> FileResponse:
+    path = await sources_service.resolve_media_path(db, source_id)
+    suffix = path.suffix.lower()
+    media_types = {
+        ".m4a": "audio/mp4",
+        ".mp3": "audio/mpeg",
+        ".webm": "audio/webm",
+        ".opus": "audio/ogg",
+        ".ogg": "audio/ogg",
+        ".wav": "audio/wav",
+        ".aac": "audio/aac",
+    }
+    return FileResponse(
+        path,
+        media_type=media_types.get(suffix, "application/octet-stream"),
+        filename=path.name,
+    )
 
 
 @router.post(

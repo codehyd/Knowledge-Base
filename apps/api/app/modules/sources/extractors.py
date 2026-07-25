@@ -233,32 +233,13 @@ def extract_urls_from_text(text: str) -> list[str]:
     return found
 
 
-def guess_title_from_share(text: str, url: str) -> str:
-    """从分享文案里猜标题（如抖音「标题 #标签 https://…」）。"""
-    head = (text or "").split(url, 1)[0]
-    head = re.split(r"\s+#", head, maxsplit=1)[0].strip()
-    if not head:
-        return ""
-    # 取末尾偏中文的一段，去掉抖音口令前缀噪声
-    m = re.search(
-        r"([\u4e00-\u9fffA-Za-z0-9][\u4e00-\u9fffA-Za-z0-9，。！？、：；《》【】（）\-\s]{0,120})$",
-        head,
-    )
-    title = (m.group(1) if m else head).strip(" /:：.-")
-    # 过滤过短或纯口令
-    if len(title) < 2:
-        return ""
-    if re.fullmatch(r"[\d\s\./@:a-zA-Z]+", title):
-        return ""
-    return title[:200]
-
-
 def parse_share_input(raw: str) -> tuple[str, str]:
     """
-    解析用户粘贴内容 → (规范 URL, 可选标题)。
-    支持：
-    - 纯链接
-    - 抖音/视频 App「复制分享」整段口令文案
+    解析用户粘贴内容 → (规范 URL, 标题占位)。
+
+    标题不再从分享口令猜测（抖音口令含反爬噪声，不可靠）。
+    视频标题由 create_url / 提取流程用 yt-dlp 元数据获取。
+    第二个返回值恒为空串，保留元组形态以兼容调用方。
     """
     text = (raw or "").strip()
     if not text:
@@ -274,9 +255,62 @@ def parse_share_input(raw: str) -> tuple[str, str]:
 
     # 优先视频站短链
     url = next((u for u in urls if looks_like_video_url(u)), urls[0])
-    title = guess_title_from_share(text, url)
-    return url, title
+    return url, ""
 
+
+def _strip_douyin_share_noise(head: str) -> str:
+    """兼容旧调用：不再用于正式标题。"""
+    return (head or "").strip()
+
+
+def guess_title_from_share(text: str, url: str) -> str:
+    """已废弃：标题改由 yt-dlp 元数据获取。恒返回空。"""
+    return ""
+
+
+def fetch_video_title_sync(url: str) -> str:
+    """用 yt-dlp 仅拉元数据拿标题（不下载媒体）。失败返回空串。"""
+    try:
+        import yt_dlp
+    except ImportError:
+        return ""
+
+    base = {
+        "skip_download": True,
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,
+    }
+    attempts: list[dict] = []
+    cookie_file = _resolve_cookie_file()
+    if cookie_file is not None:
+        attempts.append({**base, "cookiefile": str(cookie_file)})
+    attempts.append(dict(base))
+
+    for opts in attempts:
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+            if not info:
+                continue
+            # playlist / flat 时可能嵌套
+            if info.get("_type") == "playlist" and info.get("entries"):
+                first = next((e for e in info["entries"] if e), None)
+                if first:
+                    info = first
+            title = (info.get("title") or info.get("fulltitle") or "").strip()
+            if not title:
+                continue
+            # 过滤无意义占位
+            low = title.lower()
+            if low in {"douyin video", "tiktok", "video"}:
+                continue
+            # 抖音常把话题写进 title 字段，去掉末尾 #标签便于展示
+            title = re.sub(r"(?:\s*#[^\s#]+)+\s*$", "", title).strip()
+            return title[:200] if title else ""
+        except Exception:  # noqa: BLE001
+            continue
+    return ""
 
 async def extract_webpage(url: str) -> str:
     import httpx
@@ -385,8 +419,8 @@ def extract_video_audio_transcript_sync(
     work_dir: Path,
     asr_cfg: dict[str, str] | None = None,
     creds: dict[str, str] | None = None,
-) -> str:
-    """下载音轨并转写。asr_cfg 优先；兼容只传对话 creds。"""
+) -> tuple[str, list, Path]:
+    """下载音轨并转写。返回 (文本, cues, 音轨路径)。"""
     from app.modules.sources.asr import transcribe_video_audio_sync
 
     cfg = dict(asr_cfg or {})
@@ -458,8 +492,10 @@ def _yt_dlp_option_sets(url: str) -> list[dict]:
     return sets
 
 
-def extract_video_subs_sync(url: str, work_dir: Path) -> str:
-    """用 yt-dlp 拉字幕；失败抛错。优先 Python API（开发/打包均可），再回退 CLI。"""
+def extract_video_subs_sync(url: str, work_dir: Path) -> tuple[str, list]:
+    """用 yt-dlp 拉字幕；返回 (文本, TimedCue 列表)。失败抛错。"""
+    from app.modules.sources.cues import parse_subtitle_cues
+
     work_dir.mkdir(parents=True, exist_ok=True)
     outtmpl = str(work_dir / "sub")
     err_tail = ""
@@ -542,7 +578,8 @@ def extract_video_subs_sync(url: str, work_dir: Path) -> str:
         raise ValueError(_friendly_subs_error(err_tail, url))
 
     raw = decode_bytes(subs[0].read_bytes())
+    cues = parse_subtitle_cues(raw)
     text = _clean_subtitle_text(raw)
     if len(text) < 20:
         raise ValueError("字幕几乎为空，可补贴文案后重试")
-    return text
+    return text, cues

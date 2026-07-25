@@ -16,6 +16,7 @@ class AiSettingsOut(BaseModel):
     asr_model: str = ""
     asr_local_model: str = "base"
     asr_cloud_configured: bool = False
+    allow_local_audio: bool = False
 
 
 class AiSettingsUpdate(BaseModel):
@@ -29,6 +30,7 @@ class AiSettingsUpdate(BaseModel):
     asr_api_key: Optional[str] = None
     asr_model: Optional[str] = None
     asr_local_model: Optional[str] = None
+    allow_local_audio: Optional[bool] = None
 
 
 class AiTestOut(BaseModel):

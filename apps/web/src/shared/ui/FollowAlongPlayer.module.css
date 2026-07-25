@@ -1,0 +1,96 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  flex: 1;
+}
+
+.compact .cues {
+  max-height: none;
+  flex: 1;
+}
+
+.loading,
+.empty {
+  padding: 16px 0;
+  display: flex;
+  justify-content: center;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.time {
+  font-size: 12px;
+}
+
+.hint {
+  font-size: 12px;
+}
+
+.cues {
+  min-height: 0;
+  max-height: 280px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border-radius: 10px;
+  background: #f7f9fa;
+  border: 1px solid #eef1f3;
+}
+
+.cues::-webkit-scrollbar {
+  width: var(--scrollbar-size, 8px);
+}
+
+.cues::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb, #c5ced6);
+  border-radius: 999px;
+}
+
+.cue {
+  appearance: none;
+  border: none;
+  background: transparent;
+  text-align: left;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: #334155;
+}
+
+.cue:hover {
+  background: rgba(42, 111, 106, 0.08);
+}
+
+.cueActive {
+  background: rgba(42, 111, 106, 0.14);
+  color: #1f4e46;
+  font-weight: 600;
+}
+
+.cueTime {
+  font-size: 11px;
+  color: var(--color-muted, #6b7280);
+  font-variant-numeric: tabular-nums;
+  padding-top: 2px;
+}
+
+.cueActive .cueTime {
+  color: #2a6f6a;
+}
+
+.cueText {
+  font-size: 13px;
+  line-height: 1.55;
+}

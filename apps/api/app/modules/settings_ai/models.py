@@ -1,4 +1,4 @@
-from sqlalchemy import DateTime, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
 from sqlalchemy.orm import mapped_column
 
 from app.core.database import Base
@@ -21,6 +21,8 @@ class AiSettings(Base):
     asr_api_key = mapped_column(Text, default="")
     asr_model = mapped_column(String(200), default="")
     asr_local_model = mapped_column(String(50), default="base")
+    # 用户明确授权后，才下载/缓存视频音轨到本机（跟读与无字幕转写）
+    allow_local_audio = mapped_column(Boolean, default=False)
     updated_at = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

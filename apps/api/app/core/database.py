@@ -167,6 +167,9 @@ async def _ensure_ai_settings_columns(conn) -> None:
     await _add_column_if_missing(
         conn, "ai_settings", "asr_local_model", "VARCHAR(50) DEFAULT 'base'"
     )
+    await _add_column_if_missing(
+        conn, "ai_settings", "allow_local_audio", "BOOLEAN DEFAULT 0"
+    )
 
 
 async def _ensure_entry_columns(conn) -> None:

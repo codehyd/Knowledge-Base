@@ -40,6 +40,7 @@ class SettingsAiService:
             embed_model=env.llm_embed_model,
             asr_mode="auto",
             asr_local_model="base",
+            allow_local_audio=False,
         )
         db.add(row)
         await db.commit()
@@ -60,6 +61,7 @@ class SettingsAiService:
             "asr_local_model": (getattr(row, "asr_local_model", None) or "base").strip()
             or "base",
             "asr_cloud_configured": bool(asr_key.strip()),
+            "allow_local_audio": bool(getattr(row, "allow_local_audio", False)),
         }
 
     async def get(self, db: AsyncSession) -> AiSettingsOut:
@@ -87,6 +89,7 @@ class SettingsAiService:
             or "base",
             "chat_base_url": (row.base_url or "").rstrip("/"),
             "chat_api_key": (row.api_key or "").strip(),
+            "allow_local_audio": "1" if bool(getattr(row, "allow_local_audio", False)) else "0",
         }
 
     async def update(self, db: AsyncSession, payload: AiSettingsUpdate) -> AiSettingsOut:
@@ -110,6 +113,8 @@ class SettingsAiService:
             row.asr_model = payload.asr_model.strip()
         if payload.asr_local_model is not None:
             row.asr_local_model = payload.asr_local_model.strip() or "base"
+        if payload.allow_local_audio is not None:
+            row.allow_local_audio = bool(payload.allow_local_audio)
         await db.commit()
         await db.refresh(row)
         return await self.get(db)

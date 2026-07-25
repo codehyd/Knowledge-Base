@@ -14,6 +14,9 @@ mkdir -p data/uploads data/exports data/tmp
 cat <<'EOF'
 空库 · 个人版（默认 SQLite，无 Docker）
 
+拉取代码后先装依赖：
+  bash scripts/install-deps.sh
+
 推荐 Electron：
   cd apps/desktop && npm run dev
 

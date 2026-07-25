@@ -9,6 +9,9 @@ contextBridge.exposeInMainWorld("kongkuDesktop", {
     ipcRenderer.invoke("updater:open-releases", version || ""),
   loginMediaSite: (site) => ipcRenderer.invoke("media:login", site || "douyin"),
   exportMediaCookies: () => ipcRenderer.invoke("media:export-cookies"),
+  openVideoPreview: (url, title) =>
+    ipcRenderer.invoke("media:open-preview", url || "", title || ""),
+  openPath: (targetPath) => ipcRenderer.invoke("shell:open-path", targetPath || ""),
   onMediaCookiesExported: (cb) => {
     const listener = (_event, info) => cb(info);
     ipcRenderer.on("media:cookies-exported", listener);

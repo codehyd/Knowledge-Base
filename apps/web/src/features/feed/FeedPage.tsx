@@ -65,6 +65,7 @@ export function FeedPage() {
   const [tab, setTab] = useState("upload");
   const [items, setItems] = useState<SourceItem[]>([]);
   const [busy, setBusy] = useState(false);
+  const [urlSubmitting, setUrlSubmitting] = useState(false);
   const [url, setUrl] = useState("");
   const [bannerOpen, setBannerOpen] = useState(true);
   const [pasteOpen, setPasteOpen] = useState(false);
@@ -93,6 +94,7 @@ export function FeedPage() {
   const [downloadProgress, setDownloadProgress] = useState<number>(0);
   const [downloadMessage, setDownloadMessage] = useState("");
   const [mediaCookiesReady, setMediaCookiesReady] = useState(false);
+  const [allowLocalAudio, setAllowLocalAudio] = useState(false);
   const ebookRef = useRef<HTMLInputElement>(null);
   const noteRef = useRef<HTMLInputElement>(null);
   const desktop = getDesktopBridge();
@@ -156,15 +158,17 @@ export function FeedPage() {
     let cancelled = false;
     void (async () => {
       try {
-        const [s, sources] = await Promise.all([
+        const [s, sources, ai] = await Promise.all([
           api.getOpenBookSettings(),
           api.listOpenBookSources(),
+          api.getAiSettings(),
         ]);
         if (cancelled) return;
         setDirectIngestEnabled(Boolean(s.open_ebook_direct_ingest));
         setCtextConfigured(Boolean(s.ctext_configured));
         setOpenSources(sources.items || []);
         if (sources.default_source) setOpenSource(sources.default_source);
+        setAllowLocalAudio(Boolean(ai.allow_local_audio));
       } catch {
         /* 设置读取失败时保持默认 */
       }
@@ -221,10 +225,21 @@ export function FeedPage() {
 
   async function onUrlSubmit(e: FormEvent) {
     e.preventDefault();
-    await withBusy(async () => {
-      await api.urlSource(url.trim());
+    const raw = url.trim();
+    if (!raw || urlSubmitting) return;
+    setUrlSubmitting(true);
+    setBusy(true);
+    try {
+      await api.urlSource(raw);
       setUrl("");
-    }, "已识别链接并投递，后台自动提取文案");
+      await refresh();
+      message.success("已识别链接并投递，后台自动提取文案");
+    } catch (err) {
+      message.error(formatError(err, "添加链接失败"));
+    } finally {
+      setUrlSubmitting(false);
+      setBusy(false);
+    }
   }
 
   async function onOpenBookSearch() {
@@ -588,16 +603,48 @@ export function FeedPage() {
                     onChange={(e) => setUrl(e.target.value)}
                     placeholder="粘贴视频链接，或抖音「复制分享」整段文案"
                     required
+                    disabled={urlSubmitting}
                   />
                   <Button
                     type="primary"
                     htmlType="submit"
                     size="large"
-                    disabled={busy || !url.trim()}
+                    loading={urlSubmitting}
+                    disabled={busy || urlSubmitting || !url.trim()}
                   >
-                    添加链接
+                    {urlSubmitting ? "识别中…" : "添加链接"}
                   </Button>
                 </form>
+                {urlSubmitting ? (
+                  <p className={styles.urlLoading}>
+                    正在解析链接并获取标题，视频站点可能需要几秒到十几秒，请稍候…
+                  </p>
+                ) : null}
+                <Alert
+                  className={styles.urlAudioAlert}
+                  type={allowLocalAudio ? "success" : "info"}
+                  showIcon
+                  message={
+                    allowLocalAudio
+                      ? "已授权下载音轨到本机"
+                      : "默认不会下载视频音轨到本机"
+                  }
+                  description={
+                    allowLocalAudio ? (
+                      <>
+                        无字幕时会自动下载音轨做语音转写，并缓存供「文案跟读」。文件在本机
+                        data/uploads，删除来源会清理。可在{" "}
+                        <Link to="/settings">设置 → AI</Link> 关闭授权。
+                      </>
+                    ) : (
+                      <>
+                        当前仅尝试拉取字幕/网页正文。抖音多数无字幕，需要语音转写或跟读时，请先到{" "}
+                        <Link to="/settings">设置 → AI</Link>{" "}
+                        开启「允许下载音轨到本机」。也可在提取失败后「补贴文案」。
+                      </>
+                    )
+                  }
+                />
                 <Space wrap style={{ marginTop: 10 }}>
                   <Button
                     size="middle"
@@ -619,9 +666,7 @@ export function FeedPage() {
                   <Tag>抖音</Tag>
                 </div>
                 <p className={styles.urlHint}>
-                  请用「应用内登录抖音」完成网页登录。无字幕时会<strong>下载音轨做语音转写</strong>
-                  （设置里默认「自动」：本地 Whisper，或单独配置硅基流动/OpenAI；对话用 DeepSeek
-                  也没关系）。也可「补贴文案」。
+                  请用「应用内登录抖音」完成网页登录。音轨下载需在设置中授权；未授权时无字幕只能「补贴文案」。
                 </p>
               </article>
 

@@ -273,6 +273,17 @@
   color: var(--color-muted);
 }
 
+.urlLoading {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: #2a6f6a;
+  line-height: 1.5;
+}
+
+.urlAudioAlert {
+  margin-top: 12px;
+}
+
 .footNote {
   margin: 4px 0 0;
   color: var(--color-muted);

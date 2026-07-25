@@ -30,6 +30,7 @@ export type AiSettings = {
   asr_model?: string;
   asr_local_model?: string;
   asr_cloud_configured?: boolean;
+  allow_local_audio?: boolean;
 };
 
 export type DbSettings = {
@@ -87,6 +88,48 @@ export type SourceItem = {
   updated_at?: string | null;
 };
 
+export type LibraryFile = {
+  name: string;
+  kind: string;
+  size: number;
+  path: string;
+};
+
+export type LibraryItem = {
+  source_id: number;
+  title: string;
+  category: string;
+  folder_name: string;
+  folder_path: string;
+  absolute_path: string;
+  type: string;
+  status: string;
+  files: LibraryFile[];
+};
+
+export type LibraryCategory = {
+  key: string;
+  label: string;
+  path: string;
+  absolute_path: string;
+  item_count: number;
+  items: LibraryItem[];
+};
+
+export type LibraryOut = {
+  root_path: string;
+  absolute_root: string;
+  categories: LibraryCategory[];
+  total_items: number;
+};
+
+export type LibraryRebuildOut = {
+  ok: boolean;
+  synced: number;
+  removed: number;
+  message: string;
+};
+
 export type IngestResult = {
   source_id: number;
   entry_id: number;
@@ -100,6 +143,8 @@ export type EntryListItem = {
   title: string;
   summary: string;
   source_id?: number | null;
+  source_type?: string;
+  source_uri?: string;
   categories: string[];
   created_at?: string | null;
 };
@@ -110,6 +155,8 @@ export type EntryDetail = EntryListItem & {
   char_count?: number;
   source_filename: string;
   source_type: string;
+  source_uri?: string;
+  has_follow_along?: boolean;
 };
 
 export type TextPreview = {
@@ -158,6 +205,32 @@ export type BookshelfItem = {
   status: string;
   char_count: number;
   created_at?: string | null;
+};
+
+export type MediaItem = {
+  source_id: number;
+  entry_id?: number | null;
+  title: string;
+  source_uri: string;
+  media_type: string;
+  status: string;
+  char_count: number;
+  has_follow_along?: boolean;
+  created_at?: string | null;
+};
+
+export type TimedCue = {
+  start: number;
+  end: number;
+  text: string;
+};
+
+export type SourceCues = {
+  source_id: number;
+  title: string;
+  has_media: boolean;
+  media_url: string;
+  cues: TimedCue[];
 };
 
 export type ChatCitation = {
@@ -220,6 +293,10 @@ function parseErrorBody(text: string, status: number): string {
 
 /** Electron 下指向本机 API；浏览器开发态走 Vite 同源代理（空字符串） */
 let apiBase = "";
+
+export function getApiBase(): string {
+  return apiBase;
+}
 
 export async function initApiBase(): Promise<void> {
   const desktop = (
@@ -286,6 +363,7 @@ export const api = {
     asr_api_key?: string;
     asr_model?: string;
     asr_local_model?: string;
+    allow_local_audio?: boolean;
   }) =>
     request<AiSettings>("/api/settings/ai", {
       method: "PUT",
@@ -496,6 +574,8 @@ export const api = {
       `/api/sources/${id}/preview${suffix}`,
     );
   },
+  getSourceCues: (id: number) => request<SourceCues>(`/api/sources/${id}/cues`),
+  sourceMediaUrl: (id: number) => `${apiBase}/api/sources/${id}/media`,
   searchSourcePreview: (
     id: number,
     q: string,
@@ -517,10 +597,18 @@ export const api = {
     request<{ items: CategoryItem[]; total_entries: number }>("/api/categories"),
   listBookshelf: () =>
     request<{ items: BookshelfItem[]; total: number }>("/api/bookshelf"),
-  listEntries: (params?: { q?: string; category?: string; page?: number; page_size?: number }) => {
+  listMedia: () => request<{ items: MediaItem[]; total: number }>("/api/media"),
+  listEntries: (params?: {
+    q?: string;
+    category?: string;
+    kind?: string;
+    page?: number;
+    page_size?: number;
+  }) => {
     const qs = new URLSearchParams();
     if (params?.q) qs.set("q", params.q);
     if (params?.category) qs.set("category", params.category);
+    if (params?.kind) qs.set("kind", params.kind);
     if (params?.page) qs.set("page", String(params.page));
     if (params?.page_size) qs.set("page_size", String(params.page_size));
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
@@ -577,6 +665,9 @@ export const api = {
     request<void>(`/api/annotations/${annId}`, { method: "DELETE" }),
   deleteEntry: (id: number) =>
     request<void>(`/api/entries/${id}`, { method: "DELETE" }),
+  getLibrary: () => request<LibraryOut>("/api/library"),
+  rebuildLibrary: () =>
+    request<LibraryRebuildOut>("/api/library/rebuild", { method: "POST" }),
   chat: (body: {
     message: string;
     category_id?: number | null;

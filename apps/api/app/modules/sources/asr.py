@@ -58,11 +58,111 @@ def default_cloud_asr_model(base_url: str) -> str:
     return "whisper-1"
 
 
-def _data_models_dir() -> Path:
+HF_MIRROR = "https://hf-mirror.com"
+
+
+def whisper_download_root() -> Path:
     root = Path((os.environ.get("DATA_DIR") or "data").strip() or "data")
     d = root / "models" / "faster-whisper"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def _data_models_dir() -> Path:
+    return whisper_download_root()
+
+
+def configure_hf_hub(*, prefer_mirror: bool = False) -> None:
+    """拉长 Hugging Face 超时；模型缓存落在 DATA_DIR 下，便于桌面端与开发一致。"""
+    os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "600")
+    os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "120")
+
+    data_root = Path((os.environ.get("DATA_DIR") or "data").strip() or "data")
+    hf_home = data_root / "huggingface"
+    hf_home.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("HF_HOME", str(hf_home))
+    os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(hf_home / "hub"))
+    # 镜像站不支持 xet 协议；关闭后可走普通 HTTP 下载
+    endpoint = (os.environ.get("HF_ENDPOINT") or "").strip().lower()
+    if prefer_mirror or "hf-mirror" in endpoint:
+        os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+
+    if prefer_mirror and not (os.environ.get("HF_ENDPOINT") or "").strip():
+        os.environ["HF_ENDPOINT"] = HF_MIRROR
+        os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+    elif not endpoint:
+        # 未配置时默认走国内镜像，避免 Mac 首次下载 Whisper 超时
+        os.environ["HF_ENDPOINT"] = HF_MIRROR
+        os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+
+
+def _hub_error_hint(exc: Exception) -> str:
+    msg = str(exc)
+    low = msg.lower()
+    if any(
+        k in low
+        for k in (
+            "timed out",
+            "timeout",
+            "cannot find the appropriate snapshot",
+            "locate the files on the hub",
+            "connection",
+            "network",
+            "errno 60",
+        )
+    ):
+        return (
+            "首次本地转写需从 Hugging Face 下载 Whisper 模型。"
+            "Mac/国内网络易超时，请任选其一："
+            "① 在 .env 加 HF_ENDPOINT=https://hf-mirror.com 后重启；"
+            "② 运行 bash scripts/install-deps.sh 预下载；"
+            "③ 设置里配置硅基流动/OpenAI 云端转写（自动模式会优先云端）。"
+        )
+    return f"本地转写失败：{msg[-240:]}"
+
+
+def _is_hub_download_error(exc: Exception) -> bool:
+    low = str(exc).lower()
+    return any(
+        k in low
+        for k in (
+            "timed out",
+            "timeout",
+            "snapshot folder",
+            "locate the files on the hub",
+            "connection",
+            "errno 60",
+        )
+    )
+
+
+def load_whisper_model(model_size: str):
+    from faster_whisper import WhisperModel
+
+    size = (model_size or "base").strip() or "base"
+    download_root = str(_data_models_dir())
+    configure_hf_hub()
+    try:
+        return WhisperModel(
+            size,
+            device="cpu",
+            compute_type="int8",
+            download_root=download_root,
+        )
+    except Exception as first_exc:  # noqa: BLE001
+        if not _is_hub_download_error(first_exc):
+            raise
+        # 官方 Hub 超时 → 自动换国内镜像重试一次
+        configure_hf_hub(prefer_mirror=True)
+        try:
+            return WhisperModel(
+                size,
+                device="cpu",
+                compute_type="int8",
+                download_root=download_root,
+            )
+        except Exception as second_exc:  # noqa: BLE001
+            raise ValueError(_hub_error_hint(second_exc)) from second_exc
 
 
 def download_audio_sync(url: str, work_dir: Path, cookie_file: Path | None = None) -> Path:
@@ -115,7 +215,74 @@ def download_audio_sync(url: str, work_dir: Path, cookie_file: Path | None = Non
     return files[0]
 
 
-def transcribe_cloud_sync(audio_path: Path, *, base_url: str, api_key: str, model: str) -> str:
+def transcribe_local_sync(
+    audio_path: Path, *, model_size: str = "base"
+) -> tuple[str, list]:
+    """返回 (纯文本, TimedCue 列表)。"""
+    from app.modules.sources.cues import TimedCue
+
+    ffmpeg = resolve_ffmpeg()
+    if not ffmpeg:
+        raise ValueError(
+            "本地转写需要 ffmpeg。已尝试内置 imageio-ffmpeg；"
+            "若仍失败请安装 ffmpeg 并加入 PATH，或设置 KONGKU_FFMPEG。"
+        )
+    # faster-whisper / ctranslate2 会找 PATH 里的 ffmpeg
+    ff_dir = str(Path(ffmpeg).parent)
+    path_env = os.environ.get("PATH") or ""
+    if ff_dir not in path_env.split(os.pathsep):
+        os.environ["PATH"] = ff_dir + os.pathsep + path_env
+
+    try:
+        import faster_whisper  # noqa: F401
+    except ImportError as exc:
+        raise ValueError(
+            "未安装本地转写组件。请在 apps/api 执行："
+            "pip install faster-whisper imageio-ffmpeg"
+        ) from exc
+
+    size = (model_size or "base").strip() or "base"
+    cues: list[TimedCue] = []
+    try:
+        model = load_whisper_model(size)
+        segments, _info = model.transcribe(
+            str(audio_path),
+            language="zh",
+            vad_filter=True,
+            beam_size=1,
+        )
+        parts: list[str] = []
+        for seg in segments:
+            t = (seg.text or "").strip()
+            if not t:
+                continue
+            try:
+                from zhconv import convert
+
+                t = convert(t, "zh-cn")
+            except Exception:  # noqa: BLE001
+                pass
+            parts.append(t)
+            cues.append(
+                TimedCue(
+                    start=float(getattr(seg, "start", 0) or 0),
+                    end=float(getattr(seg, "end", 0) or 0),
+                    text=t,
+                )
+            )
+        text = "\n".join(parts).strip()
+    except ValueError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(_hub_error_hint(exc)) from exc
+
+    if len(text) < 8:
+        raise ValueError("本地转写结果几乎为空")
+    return text, cues
+
+
+def transcribe_cloud_sync(audio_path: Path, *, base_url: str, api_key: str, model: str) -> tuple[str, list]:
+    """云端转写；多数接口无句级时间轴，cues 为空。"""
     import httpx
 
     if audio_path.stat().st_size > 24 * 1024 * 1024:
@@ -156,64 +323,7 @@ def transcribe_cloud_sync(audio_path: Path, *, base_url: str, api_key: str, mode
             pass
     if len(text) < 8:
         raise ValueError("云端转写结果几乎为空")
-    return text
-
-
-def transcribe_local_sync(audio_path: Path, *, model_size: str = "base") -> str:
-    ffmpeg = resolve_ffmpeg()
-    if not ffmpeg:
-        raise ValueError(
-            "本地转写需要 ffmpeg。已尝试内置 imageio-ffmpeg；"
-            "若仍失败请安装 ffmpeg 并加入 PATH，或设置 KONGKU_FFMPEG。"
-        )
-    # faster-whisper / ctranslate2 会找 PATH 里的 ffmpeg
-    ff_dir = str(Path(ffmpeg).parent)
-    path_env = os.environ.get("PATH") or ""
-    if ff_dir not in path_env.split(os.pathsep):
-        os.environ["PATH"] = ff_dir + os.pathsep + path_env
-
-    try:
-        from faster_whisper import WhisperModel
-    except ImportError as exc:
-        raise ValueError(
-            "未安装本地转写组件。请在 apps/api 执行："
-            "pip install faster-whisper imageio-ffmpeg"
-        ) from exc
-
-    size = (model_size or "base").strip() or "base"
-    # tiny/base/small/medium/large-v3
-    download_root = str(_data_models_dir())
-    try:
-        model = WhisperModel(
-            size,
-            device="cpu",
-            compute_type="int8",
-            download_root=download_root,
-        )
-        segments, _info = model.transcribe(
-            str(audio_path),
-            language="zh",
-            vad_filter=True,
-            beam_size=1,
-        )
-        parts: list[str] = []
-        for seg in segments:
-            t = (seg.text or "").strip()
-            if t:
-                parts.append(t)
-        text = "\n".join(parts).strip()
-    except Exception as exc:  # noqa: BLE001
-        raise ValueError(f"本地转写失败：{str(exc)[-240:]}") from exc
-
-    if len(text) < 8:
-        raise ValueError("本地转写结果几乎为空")
-    try:
-        from zhconv import convert
-
-        text = convert(text, "zh-cn")
-    except Exception:  # noqa: BLE001
-        pass
-    return text
+    return text, []
 
 
 def resolve_asr_plan(cfg: dict[str, str]) -> list[tuple[str, dict[str, str]]]:
@@ -279,7 +389,8 @@ def transcribe_video_audio_sync(
     work_dir: Path,
     cfg: dict[str, str],
     cookie_file: Path | None = None,
-) -> str:
+) -> tuple[str, list, Path]:
+    """返回 (文本, cues, 音轨路径)。"""
     plan = resolve_asr_plan(cfg)
     if not plan:
         raise ValueError(
@@ -291,13 +402,17 @@ def transcribe_video_audio_sync(
     for engine, params in plan:
         try:
             if engine == "cloud":
-                return transcribe_cloud_sync(
+                text, cues = transcribe_cloud_sync(
                     audio,
                     base_url=params["base_url"],
                     api_key=params["api_key"],
                     model=params.get("model") or "",
                 )
-            return transcribe_local_sync(audio, model_size=params.get("model_size") or "base")
+            else:
+                text, cues = transcribe_local_sync(
+                    audio, model_size=params.get("model_size") or "base"
+                )
+            return text, cues, audio
         except ValueError as exc:
             errors.append(f"{engine}: {exc}")
             continue

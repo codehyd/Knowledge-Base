@@ -10,8 +10,9 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.modules.knowledge.models import Category, Entry, EntryCategory
+from app.modules.knowledge.models import Category, Chunk, Entry, EntryCategory
 from app.modules.knowledge.index import index_entry
+from app.modules.library.service import library_service, remove_source_from_library
 from app.modules.settings_ai.service import settings_ai_service
 from app.modules.sources.classify import (
     content_fingerprint,
@@ -19,21 +20,32 @@ from app.modules.sources.classify import (
     suggest_tags_and_summary,
 )
 from app.modules.sources.extractors import (
+    _resolve_cookie_file,
     extract_local_file,
     extract_video_audio_transcript_sync,
     extract_video_subs_sync,
     extract_webpage,
+    fetch_video_title_sync,
     looks_like_video_url,
     parse_share_input,
 )
+from app.modules.sources.cues import (
+    find_media_file,
+    persist_media_copy,
+    read_cues_file,
+    write_cues_file,
+)
+from app.modules.sources.asr import download_audio_sync
 from app.modules.sources.models import Source
 from app.modules.sources.preview_search import search_text_hits
 from app.modules.sources.schemas import (
     IngestOut,
     PasteIn,
     PreviewSearchOut,
+    SourceCuesOut,
     SourceOut,
     SourcePreviewOut,
+    TimedCueOut,
     TranscriptIn,
     UrlIn,
 )
@@ -250,12 +262,17 @@ class SourcesService:
 
     async def create_url(self, db: AsyncSession, payload: UrlIn) -> Source:
         try:
-            url, share_title = parse_share_input(payload.url)
+            url, _share_title = parse_share_input(payload.url)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         is_video = looks_like_video_url(url)
-        title = share_title or urlparse_title(url)
+        # 视频标题：直接向平台拉元数据，不用分享口令猜（口令含反爬噪声）
+        if is_video:
+            meta_title = await asyncio.to_thread(fetch_video_title_sync, url)
+            title = meta_title or urlparse_title(url)
+        else:
+            title = urlparse_title(url)
         row = Source(
             type="video_url" if is_video else "url",
             title=title,
@@ -303,6 +320,10 @@ class SourcesService:
         row.error_message = ""
         await db.commit()
         await db.refresh(row)
+        try:
+            await library_service.sync_source(db, row.id)
+        except Exception:
+            pass
         return row
 
     async def clear_finished(self, db: AsyncSession) -> int:
@@ -318,6 +339,7 @@ class SourcesService:
             folder = _data_root() / "uploads" / str(sid)
             if folder.exists():
                 shutil.rmtree(folder, ignore_errors=True)
+            remove_source_from_library(sid)
         return len(ids)
 
     async def delete_source(self, db: AsyncSession, source_id: int) -> None:
@@ -328,6 +350,20 @@ class SourcesService:
         folder = _data_root() / "uploads" / str(sid)
         if folder.exists():
             shutil.rmtree(folder, ignore_errors=True)
+        remove_source_from_library(sid)
+
+    async def _remove_entry_tree(self, db: AsyncSession, entry: Entry) -> None:
+        """删除条目及其分类/切片，不改动来源状态（用于清理残留条目）。"""
+        links = await db.execute(
+            select(EntryCategory).where(EntryCategory.entry_id == entry.id)
+        )
+        for link in links.scalars().all():
+            await db.delete(link)
+        chunks = await db.execute(select(Chunk).where(Chunk.entry_id == entry.id))
+        for chunk in chunks.scalars().all():
+            await db.delete(chunk)
+        await db.delete(entry)
+        await db.flush()
 
     async def _ensure_category(self, db: AsyncSession, name: str) -> Category:
         result = await db.execute(select(Category).where(Category.name == name))
@@ -376,6 +412,45 @@ class SourcesService:
             limit=limit,
             truncated=offset + len(chunk) < len(text),
         )
+
+    def _source_folder(self, source_id: int) -> Path:
+        return _data_root() / "uploads" / str(source_id)
+
+    def follow_along_ready(self, source_id: int) -> bool:
+        """有本地音轨即可跟读播放（时间轴可选，用于高亮）。"""
+        return find_media_file(self._source_folder(source_id)) is not None
+
+    async def get_cues(self, db: AsyncSession, source_id: int) -> SourceCuesOut:
+        row = await self.get(db, source_id)
+        if row.type != "video_url":
+            raise HTTPException(status_code=400, detail="仅视频来源支持跟读")
+        if row.status not in PREVIEWABLE_STATUS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"当前状态「{row.status}」尚无跟读数据",
+            )
+        folder = self._source_folder(row.id)
+        cues = read_cues_file(folder / "cues.json")
+        media = find_media_file(folder)
+        return SourceCuesOut(
+            source_id=row.id,
+            title=(row.title or f"来源 #{row.id}"),
+            has_media=media is not None,
+            media_url=f"/api/sources/{row.id}/media" if media else "",
+            cues=[TimedCueOut(start=c.start, end=c.end, text=c.text) for c in cues],
+        )
+
+    async def resolve_media_path(self, db: AsyncSession, source_id: int) -> Path:
+        row = await self.get(db, source_id)
+        if row.type != "video_url":
+            raise HTTPException(status_code=400, detail="仅视频来源有音轨")
+        media = find_media_file(self._source_folder(row.id))
+        if not media:
+            raise HTTPException(
+                status_code=404,
+                detail="尚无音轨。请对该视频重新「重试」提取（会下载音轨供跟读）。",
+            )
+        return media
 
     async def search_preview(
         self,
@@ -435,7 +510,13 @@ class SourcesService:
         legacy = await db.execute(select(Entry.id, Entry.title, Entry.source_id))
         for eid, etitle, esid in legacy.all():
             if esid == source_id:
-                raise HTTPException(status_code=409, detail="该来源已有对应条目，请勿重复入库")
+                src = await db.get(Source, source_id)
+                if src and src.status == "committed":
+                    raise HTTPException(status_code=409, detail="该来源已有对应条目，请勿重复入库")
+                stale = await db.get(Entry, eid)
+                if stale:
+                    await self._remove_entry_tree(db, stale)
+                break
             if title_key and normalize_title_key(etitle or "") == title_key:
                 raise HTTPException(status_code=409, detail="相同标题已入库，请勿重复添加")
 
@@ -479,8 +560,12 @@ class SourcesService:
             )
 
         existing = await db.execute(select(Entry).where(Entry.source_id == source_id).limit(1))
-        if existing.scalar_one_or_none():
-            raise HTTPException(status_code=409, detail="该来源已有对应条目，请勿重复入库")
+        stale_entry = existing.scalar_one_or_none()
+        if stale_entry:
+            if row.status == "committed":
+                raise HTTPException(status_code=409, detail="该来源已入库，请勿重复操作")
+            # 喂养队列删来源后条目可能残留，或来源 id 被复用时会出现「条目在、来源 ready」
+            await self._remove_entry_tree(db, stale_entry)
 
         text = self._read_extracted_text(row).strip()
         if not text:
@@ -529,6 +614,11 @@ class SourcesService:
             await index_entry(db, entry.id, with_embed=True)
         except Exception:
             # 索引失败不回滚入库；可稍后 reindex
+            pass
+
+        try:
+            await library_service.sync_source(db, row.id)
+        except Exception:
             pass
 
         return IngestOut(
@@ -590,15 +680,41 @@ class SourcesService:
                 row.stage = "extract_caption"
                 row.progress = 30
                 await db.commit()
-                work = _data_root() / "uploads" / str(row.id) / "subs"
-                audio_work = _data_root() / "uploads" / str(row.id) / "audio"
+                folder = _data_root() / "uploads" / str(row.id)
+                work = folder / "subs"
+                audio_work = folder / "audio"
+                cues: list = []
+                audio_path = None
+                asr_cfg = await settings_ai_service.asr_config(db)
+                allow_local_audio = asr_cfg.get("allow_local_audio") == "1"
                 try:
-                    text = await asyncio.to_thread(
+                    text, cues = await asyncio.to_thread(
                         extract_video_subs_sync, row.source_uri, work
                     )
+                    # 仅在用户授权后下载音轨，供跟读播放（失败不阻断字幕路径）
+                    if allow_local_audio:
+                        try:
+                            audio_path = await asyncio.to_thread(
+                                download_audio_sync,
+                                row.source_uri,
+                                audio_work,
+                                _resolve_cookie_file(),
+                            )
+                        except Exception:  # noqa: BLE001
+                            audio_path = None
                 except ValueError as sub_exc:
-                    # 无字幕 → 下载音轨语音转写（本地 Whisper / 云端 ASR）
-                    asr_cfg = await settings_ai_service.asr_config(db)
+                    # 无字幕 → 需音轨转写；未授权则不下载
+                    if not allow_local_audio:
+                        row.status = "need_transcript"
+                        row.stage = "need_transcript"
+                        row.progress = 40
+                        row.error_message = (
+                            f"{sub_exc} 未授权下载音轨到本机，无法自动语音转写。"
+                            "请到「设置 → AI」开启「允许下载音轨到本机」，或「补贴文案」。"
+                        )[:500]
+                        await db.commit()
+                        await db.refresh(row)
+                        return row
                     if (asr_cfg.get("asr_mode") or "auto") == "off":
                         row.status = "need_transcript"
                         row.stage = "need_transcript"
@@ -614,7 +730,7 @@ class SourcesService:
                     row.error_message = ""
                     await db.commit()
                     try:
-                        text = await asyncio.to_thread(
+                        text, cues, audio_path = await asyncio.to_thread(
                             extract_video_audio_transcript_sync,
                             row.source_uri,
                             audio_work,
@@ -638,16 +754,39 @@ class SourcesService:
             text_file = folder / "extracted.txt"
             text_file.write_text(text, encoding="utf-8")
 
+            # 视频跟读：仅在授权下载音轨时落盘时间轴与音轨
+            if row.type == "video_url":
+                asr_cfg_final = await settings_ai_service.asr_config(db)
+                allow_keep = asr_cfg_final.get("allow_local_audio") == "1"
+                if allow_keep and cues:
+                    write_cues_file(folder / "cues.json", cues)
+                if allow_keep and audio_path is not None:
+                    persist_media_copy(Path(audio_path), folder)
+                elif not allow_keep and audio_path is not None:
+                    # 理论上不应走到；兜底不落盘
+                    audio_path = None
+
             row.text_path = str(text_file.relative_to(_data_root())).replace("\\", "/")
             row.char_count = len(text)
             row.status = "ready"
             row.stage = "extracted"
             row.progress = 100
             row.error_message = ""
-            if not row.title:
+            # 视频：提取时再校准一次平台标题（创建时若 Cookie 未就绪可能失败）
+            if row.type == "video_url":
+                meta_title = await asyncio.to_thread(
+                    fetch_video_title_sync, row.source_uri
+                )
+                if meta_title:
+                    row.title = meta_title
+            if not (row.title or "").strip():
                 row.title = text.splitlines()[0][:80] if text else f"来源 #{row.id}"
             await db.commit()
             await db.refresh(row)
+            try:
+                await library_service.sync_source(db, row.id)
+            except Exception:
+                pass
             return row
         except Exception as exc:  # noqa: BLE001
             row.status = "failed"
