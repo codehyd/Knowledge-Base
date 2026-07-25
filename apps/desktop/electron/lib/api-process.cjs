@@ -48,6 +48,16 @@ function sanitizeSidecarEnv(baseEnv) {
     delete env.DYLD_FRAMEWORK_PATH;
   }
 
+  // 默认清掉代理：Clash 等会让抖音抓取 403，再被 yt-dlp 误报成 Fresh cookies
+  // 需要代理时：启动前设 KONGKU_KEEP_PROXY=1，或 KONGKU_YTDLP_PROXY=...
+  if (process.env.KONGKU_KEEP_PROXY !== "1") {
+    for (const key of Object.keys(env)) {
+      if (/^(https?|all|socks5?)_?proxy$/i.test(key)) {
+        delete env[key];
+      }
+    }
+  }
+
   if (app.isPackaged) {
     const tmp = path.join(appDataRoot(), "tmp");
     fs.mkdirSync(tmp, { recursive: true });
@@ -178,6 +188,10 @@ function buildApiEnv() {
     KONGKU_DESKTOP: "1",
     DATA_DIR: dataDir,
     KONGKU_YTDLP_COOKIES: ytDlpCookiesPath(),
+    // API 抖音抓取失败时，回调桌面端用已登录会话下媒体
+    KONGKU_DESKTOP_BRIDGE: `http://127.0.0.1:${
+      Number(process.env.KONGKU_DESKTOP_BRIDGE_PORT || 18766)
+    }`,
   });
   if (process.env.KONGKU_USE_ENV_DB !== "1") {
     delete env.DATABASE_URL;

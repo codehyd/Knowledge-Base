@@ -33,7 +33,7 @@ from app.modules.sources.service import PREVIEW_DEFAULT_LIMIT, sources_service
 # service.py → knowledge → modules → app → api → apps → 仓库根
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 PREVIEW_CHARS = 4000
-MEDIA_TYPES = ("video_url", "url")
+MEDIA_TYPES = ("video_url", "video_file", "url")
 BOOK_TYPES = ("ebook",)
 
 
@@ -292,7 +292,7 @@ class KnowledgeService:
                 source_filename = source.filename or ""
                 source_type = source.type or ""
                 source_uri = source.source_uri or ""
-                if source.type == "video_url":
+                if source.type in {"video_url", "video_file"}:
                     has_follow_along = sources_service.follow_along_ready(int(row.source_id))
                 if source.text_path:
                     path = _data_root() / source.text_path

@@ -10,7 +10,7 @@ import { FollowAlongPlayer } from "@/shared/ui/FollowAlongPlayer";
 import styles from "./MediaShelfModal.module.css";
 
 function mediaLabel(item: MediaItem) {
-  if (item.media_type === "video_url") return "视频";
+  if (item.media_type === "video_url" || item.media_type === "video_file") return "视频";
   if (item.media_type === "url") return "网页";
   return "链接";
 }
@@ -49,7 +49,7 @@ export function MediaShelfModal({ open, onClose }: Props) {
   }, [open, load]);
 
   function openItem(item: MediaItem) {
-    if (item.media_type === "video_url") {
+    if (item.media_type === "video_url" || item.media_type === "video_file") {
       setActiveItem(item);
       setDetailOpen(true);
       return;
@@ -105,7 +105,7 @@ export function MediaShelfModal({ open, onClose }: Props) {
               <li key={item.source_id}>
                 <button type="button" className={styles.card} onClick={() => openItem(item)}>
                   <span className={styles.icon}>
-                    {item.media_type === "video_url" ? (
+                    {item.media_type === "video_url" || item.media_type === "video_file" ? (
                       <PlayCircleOutlined />
                     ) : (
                       <LinkOutlined />
@@ -149,7 +149,9 @@ export function MediaShelfModal({ open, onClose }: Props) {
       >
         {activeItem ? (
           <div className={styles.detail}>
-            <VideoPreviewPanel title={activeItem.title} url={activeItem.source_uri} />
+            {activeItem.source_uri ? (
+              <VideoPreviewPanel title={activeItem.title} url={activeItem.source_uri} />
+            ) : null}
             {activeItem.has_follow_along ? (
               <FollowAlongPlayer sourceId={activeItem.source_id} title={activeItem.title} />
             ) : null}

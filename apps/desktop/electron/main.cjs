@@ -18,6 +18,10 @@ const {
 } = require("./lib/window.cjs");
 const { setupAutoUpdater } = require("./lib/updater.cjs");
 const { registerIpcHandlers } = require("./lib/ipc.cjs");
+const {
+  startDouyinBridge,
+  stopDouyinBridge,
+} = require("./lib/douyin-bridge.cjs");
 
 // 关闭 Fluent/Overlay 滚动条，避免忽略页面 ::-webkit-scrollbar 自定义样式
 app.commandLine.appendSwitch(
@@ -27,6 +31,7 @@ app.commandLine.appendSwitch(
 
 app.whenReady().then(async () => {
   registerIpcHandlers();
+  startDouyinBridge();
 
   // 开发态：先开窗口显示「启动中」，等 API 就绪后再加载 Vite
   const apiPromise = startApiSynced().catch((err) => {
@@ -64,10 +69,12 @@ app.whenReady().then(async () => {
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     stopApi();
+    stopDouyinBridge();
     app.quit();
   }
 });
 
 app.on("before-quit", () => {
   stopApi();
+  stopDouyinBridge();
 });

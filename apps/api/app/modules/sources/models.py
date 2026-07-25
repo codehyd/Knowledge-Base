@@ -10,7 +10,7 @@ class Source(Base):
     __tablename__ = "sources"
 
     id = mapped_column(Integer, primary_key=True, autoincrement=True)
-    # ebook | note | url | video_url
+    # ebook | note | url | video_url | video_file
     type = mapped_column(String(50), index=True, default="note")
     title = mapped_column(String(500), default="")
     filename = mapped_column(String(500), default="")

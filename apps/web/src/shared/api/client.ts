@@ -531,7 +531,7 @@ export const api = {
     }>(`/api/open-books/jobs/${encodeURIComponent(jobId)}`),
 
   listSources: () => request<{ items: SourceItem[]; total: number }>("/api/sources"),
-  uploadSource: (file: File, type: "ebook" | "note") => {
+  uploadSource: (file: File, type: "ebook" | "note" | "video") => {
     const form = new FormData();
     form.append("file", file);
     form.append("type", type);

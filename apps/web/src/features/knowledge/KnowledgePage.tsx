@@ -27,6 +27,7 @@ import styles from "./KnowledgePage.module.css";
 function sourceTypeLabel(type?: string) {
   switch (type) {
     case "video_url":
+    case "video_file":
       return "视频";
     case "url":
       return "网页";
@@ -318,7 +319,8 @@ export function KnowledgePage() {
                       {sourceTypeLabel(item.source_type) ? (
                         <Tag
                           icon={
-                            item.source_type === "video_url" ? (
+                            item.source_type === "video_url" ||
+                            item.source_type === "video_file" ? (
                               <PlayCircleOutlined />
                             ) : undefined
                           }
@@ -405,7 +407,8 @@ export function KnowledgePage() {
                   </div>
                 ) : null}
 
-                {detail.source_type === "video_url" &&
+                {(detail.source_type === "video_url" ||
+                  detail.source_type === "video_file") &&
                 detail.source_id &&
                 detail.has_follow_along ? (
                   <div className={`${styles.detailSection} ${styles.detailSectionFill}`}>

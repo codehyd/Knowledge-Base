@@ -109,6 +109,7 @@ function attachMediaLoginGuards(win) {
     console.warn(`[kongku] blocked media deep link via ${via}:`, url);
   };
 
+  // 禁止唤起抖音/头条 App（bytedance://、snssdk:// 等），否则系统弹「未设定用来打开 URL」
   wc.setWindowOpenHandler(({ url }) => {
     if (!isHttpUrl(url)) {
       blockDeepLink(url, "window.open");
@@ -128,26 +129,17 @@ function attachMediaLoginGuards(win) {
     };
   });
 
-  wc.on("will-navigate", (event, url) => {
-    if (!isHttpUrl(url)) {
-      event.preventDefault();
-      blockDeepLink(url, "will-navigate");
-    }
-  });
-
-  wc.on("will-redirect", (event, url) => {
-    if (!isHttpUrl(url)) {
-      event.preventDefault();
-      blockDeepLink(url, "will-redirect");
-    }
-  });
-
-  wc.on("will-frame-navigate", (event) => {
-    const url = event.url;
+  const denyNonHttp = (event, url, via) => {
     if (url && !isHttpUrl(url)) {
       event.preventDefault();
-      blockDeepLink(url, "will-frame-navigate");
+      blockDeepLink(url, via);
     }
+  };
+
+  wc.on("will-navigate", (event, url) => denyNonHttp(event, url, "will-navigate"));
+  wc.on("will-redirect", (event, url) => denyNonHttp(event, url, "will-redirect"));
+  wc.on("will-frame-navigate", (event) => {
+    denyNonHttp(event, event.url, "will-frame-navigate");
   });
 
   wc.on("did-create-window", (child) => {
@@ -280,6 +272,9 @@ function openVideoPreviewWindow(rawUrl, title = "") {
 }
 
 module.exports = {
+  mediaSession,
+  isHttpUrl,
+  attachMediaLoginGuards,
   exportMediaCookiesFile,
   openMediaLoginWindow,
   openVideoPreviewWindow,

@@ -7,7 +7,12 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 from pathlib import Path
+
+# 已是音轨 / 需抽轨的视频容器
+_AUDIO_SUFFIX = {".m4a", ".mp3", ".wav", ".aac", ".ogg", ".opus", ".flac", ".wma"}
+_MEDIA_SUFFIX = _AUDIO_SUFFIX | {".mp4", ".webm", ".mov", ".mkv", ".m4v", ".avi"}
 
 
 def resolve_ffmpeg() -> str | None:
@@ -165,13 +170,53 @@ def load_whisper_model(model_size: str):
             raise ValueError(_hub_error_hint(second_exc)) from second_exc
 
 
+def _download_via_desktop_bridge(url: str, work_dir: Path) -> Path | None:
+    """桌面端桥：用已登录 Electron 会话抓抖音媒体（绕过 yt-dlp 网页接口风控）。"""
+    import os
+
+    import httpx
+
+    bridge = (os.environ.get("KONGKU_DESKTOP_BRIDGE") or "").strip().rstrip("/")
+    if not bridge:
+        return None
+    if "douyin" not in (url or "").lower() and "iesdouyin" not in (url or "").lower():
+        return None
+    try:
+        with httpx.Client(timeout=httpx.Timeout(150.0, connect=5.0), trust_env=False) as client:
+            resp = client.post(
+                f"{bridge}/douyin/fetch",
+                json={"url": url, "out_dir": str(work_dir)},
+            )
+            data = resp.json()
+    except Exception:  # noqa: BLE001
+        return None
+    if not data.get("ok"):
+        return None
+    path = Path(str(data.get("path") or ""))
+    if path.is_file() and path.stat().st_size > 1024:
+        return path
+    return None
+
+
 def download_audio_sync(url: str, work_dir: Path, cookie_file: Path | None = None) -> Path:
+    from app.modules.sources.extractors import (
+        apply_ytdlp_network_opts,
+        compact_tool_error,
+        resolve_media_url_sync,
+    )
+
+    url = resolve_media_url_sync(url)
     work_dir.mkdir(parents=True, exist_ok=True)
     for old in work_dir.glob("audio.*"):
         try:
             old.unlink()
         except OSError:
             pass
+
+    # 抖音：优先桌面桥（真实登录会话），yt-dlp 网页接口近年经常 Fresh cookies 误报
+    bridged = _download_via_desktop_bridge(url, work_dir)
+    if bridged is not None:
+        return bridged
 
     try:
         import yt_dlp
@@ -180,39 +225,97 @@ def download_audio_sync(url: str, work_dir: Path, cookie_file: Path | None = Non
 
     ffmpeg = resolve_ffmpeg()
     outtmpl = str(work_dir / "audio.%(ext)s")
-    opts: dict = {
-        # 直接下音轨，避免依赖 ffprobe 做转码后处理
-        "format": "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best",
+    ua = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    )
+    base: dict = {
         "outtmpl": outtmpl,
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
+        "retries": 8,
+        "fragment_retries": 8,
+        "file_access_retries": 3,
+        "concurrent_fragment_downloads": 1,
+        "http_headers": {
+            "User-Agent": ua,
+            "Referer": "https://www.douyin.com/",
+            "Origin": "https://www.douyin.com",
+        },
     }
-    if cookie_file is not None and cookie_file.is_file():
-        opts["cookiefile"] = str(cookie_file)
+    base = apply_ytdlp_network_opts(base)
     if ffmpeg:
         # yt-dlp 接受二进制路径或目录；imageio-ffmpeg 无 ffprobe，故不做 ExtractAudio
-        opts["ffmpeg_location"] = ffmpeg
+        base["ffmpeg_location"] = ffmpeg
 
-
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.download([url])
-    except Exception as exc:  # noqa: BLE001
-        raise ValueError(f"下载音轨失败：{str(exc)[-220:]}") from exc
-
-    files = sorted(
-        [p for p in work_dir.glob("audio.*") if p.is_file()],
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
+    # 多策略：抖音 CDN 偶发空块 / 仅音轨格式失效时，换格式或换 Cookie 再试
+    formats = (
+        "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best",
+        "best[height<=720]/best",
+        "best",
+        "worst",
     )
-    if not files:
-        raise ValueError("音轨下载后未找到文件")
-    size = files[0].stat().st_size
-    # 云端 Whisper 常见 25MB；本地可更大。此处只拦极端值。
-    if size > 120 * 1024 * 1024:
-        raise ValueError("媒体文件过大（>120MB），请换较短视频或补贴文案")
-    return files[0]
+    attempts: list[dict] = []
+    for fmt in formats:
+        if cookie_file is not None and cookie_file.is_file():
+            attempts.append({**base, "format": fmt, "cookiefile": str(cookie_file)})
+        attempts.append({**base, "format": fmt})
+
+    last_exc = ""
+    for opts in attempts:
+        for old in work_dir.glob("audio.*"):
+            try:
+                old.unlink()
+            except OSError:
+                pass
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.download([url])
+            files = sorted(
+                [p for p in work_dir.glob("audio.*") if p.is_file() and p.stat().st_size > 0],
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            if files:
+                size = files[0].stat().st_size
+                if size > 120 * 1024 * 1024:
+                    raise ValueError("媒体文件过大（>120MB），请换较短视频或补贴文案")
+                return files[0]
+            last_exc = "音轨下载后未找到文件"
+        except Exception as exc:  # noqa: BLE001
+            last_exc = str(exc)
+            continue
+
+    # yt-dlp 失败后再试一次桌面桥（桥可能刚就绪）
+    bridged = _download_via_desktop_bridge(url, work_dir)
+    if bridged is not None:
+        return bridged
+
+    tip = ""
+    low = last_exc.lower()
+    if any(k in low for k in ("proxy", "tunnel connection failed", "unable to connect to proxy")):
+        tip = (
+            " 本机代理（Clash/VPN）拦截了抖音请求。"
+            "请关闭系统/终端代理后重试。"
+        )
+    elif any(
+        k in low
+        for k in (
+            "data blocks",
+            "fresh cookies",
+            "cookie",
+            "login",
+            "403",
+            "401",
+            "empty",
+        )
+    ):
+        tip = (
+            " 抖音网页接口近年风控较严。请确认：① 用桌面端并已「应用内登录抖音」；"
+            "② 关闭 Clash；③ 仍失败请「补贴文案」。"
+        )
+    raise ValueError(f"下载音轨失败：{compact_tool_error(last_exc)}{tip}")
 
 
 def transcribe_local_sync(
@@ -384,37 +487,153 @@ def resolve_asr_plan(cfg: dict[str, str]) -> list[tuple[str, dict[str, str]]]:
     return plan
 
 
+def extract_audio_with_ffmpeg(media_path: Path, work_dir: Path) -> Path:
+    """把视频/任意容器抽出为适合 ASR 的单声道音轨（优先 m4a，失败则 wav）。"""
+    ffmpeg = resolve_ffmpeg()
+    if not ffmpeg:
+        raise ValueError(
+            "需要 ffmpeg 才能从视频抽音频。已尝试内置 imageio-ffmpeg；"
+            "若仍失败请安装 ffmpeg 并加入 PATH，或设置 KONGKU_FFMPEG。"
+        )
+    if not media_path.is_file() or media_path.stat().st_size < 256:
+        raise ValueError("媒体文件无效或过小")
+
+    work_dir.mkdir(parents=True, exist_ok=True)
+    suffix = media_path.suffix.lower()
+    # 已是较小纯音轨且体积可控时，可直接用，避免二次损失
+    if suffix in {".m4a", ".mp3", ".wav", ".aac"} and media_path.stat().st_size < 24 * 1024 * 1024:
+        dest = work_dir / f"audio{suffix}"
+        if media_path.resolve() != dest.resolve():
+            shutil.copy2(media_path, dest)
+        return dest
+
+    out_m4a = work_dir / "audio.m4a"
+    out_wav = work_dir / "audio.wav"
+    for old in (out_m4a, out_wav):
+        try:
+            old.unlink()
+        except OSError:
+            pass
+
+    # -vn 去画面；单声道 16k 利于语音识别与体积
+    attempts = [
+        [
+            ffmpeg,
+            "-y",
+            "-i",
+            str(media_path),
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "96k",
+            str(out_m4a),
+        ],
+        [
+            ffmpeg,
+            "-y",
+            "-i",
+            str(media_path),
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-c:a",
+            "pcm_s16le",
+            str(out_wav),
+        ],
+    ]
+    last_err = ""
+    for cmd in attempts:
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=600,
+                check=False,
+            )
+            out = Path(cmd[-1])
+            if proc.returncode == 0 and out.is_file() and out.stat().st_size > 1024:
+                if out.stat().st_size > 120 * 1024 * 1024:
+                    raise ValueError("抽出的音轨过大（>120MB），请换较短视频")
+                return out
+            err = (proc.stderr or proc.stdout or "").strip()
+            last_err = err[-400:] if err else f"exit {proc.returncode}"
+        except subprocess.TimeoutExpired as exc:
+            raise ValueError("ffmpeg 抽音频超时") from exc
+        except ValueError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            last_err = str(exc)
+            continue
+
+    raise ValueError(f"ffmpeg 抽音频失败：{last_err or '未知错误'}")
+
+
+def prepare_audio_for_asr(media_path: Path, work_dir: Path) -> Path:
+    """下载或上传得到的媒体 → 统一抽成 ASR 用音轨。"""
+    return extract_audio_with_ffmpeg(media_path, work_dir)
+
+
+def _run_asr_plan(
+    audio: Path, plan: list[tuple[str, dict[str, str]]]
+) -> tuple[str, list]:
+    errors: list[str] = []
+    for engine, params in plan:
+        try:
+            if engine == "cloud":
+                return transcribe_cloud_sync(
+                    audio,
+                    base_url=params["base_url"],
+                    api_key=params["api_key"],
+                    model=params.get("model") or "",
+                )
+            return transcribe_local_sync(
+                audio, model_size=params.get("model_size") or "base"
+            )
+        except ValueError as exc:
+            errors.append(f"{engine}: {exc}")
+            continue
+    raise ValueError("；".join(errors) if errors else "语音转写失败")
+
+
+def transcribe_media_file_sync(
+    media_path: Path,
+    work_dir: Path,
+    cfg: dict[str, str],
+) -> tuple[str, list, Path]:
+    """本地视频/音频文件 → ffmpeg 抽轨 → ASR。返回 (文本, cues, 音轨路径)。"""
+    plan = resolve_asr_plan(cfg)
+    if not plan:
+        raise ValueError(
+            "语音转写已关闭。请在设置开启「视频语音转写」，或「补贴文案」。"
+        )
+    audio = prepare_audio_for_asr(media_path, work_dir)
+    text, cues = _run_asr_plan(audio, plan)
+    return text, cues, audio
+
+
 def transcribe_video_audio_sync(
     url: str,
     work_dir: Path,
     cfg: dict[str, str],
     cookie_file: Path | None = None,
 ) -> tuple[str, list, Path]:
-    """返回 (文本, cues, 音轨路径)。"""
+    """链接下载媒体 → ffmpeg 抽轨 → ASR。返回 (文本, cues, 音轨路径)。"""
     plan = resolve_asr_plan(cfg)
     if not plan:
         raise ValueError(
             "语音转写已关闭。请在设置开启「视频语音转写」，或「补贴文案」。"
         )
 
-    audio = download_audio_sync(url, work_dir, cookie_file=cookie_file)
-    errors: list[str] = []
-    for engine, params in plan:
-        try:
-            if engine == "cloud":
-                text, cues = transcribe_cloud_sync(
-                    audio,
-                    base_url=params["base_url"],
-                    api_key=params["api_key"],
-                    model=params.get("model") or "",
-                )
-            else:
-                text, cues = transcribe_local_sync(
-                    audio, model_size=params.get("model_size") or "base"
-                )
-            return text, cues, audio
-        except ValueError as exc:
-            errors.append(f"{engine}: {exc}")
-            continue
-
-    raise ValueError("；".join(errors) if errors else "语音转写失败")
+    raw = download_audio_sync(url, work_dir, cookie_file=cookie_file)
+    # 桥/ yt-dlp 常得到 mp4；统一抽音频再转写
+    audio = prepare_audio_for_asr(raw, work_dir)
+    text, cues = _run_asr_plan(audio, plan)
+    return text, cues, audio

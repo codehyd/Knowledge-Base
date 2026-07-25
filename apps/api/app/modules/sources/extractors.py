@@ -6,7 +6,7 @@ import re
 import subprocess
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 
 class _HTMLTextExtractor(HTMLParser):
@@ -214,8 +214,181 @@ def _clean_extracted_url(raw: str) -> str:
         idx = u.find(marker)
         if idx > 0:
             u = u[:idx]
-    u = u.rstrip("，。！？；：、）)」』\"'.,;:!?/\\")
+    # 不要把短链末尾的 / 清掉到误伤 path；只清常见中英文标点
+    u = u.rstrip("，。！？；：、）)」』\"'.,;:!?\\")
+    return u.rstrip("/")
+
+
+def normalize_media_url(url: str) -> str:
+    """轻量规范化：完整视频页去掉跟踪参数；短链保持原样（交给跳转解析）。"""
+    u = _clean_extracted_url(url)
+    try:
+        p = urlparse(u)
+    except Exception:  # noqa: BLE001
+        return u
+    host = (p.hostname or "").lower()
+    path = p.path or ""
+
+    # 已是 /video/数字 → 规范成干净页，去掉 share_sign 等
+    if any(n in host for n in ("douyin.com", "iesdouyin.com")):
+        m = re.search(r"/video/(\d+)", path)
+        if m:
+            return f"https://www.douyin.com/video/{m.group(1)}"
+        # v.douyin.com/xxxx 短链：不要改 path，只去掉 query
+        if host.startswith("v.") or re.fullmatch(r"/[A-Za-z0-9_-]+/?", path or ""):
+            # yt-dlp 对带/不带/都可；保留短码即可
+            return urlunparse(
+                (p.scheme or "https", p.netloc, path.rstrip("/") + "/", "", "", "")
+            )
+        # 其它 douyin 页：去掉 query 但保留 path
+        return urlunparse((p.scheme or "https", p.netloc, path, "", "", ""))
+
+    if "bilibili.com" in host or "b23.tv" in host:
+        return urlunparse((p.scheme or "https", p.netloc, path.rstrip("/") or "/", "", "", ""))
+
+    if "youtube.com" in host or "youtu.be" in host:
+        from urllib.parse import parse_qs, urlencode
+
+        qs = parse_qs(p.query, keep_blank_values=False)
+        keep = {}
+        for key in ("v", "list", "t", "start"):
+            if key in qs and qs[key]:
+                keep[key] = qs[key][0]
+        return urlunparse(
+            (p.scheme or "https", p.netloc, path, "", urlencode(keep), "")
+        )
+
     return u
+
+
+def _ytdlp_proxy_opt() -> str:
+    """抖音抓取默认直连。系统 HTTP_PROXY（Clash 等）常 403，再被误报成 Fresh cookies。"""
+    import os
+
+    return (os.environ.get("KONGKU_YTDLP_PROXY") or "").strip()
+
+
+def apply_ytdlp_network_opts(opts: dict) -> dict:
+    """写入 proxy / UA 相关网络选项（原地修改并返回）。"""
+    opts = dict(opts)
+    # 空字符串 = yt-dlp 明确不走代理，忽略环境变量里的 HTTP_PROXY
+    opts["proxy"] = _ytdlp_proxy_opt()
+    headers = dict(opts.get("http_headers") or {})
+    headers.setdefault(
+        "User-Agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    )
+    headers.setdefault("Referer", "https://www.douyin.com/")
+    opts["http_headers"] = headers
+    return opts
+
+
+def _httpx_client_kwargs(**extra) -> dict:
+    """httpx：默认不信任环境代理，避免短链解析也走坏代理。"""
+    import os
+
+    kwargs = {
+        "trust_env": False,
+        "follow_redirects": True,
+        "timeout": httpx_timeout_default(),
+        "headers": {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            ),
+            "Referer": "https://www.douyin.com/",
+        },
+    }
+    proxy = _ytdlp_proxy_opt()
+    if proxy:
+        kwargs["proxy"] = proxy
+    kwargs.update(extra)
+    return kwargs
+
+
+def httpx_timeout_default():
+    import httpx
+
+    return httpx.Timeout(20.0, connect=8.0)
+
+
+def resolve_media_url_sync(url: str) -> str:
+    """短链跟跳到可识别的视频页（v.douyin.com → www.douyin.com/video/id）。"""
+    u = normalize_media_url(url)
+    try:
+        p = urlparse(u)
+    except Exception:  # noqa: BLE001
+        return u
+    host = (p.hostname or "").lower()
+    need_resolve = any(
+        n in host
+        for n in ("v.douyin.com", "v.tiktok.com", "b23.tv", "xhslink.com")
+    ) or (host.endswith("douyin.com") and "/video/" not in (p.path or ""))
+    if not need_resolve and "/video/" in (p.path or ""):
+        return u
+
+    # 已有数字 video id 则不必跳转
+    if re.search(r"/video/(\d+)", p.path or ""):
+        return normalize_media_url(u)
+
+    if not any(n in host for n in ("douyin.com", "iesdouyin.com", "b23.tv", "tiktok.com", "xhslink.com")):
+        return u
+
+    try:
+        import httpx
+
+        with httpx.Client(**_httpx_client_kwargs()) as client:
+            resp = client.get(u)
+            final = str(resp.url)
+            if final and final != u:
+                return normalize_media_url(final)
+    except Exception:  # noqa: BLE001
+        pass
+    return u
+
+
+def compact_tool_error(err: str, limit: int = 180) -> str:
+    """压缩 yt-dlp 等长错误：优先 ERROR 行，去掉 URL，取头部而非尾巴。"""
+    text = str(err or "").strip()
+    if not text:
+        return "未知错误"
+    for line in text.replace("\r", "\n").split("\n"):
+        s = line.strip()
+        if s.upper().startswith("ERROR:"):
+            text = s
+            break
+    low_full = text.lower()
+    if any(
+        k in low_full
+        for k in (
+            "proxy",
+            "tunnel connection failed",
+            "unable to connect to proxy",
+            "407 proxy",
+        )
+    ):
+        return (
+            "访问抖音失败：本机代理（Clash/VPN 等）拦截了请求。"
+            "请关闭系统/终端代理后重试，或设置环境变量 KONGKU_YTDLP_PROXY 指向可用代理。"
+        )
+    text = re.sub(r"https?://\S+", "[链接]", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if "unsupported url" in text.lower():
+        return (
+            "无法识别该链接。请粘贴完整抖音分享文案或 v.douyin.com 短链，"
+            "并确认已「应用内登录抖音」后重试"
+        )
+    if "fresh cookies" in text.lower():
+        return (
+            "抖音网页接口风控（常被误报成 Cookie 问题）。"
+            "请用桌面端并已登录后重试；系统会改走应用内会话下载。"
+        )
+    if re.fullmatch(r"[\w%.\-&=]+", text) and ("share_sign" in text or "from_aid" in text):
+        return "平台返回异常（链接参数噪声），请重新粘贴分享链接或「应用内登录抖音」后重试"
+    if len(text) > limit:
+        text = text[: limit - 1].rstrip() + "…"
+    return text
 
 
 def extract_urls_from_text(text: str) -> list[str]:
@@ -223,6 +396,7 @@ def extract_urls_from_text(text: str) -> list[str]:
     found: list[str] = []
     seen: set[str] = set()
     for m in _SHARE_URL_RE.finditer(text or ""):
+        # 抽取阶段只做轻清洗，避免误伤短链；规范化放到 resolve
         u = _clean_extracted_url(m.group(0))
         if not u.startswith(("http://", "https://")):
             continue
@@ -233,13 +407,53 @@ def extract_urls_from_text(text: str) -> list[str]:
     return found
 
 
+def _strip_share_title_noise(title: str) -> str:
+    """去掉抖音口令前缀噪声，例如「XM 重塑思维」→「重塑思维」。"""
+    t = (title or "").strip()
+    if not t:
+        return ""
+    # 口令码：两位随机字母 + 空格（用户反馈的 XM / AB 等）
+    t = re.sub(r"^[A-Za-z]{1,4}\s+", "", t)
+    # 7.23 xxx:/ 或 xxx:/ 一类邀请码
+    t = re.sub(r"^[\d.]+\s+[A-Za-z0-9_-]{2,}:/\s*", "", t)
+    t = re.sub(r"^[A-Za-z0-9_-]{2,}:/\s*", "", t)
+    # 再清一次残留短英文前缀
+    t = re.sub(r"^[A-Za-z]{1,4}\s+", "", t)
+    return t.strip(" /:：.-")
+
+
+def guess_title_from_share(text: str, url: str) -> str:
+    """从分享文案里猜标题（如抖音「标题 #标签 https://…」）。"""
+    head = (text or "").split(url, 1)[0]
+    head = re.split(r"\s+#", head, maxsplit=1)[0].strip()
+    if not head:
+        return ""
+    for noise in ("复制此链接", "打开抖音", "打开Dou音", "长按复制", "请使用抖音"):
+        idx = head.find(noise)
+        if idx >= 0:
+            head = head[:idx].strip()
+    # 去掉口令前缀后再取偏中文的末段
+    head = _strip_share_title_noise(head)
+    m = re.search(
+        r"([\u4e00-\u9fff][\u4e00-\u9fffA-Za-z0-9，。！？、：；《》【】（）\-\s]{0,120})$",
+        head,
+    )
+    title = (m.group(1) if m else head).strip(" /:：.-")
+    title = _strip_share_title_noise(title)
+    if len(title) < 2:
+        return ""
+    # 过滤反爬口令噪声 / 纯英文乱码
+    if re.fullmatch(r"[\d\s\./@:a-zA-Z_\-]+", title):
+        return ""
+    if len(re.findall(r"[\u4e00-\u9fff]", title)) < 1:
+        return ""
+    return title[:200]
+
+
 def parse_share_input(raw: str) -> tuple[str, str]:
     """
-    解析用户粘贴内容 → (规范 URL, 标题占位)。
-
-    标题不再从分享口令猜测（抖音口令含反爬噪声，不可靠）。
-    视频标题由 create_url / 提取流程用 yt-dlp 元数据获取。
-    第二个返回值恒为空串，保留元组形态以兼容调用方。
+    解析用户粘贴内容 → (URL, 可选标题)。
+    支持纯链接与抖音「复制分享」整段口令；标题优先从文案猜测。
     """
     text = (raw or "").strip()
     if not text:
@@ -253,20 +467,13 @@ def parse_share_input(raw: str) -> tuple[str, str]:
     if not urls:
         raise ValueError("未识别到 http(s) 链接；请粘贴完整分享内容或直接粘贴网址")
 
-    # 优先视频站短链
     url = next((u for u in urls if looks_like_video_url(u)), urls[0])
-    return url, ""
+    title = guess_title_from_share(text, url)
+    return url, title
 
 
 def _strip_douyin_share_noise(head: str) -> str:
-    """兼容旧调用：不再用于正式标题。"""
-    return (head or "").strip()
-
-
-def guess_title_from_share(text: str, url: str) -> str:
-    """已废弃：标题改由 yt-dlp 元数据获取。恒返回空。"""
-    return ""
-
+    return _strip_share_title_noise(head)
 
 def fetch_video_title_sync(url: str) -> str:
     """用 yt-dlp 仅拉元数据拿标题（不下载媒体）。失败返回空串。"""
@@ -275,41 +482,44 @@ def fetch_video_title_sync(url: str) -> str:
     except ImportError:
         return ""
 
-    base = {
-        "skip_download": True,
-        "quiet": True,
-        "no_warnings": True,
-        "noprogress": True,
-    }
+    resolved = resolve_media_url_sync(url)
+    base = apply_ytdlp_network_opts(
+        {
+            "skip_download": True,
+            "quiet": True,
+            "no_warnings": True,
+            "noprogress": True,
+        }
+    )
     attempts: list[dict] = []
     cookie_file = _resolve_cookie_file()
     if cookie_file is not None:
         attempts.append({**base, "cookiefile": str(cookie_file)})
     attempts.append(dict(base))
 
-    for opts in attempts:
-        try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-            if not info:
-                continue
-            # playlist / flat 时可能嵌套
-            if info.get("_type") == "playlist" and info.get("entries"):
-                first = next((e for e in info["entries"] if e), None)
-                if first:
-                    info = first
-            title = (info.get("title") or info.get("fulltitle") or "").strip()
-            if not title:
-                continue
-            # 过滤无意义占位
-            low = title.lower()
-            if low in {"douyin video", "tiktok", "video"}:
-                continue
-            # 抖音常把话题写进 title 字段，去掉末尾 #标签便于展示
-            title = re.sub(r"(?:\s*#[^\s#]+)+\s*$", "", title).strip()
-            return title[:200] if title else ""
-        except Exception:  # noqa: BLE001
+    for target in (resolved, url):
+        if not target:
             continue
+        for opts in attempts:
+            try:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(target, download=False)
+                if not info:
+                    continue
+                if info.get("_type") == "playlist" and info.get("entries"):
+                    first = next((e for e in info["entries"] if e), None)
+                    if first:
+                        info = first
+                title = (info.get("title") or info.get("fulltitle") or "").strip()
+                if not title:
+                    continue
+                low = title.lower()
+                if low in {"douyin video", "tiktok", "video"}:
+                    continue
+                title = re.sub(r"(?:\s*#[^\s#]+)+\s*$", "", title).strip()
+                return title[:200] if title else ""
+            except Exception:  # noqa: BLE001
+                continue
     return ""
 
 async def extract_webpage(url: str) -> str:
@@ -394,11 +604,29 @@ def _cookies_needed(err: str) -> bool:
 
 
 def _friendly_subs_error(err: str, url: str) -> str:
+    low = (err or "").lower()
+    if any(
+        k in low
+        for k in (
+            "proxy",
+            "tunnel connection failed",
+            "unable to connect to proxy",
+        )
+    ):
+        return (
+            "访问抖音失败：本机代理（Clash/VPN 等）拦截了请求，常被误报成需要登录。"
+            "请关闭系统代理后重试，或「补贴文案」。"
+        )
     if _is_dpapi_error(err):
         return (
             "无法从系统 Chrome/Edge 读取 Cookie（Windows DPAPI）。"
             "请在桌面端喂养页点「应用内登录抖音」，登录后关闭窗口，再点队列「重试」；"
             "或直接「补贴文案」。"
+        )
+    if "fresh cookies" in low:
+        return (
+            "抖音网页抓取接口已升级风控（不一定是未登录）。"
+            "桌面端会改用应用内登录会话下载；请确认已「应用内登录抖音」后重试，或「补贴文案」。"
         )
     if _cookies_needed(err) and _is_cookie_gated_host(url):
         return (
@@ -411,7 +639,12 @@ def _friendly_subs_error(err: str, url: str) -> str:
         if _is_cookie_gated_host(url):
             return "该视频没有可下载字幕轨（抖音多数如此），将改用音轨语音转写。"
         return "该视频没有可下载字幕，将改用音轨语音转写。"
-    return f"未拿到字幕：{msg[-280:]}"
+    if "data blocks" in low:
+        return (
+            "该视频没有可用字幕，且音轨 CDN 拉取为空。"
+            "请关闭代理并重新「应用内登录抖音」后重试，或「补贴文案」。"
+        )
+    return f"未拿到字幕：{compact_tool_error(msg)}"
 
 
 def extract_video_audio_transcript_sync(
@@ -423,6 +656,7 @@ def extract_video_audio_transcript_sync(
     """下载音轨并转写。返回 (文本, cues, 音轨路径)。"""
     from app.modules.sources.asr import transcribe_video_audio_sync
 
+    url = resolve_media_url_sync(url)
     cfg = dict(asr_cfg or {})
     if creds:
         cfg.setdefault("chat_base_url", creds.get("base_url") or "")
@@ -433,6 +667,19 @@ def extract_video_audio_transcript_sync(
     return transcribe_video_audio_sync(
         url, work_dir, cfg, cookie_file=_resolve_cookie_file()
     )
+
+
+def extract_media_file_transcript_sync(
+    media_path: Path,
+    work_dir: Path,
+    asr_cfg: dict[str, str] | None = None,
+) -> tuple[str, list, Path]:
+    """本地视频/音频 → ffmpeg 抽轨 → 转写。"""
+    from app.modules.sources.asr import transcribe_media_file_sync
+
+    cfg = dict(asr_cfg or {})
+    cfg.setdefault("asr_mode", cfg.get("asr_mode") or "auto")
+    return transcribe_media_file_sync(media_path, work_dir, cfg)
 
 
 def _resolve_cookie_file() -> Path | None:
@@ -452,7 +699,7 @@ def _resolve_cookie_file() -> Path | None:
 
 
 def _yt_dlp_option_sets(url: str) -> list[dict]:
-    """生成尝试顺序：无 cookie → cookies 文件 → Firefox（避 DPAPI）→ Edge/Chrome。"""
+    """生成尝试顺序：优先应用内 Cookie 文件；默认不读系统浏览器（避免钥匙串/DPAPI 弹窗）。"""
     import os
 
     base = {
@@ -464,29 +711,26 @@ def _yt_dlp_option_sets(url: str) -> list[dict]:
         "quiet": True,
         "no_warnings": True,
     }
+    base = apply_ytdlp_network_opts(base)
     sets: list[dict] = []
     cookie_file = _resolve_cookie_file()
     gated = _is_cookie_gated_host(url)
 
-    # 抖音等站点：优先用桌面端导出的 Cookie 文件，避免先无 Cookie 白跑
+    # 抖音等站点：只用桌面端导出的 Cookie 文件
     if cookie_file is not None:
         sets.append({**base, "cookiefile": str(cookie_file)})
+
     if not gated:
         sets.append(dict(base))
 
+    # 仅当用户显式指定时才读系统浏览器（Chrome 会弹钥匙串 / Windows DPAPI）
     browser = (os.environ.get("KONGKU_YTDLP_BROWSER") or "").strip().lower()
-    if browser:
+    if browser in {"firefox", "chrome", "edge", "brave", "chromium", "safari"}:
         sets.append({**base, "cookiesfrombrowser": (browser,)})
 
-    if gated:
-        # Firefox 不走 Chromium DPAPI，Windows 上更稳；再试 edge/chrome
-        for b in ("firefox", "edge", "chrome"):
-            if b == browser:
-                continue
-            sets.append({**base, "cookiesfrombrowser": (b,)})
-        # 最后再试一次无 Cookie（少数公开页）
-        if cookie_file is not None:
-            sets.append(dict(base))
+    # 无 Cookie 文件时：抖音最后再试一次匿名（多数会失败，由友好错误引导登录）
+    if gated and cookie_file is None:
+        sets.append(dict(base))
     elif not sets:
         sets.append(dict(base))
     return sets
@@ -496,6 +740,7 @@ def extract_video_subs_sync(url: str, work_dir: Path) -> tuple[str, list]:
     """用 yt-dlp 拉字幕；返回 (文本, TimedCue 列表)。失败抛错。"""
     from app.modules.sources.cues import parse_subtitle_cues
 
+    url = resolve_media_url_sync(url)
     work_dir.mkdir(parents=True, exist_ok=True)
     outtmpl = str(work_dir / "sub")
     err_tail = ""
@@ -562,9 +807,10 @@ def extract_video_subs_sync(url: str, work_dir: Path) -> tuple[str, list]:
         else:
             import os
 
-            browser = (os.environ.get("KONGKU_YTDLP_BROWSER") or "firefox").strip()
-            if _is_cookie_gated_host(url) or browser:
-                cmd[1:1] = ["--cookies-from-browser", browser or "firefox"]
+            # 默认不读系统浏览器，避免钥匙串 / DPAPI；仅显式指定时启用
+            browser = (os.environ.get("KONGKU_YTDLP_BROWSER") or "").strip().lower()
+            if browser:
+                cmd[1:1] = ["--cookies-from-browser", browser]
         try:
             proc = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=180, check=False

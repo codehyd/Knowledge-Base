@@ -26,6 +26,7 @@ META_NAME = ".kongku-source.json"
 CATEGORY_MAP: dict[str, tuple[str, str]] = {
     "ebook": ("books", "书籍"),
     "video_url": ("videos", "视频"),
+    "video_file": ("videos", "视频"),
     "url": ("web", "网页"),
     "note": ("notes", "笔记"),
 }

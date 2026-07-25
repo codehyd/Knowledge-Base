@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { DragEvent, FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
+  VideoCameraOutlined,
   CloudUploadOutlined,
   DeleteOutlined,
   EyeOutlined,
@@ -79,6 +80,7 @@ export function FeedPage() {
   const [previewSourceId, setPreviewSourceId] = useState<number | null>(null);
   const [ebookDragging, setEbookDragging] = useState(false);
   const [noteDragging, setNoteDragging] = useState(false);
+  const [videoDragging, setVideoDragging] = useState(false);
   const [openQuery, setOpenQuery] = useState("");
   const [openResults, setOpenResults] = useState<OpenBookItem[]>([]);
   const [openSearching, setOpenSearching] = useState(false);
@@ -97,6 +99,7 @@ export function FeedPage() {
   const [allowLocalAudio, setAllowLocalAudio] = useState(false);
   const ebookRef = useRef<HTMLInputElement>(null);
   const noteRef = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLInputElement>(null);
   const desktop = getDesktopBridge();
 
   const refresh = useCallback(async () => {
@@ -200,16 +203,17 @@ export function FeedPage() {
     }
   }
 
-  async function onUpload(file: File, type: "ebook" | "note") {
+  async function onUpload(file: File, type: "ebook" | "note" | "video") {
     await withBusy(async () => {
       await api.uploadSource(file, type);
     }, `已投递：${file.name}`);
   }
 
-  function onDrop(e: DragEvent, type: "ebook" | "note") {
+  function onDrop(e: DragEvent, type: "ebook" | "note" | "video") {
     e.preventDefault();
     if (type === "ebook") setEbookDragging(false);
-    else setNoteDragging(false);
+    else if (type === "note") setNoteDragging(false);
+    else setVideoDragging(false);
     const file = e.dataTransfer.files?.[0];
     if (file) void onUpload(file, type);
   }
@@ -474,7 +478,7 @@ export function FeedPage() {
                   showIcon
                   closable
                   onClose={() => setBannerOpen(false)}
-                  message="视频与链接可自动提取文案（字幕/语音转写），无需手贴文稿"
+                  message="可上传本地视频转写文案；链接类将尝试字幕/音轨转写"
                 />
               )}
 
@@ -585,6 +589,52 @@ export function FeedPage() {
                 />
               </article>
 
+              {/* 本地视频/音频 → ffmpeg 抽轨 → 语音转写 */}
+              <article className={styles.card}>
+                <div className={styles.cardTitle}>
+                  <VideoCameraOutlined />
+                  <div>
+                    <h2>视频 / 音频文件 · 转写文案</h2>
+                    <p>本机已有文件时最稳：ffmpeg 抽音轨后语音转写（无需扒站）</p>
+                  </div>
+                </div>
+                <div
+                  className={`${styles.droppad} ${videoDragging ? styles.droppadActive : ""}`}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setVideoDragging(true);
+                  }}
+                  onDragLeave={() => setVideoDragging(false)}
+                  onDrop={(e) => onDrop(e, "video")}
+                  onClick={() => videoRef.current?.click()}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") videoRef.current?.click();
+                  }}
+                >
+                  <CloudUploadOutlined className={styles.cloud} />
+                  <strong>点击或拖拽视频/音频到此处</strong>
+                  <span>mp4 / mov / webm / m4a / mp3 / wav 等，不超过 200MB</span>
+                </div>
+                <div className={styles.cardActions}>
+                  <Button onClick={() => videoRef.current?.click()} disabled={busy}>
+                    选择文件
+                  </Button>
+                </div>
+                <input
+                  ref={videoRef}
+                  type="file"
+                  accept=".mp4,.webm,.mov,.mkv,.m4v,.m4a,.mp3,.wav,.aac,.ogg,.opus,video/*,audio/*"
+                  hidden
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void onUpload(f, "video");
+                    e.target.value = "";
+                  }}
+                />
+              </article>
+
               {/* 链接 — 对齐 02 强调态 */}
               <article className={`${styles.card} ${styles.cardLink}`}>
                 <div className={styles.cardTitle}>
@@ -622,6 +672,31 @@ export function FeedPage() {
                 ) : null}
                 <Alert
                   className={styles.urlAudioAlert}
+                  type={mediaCookiesReady ? "success" : "warning"}
+                  showIcon
+                  message={
+                    mediaCookiesReady
+                      ? "已保存抖音登录态，可抓取文案"
+                      : "抓取抖音前请先「应用内登录抖音」"
+                  }
+                  description={
+                    desktop?.loginMediaSite
+                      ? "点击下方按钮，在弹出窗口用网页版登录抖音，关闭窗口后即可对失败项点「重试」。"
+                      : "当前不是桌面客户端环境，无法应用内登录。请打开「空库」Windows/Mac 安装包使用。"
+                  }
+                  action={
+                    <Button
+                      size="small"
+                      type="primary"
+                      disabled={!desktop?.loginMediaSite}
+                      onClick={() => void onLoginDouyin()}
+                    >
+                      应用内登录抖音
+                    </Button>
+                  }
+                />
+                <Alert
+                  className={styles.urlAudioAlert}
                   type={allowLocalAudio ? "success" : "info"}
                   showIcon
                   message={
@@ -646,13 +721,6 @@ export function FeedPage() {
                   }
                 />
                 <Space wrap style={{ marginTop: 10 }}>
-                  <Button
-                    size="middle"
-                    disabled={!desktop?.loginMediaSite}
-                    onClick={() => void onLoginDouyin()}
-                  >
-                    应用内登录抖音
-                  </Button>
                   {mediaCookiesReady ? (
                     <Tag color="success">已保存应用内登录态</Tag>
                   ) : (
@@ -666,7 +734,7 @@ export function FeedPage() {
                   <Tag>抖音</Tag>
                 </div>
                 <p className={styles.urlHint}>
-                  请用「应用内登录抖音」完成网页登录。音轨下载需在设置中授权；未授权时无字幕只能「补贴文案」。
+                  抖音登录入口：本页上方提示条，或「设置 → 模型与 Key → 视频语音转写」。音轨下载需在设置中授权。
                 </p>
               </article>
 
@@ -729,7 +797,7 @@ export function FeedPage() {
                     ) : null}
                     {item.status === "committed" ? (
                       <Tag color="success">已入库</Tag>
-                    ) : (item.type === "video_url" || item.status === "extracting") ? (
+                    ) : (item.type === "video_url" || item.type === "video_file" || item.status === "extracting") ? (
                       <Tag color="processing">自动转写</Tag>
                     ) : null}
                   </div>

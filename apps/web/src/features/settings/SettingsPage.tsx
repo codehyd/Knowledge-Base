@@ -145,6 +145,8 @@ export function SettingsPage() {
     { id: string; name: string; repo: string; ref: string; desc?: string }[]
   >([]);
   const [mirrorSaving, setMirrorSaving] = useState(false);
+  const [mediaCookiesReady, setMediaCookiesReady] = useState(false);
+  const [mediaLoginBusy, setMediaLoginBusy] = useState(false);
 
   const current = useMemo(
     () => providers.find((p) => p.id === providerId) ?? providers[0],
@@ -328,11 +330,27 @@ export function SettingsPage() {
       if (cancelled) return;
       setAppVersion(cfg.version || "");
       setIsPackaged(Boolean(cfg.isPackaged));
+      setMediaCookiesReady(Boolean(cfg.mediaCookiesReady));
+    });
+    const off = desktop.onMediaCookiesExported?.((info) => {
+      if (info.ok && info.loggedIn) {
+        setMediaCookiesReady(true);
+        message.success(
+          info.message ||
+            (info.count
+              ? `已保存登录态（${info.count} 条 Cookie）`
+              : "已保存抖音登录态"),
+        );
+      } else if (info.ok === false || info.loggedIn === false) {
+        setMediaCookiesReady(false);
+        if (info.message) message.warning(info.message);
+      }
     });
     return () => {
       cancelled = true;
+      off?.();
     };
-  }, [desktop]);
+  }, [desktop, message]);
 
   useEffect(() => {
     if (!desktop) return;
@@ -513,6 +531,22 @@ export function SettingsPage() {
       message.error(formatError(err, "重建资源库失败"));
     } finally {
       setLibraryRebuilding(false);
+    }
+  }
+
+  async function onLoginDouyin() {
+    if (!desktop?.loginMediaSite) {
+      message.warning("请在空库桌面客户端（安装包）内使用，浏览器网页版无法应用内登录");
+      return;
+    }
+    setMediaLoginBusy(true);
+    try {
+      await desktop.loginMediaSite("douyin");
+      message.info("请在弹出窗口登录抖音网页版，完成后关闭该窗口");
+    } catch (err) {
+      message.error(formatError(err, "打开登录窗口失败"));
+    } finally {
+      setMediaLoginBusy(false);
     }
   }
 
@@ -1071,6 +1105,28 @@ export function SettingsPage() {
                           抖音等视频多数没有字幕轨。无字幕时需下载音轨做语音转写；跟读功能也会缓存音轨。
                           默认不下载，需你在下方明确授权。Mac 首次本地转写还需下载 Whisper 模型。
                         </p>
+                        <Form.Item
+                          label="抖音登录（抓取用）"
+                          extra="桌面端会弹出网页窗口登录；登录态供 yt-dlp 抓取文案/字幕。也可在「喂养 → 视频链接」处登录。"
+                        >
+                          <Space wrap>
+                            <Button
+                              type="primary"
+                              loading={mediaLoginBusy}
+                              disabled={!desktop?.loginMediaSite}
+                              onClick={() => void onLoginDouyin()}
+                            >
+                              应用内登录抖音
+                            </Button>
+                            {mediaCookiesReady ? (
+                              <Tag color="success">已保存登录态</Tag>
+                            ) : desktop?.loginMediaSite ? (
+                              <Tag>未登录</Tag>
+                            ) : (
+                              <Tag color="warning">仅桌面安装包可用</Tag>
+                            )}
+                          </Space>
+                        </Form.Item>
                         <Form.Item
                           label="允许下载音轨到本机"
                           extra="开启后：无字幕可自动语音转写，并缓存音轨供「文案跟读」。关闭时仅尝试拉字幕，否则需补贴文案。音轨保存在本机 data/uploads，删除来源会一并清理。"

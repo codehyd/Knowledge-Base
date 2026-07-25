@@ -22,12 +22,15 @@ from app.modules.sources.classify import (
 from app.modules.sources.extractors import (
     _resolve_cookie_file,
     extract_local_file,
+    extract_media_file_transcript_sync,
     extract_video_audio_transcript_sync,
     extract_video_subs_sync,
     extract_webpage,
     fetch_video_title_sync,
     looks_like_video_url,
+    normalize_media_url,
     parse_share_input,
+    resolve_media_url_sync,
 )
 from app.modules.sources.cues import (
     find_media_file,
@@ -57,6 +60,19 @@ PREVIEWABLE_STATUS = {"ready", "committed", "need_transcript"}
 
 ALLOWED_EBOOK = {".pdf", ".epub", ".txt"}
 ALLOWED_NOTE = {".md", ".markdown", ".txt"}
+ALLOWED_VIDEO = {
+    ".mp4",
+    ".webm",
+    ".mov",
+    ".mkv",
+    ".m4v",
+    ".m4a",
+    ".mp3",
+    ".wav",
+    ".aac",
+    ".ogg",
+    ".opus",
+}
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 # 确认书籍：公版书库导入，或本地 EPUB/PDF（用户以 ebook 投递）
 # 可能为书：本地 TXT 以 ebook 投递 —— 可标识，但不进书架
@@ -125,12 +141,20 @@ class SourcesService:
         file: UploadFile,
         source_type: str,
     ) -> Source:
-        if source_type not in {"ebook", "note"}:
-            raise HTTPException(status_code=400, detail="type 仅支持 ebook / note")
+        if source_type not in {"ebook", "note", "video"}:
+            raise HTTPException(status_code=400, detail="type 仅支持 ebook / note / video")
 
         filename = _safe_name(file.filename or "upload.bin")
         suffix = Path(filename).suffix.lower()
-        allowed = ALLOWED_EBOOK if source_type == "ebook" else ALLOWED_NOTE
+        if source_type == "ebook":
+            allowed = ALLOWED_EBOOK
+            row_type = "ebook"
+        elif source_type == "note":
+            allowed = ALLOWED_NOTE
+            row_type = "note"
+        else:
+            allowed = ALLOWED_VIDEO
+            row_type = "video_file"
         if suffix not in allowed:
             raise HTTPException(
                 status_code=400,
@@ -143,11 +167,14 @@ class SourcesService:
         if len(data) > MAX_UPLOAD_BYTES:
             raise HTTPException(status_code=400, detail="文件超过 200MB 限制")
 
-        provenance, book_kind = resolve_book_meta(
-            source_type=source_type, filename=filename, provenance="upload"
-        )
+        provenance, book_kind = ("", "")
+        if row_type == "ebook":
+            provenance, book_kind = resolve_book_meta(
+                source_type="ebook", filename=filename, provenance="upload"
+            )
+
         row = Source(
-            type=source_type,
+            type=row_type,
             title=Path(filename).stem,
             filename=filename,
             provenance=provenance,
@@ -262,20 +289,30 @@ class SourcesService:
 
     async def create_url(self, db: AsyncSession, payload: UrlIn) -> Source:
         try:
-            url, _share_title = parse_share_input(payload.url)
+            url, share_title = parse_share_input(payload.url)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         is_video = looks_like_video_url(url)
-        # 视频标题：直接向平台拉元数据，不用分享口令猜（口令含反爬噪声）
+        # 短链先跟跳，避免 Unsupported URL / 标题变成 v.douyin.com材料
         if is_video:
+            url = await asyncio.to_thread(resolve_media_url_sync, url)
             meta_title = await asyncio.to_thread(fetch_video_title_sync, url)
-            title = meta_title or urlparse_title(url)
+            # 平台元数据优先；分享口令仅作回退，并去掉 XM 等前缀噪声
+            from app.modules.sources.extractors import _strip_share_title_noise
+
+            cleaned_share = _strip_share_title_noise(share_title or "")
+            title = (meta_title or cleaned_share or "").strip()
+            if not title:
+                from urllib.parse import urlparse as _urlparse
+
+                host = (_urlparse(url).hostname or "").lower()
+                title = "抖音视频" if "douyin" in host else "视频"
         else:
-            title = urlparse_title(url)
+            title = share_title or urlparse_title(url)
         row = Source(
             type="video_url" if is_video else "url",
-            title=title,
+            title=title[:500],
             filename="",
             source_uri=url,
             status="pending",
@@ -302,8 +339,8 @@ class SourcesService:
 
     async def attach_transcript(self, db: AsyncSession, source_id: int, payload: TranscriptIn) -> Source:
         row = await self.get(db, source_id)
-        if row.type not in {"video_url", "url"}:
-            raise HTTPException(status_code=400, detail="仅链接类来源可补贴文案")
+        if row.type not in {"video_url", "video_file", "url"}:
+            raise HTTPException(status_code=400, detail="仅视频/链接类来源可补贴文案")
         text = payload.content.strip()
         if not text:
             raise HTTPException(status_code=400, detail="文案不能为空")
@@ -422,7 +459,7 @@ class SourcesService:
 
     async def get_cues(self, db: AsyncSession, source_id: int) -> SourceCuesOut:
         row = await self.get(db, source_id)
-        if row.type != "video_url":
+        if row.type not in {"video_url", "video_file"}:
             raise HTTPException(status_code=400, detail="仅视频来源支持跟读")
         if row.status not in PREVIEWABLE_STATUS:
             raise HTTPException(
@@ -442,7 +479,7 @@ class SourcesService:
 
     async def resolve_media_path(self, db: AsyncSession, source_id: int) -> Path:
         row = await self.get(db, source_id)
-        if row.type != "video_url":
+        if row.type not in {"video_url", "video_file"}:
             raise HTTPException(status_code=400, detail="仅视频来源有音轨")
         media = find_media_file(self._source_folder(row.id))
         if not media:
@@ -675,6 +712,46 @@ class SourcesService:
                 row.progress = 30
                 await db.commit()
                 text = await extract_webpage(row.source_uri)
+            elif row.type == "video_file":
+                # 用户上传的本地视频/音频：ffmpeg 抽轨 → ASR（无需下载授权）
+                if not row.storage_path:
+                    raise ValueError("缺少原件路径")
+                media_src = _data_root() / row.storage_path
+                if not media_src.is_file():
+                    raise ValueError("原件不存在")
+                asr_cfg = await settings_ai_service.asr_config(db)
+                if (asr_cfg.get("asr_mode") or "auto") == "off":
+                    row.status = "need_transcript"
+                    row.stage = "need_transcript"
+                    row.progress = 40
+                    row.error_message = (
+                        "语音转写已关闭。请在设置开启「视频语音转写」，或「补贴文案」。"
+                    )
+                    await db.commit()
+                    await db.refresh(row)
+                    return row
+                folder = _data_root() / "uploads" / str(row.id)
+                audio_work = folder / "audio"
+                row.status = "extracting"
+                row.stage = "asr"
+                row.progress = 55
+                row.error_message = ""
+                await db.commit()
+                try:
+                    text, cues, audio_path = await asyncio.to_thread(
+                        extract_media_file_transcript_sync,
+                        media_src,
+                        audio_work,
+                        asr_cfg,
+                    )
+                except ValueError as asr_exc:
+                    row.status = "need_transcript"
+                    row.stage = "need_transcript"
+                    row.progress = 40
+                    row.error_message = f"语音转写失败：{asr_exc}"[:500]
+                    await db.commit()
+                    await db.refresh(row)
+                    return row
             elif row.type == "video_url":
                 row.status = "extracting"
                 row.stage = "extract_caption"
@@ -685,18 +762,31 @@ class SourcesService:
                 audio_work = folder / "audio"
                 cues: list = []
                 audio_path = None
+                # 旧条目可能存了带 share_sign 的脏链接 / 短链，提取前解析
+                video_url = await asyncio.to_thread(
+                    resolve_media_url_sync, row.source_uri or ""
+                )
+                if not video_url:
+                    video_url = normalize_media_url(row.source_uri or "")
+                if video_url and video_url != (row.source_uri or ""):
+                    row.source_uri = video_url
+                    try:
+                        (folder / "source.url").write_text(video_url, encoding="utf-8")
+                    except OSError:
+                        pass
+                    await db.commit()
                 asr_cfg = await settings_ai_service.asr_config(db)
                 allow_local_audio = asr_cfg.get("allow_local_audio") == "1"
                 try:
                     text, cues = await asyncio.to_thread(
-                        extract_video_subs_sync, row.source_uri, work
+                        extract_video_subs_sync, video_url, work
                     )
                     # 仅在用户授权后下载音轨，供跟读播放（失败不阻断字幕路径）
                     if allow_local_audio:
                         try:
                             audio_path = await asyncio.to_thread(
                                 download_audio_sync,
-                                row.source_uri,
+                                video_url,
                                 audio_work,
                                 _resolve_cookie_file(),
                             )
@@ -732,7 +822,7 @@ class SourcesService:
                     try:
                         text, cues, audio_path = await asyncio.to_thread(
                             extract_video_audio_transcript_sync,
-                            row.source_uri,
+                            video_url,
                             audio_work,
                             asr_cfg,
                         )
@@ -754,16 +844,18 @@ class SourcesService:
             text_file = folder / "extracted.txt"
             text_file.write_text(text, encoding="utf-8")
 
-            # 视频跟读：仅在授权下载音轨时落盘时间轴与音轨
-            if row.type == "video_url":
+            # 视频跟读：链接需授权落盘；本地上传始终保留音轨
+            if row.type in {"video_url", "video_file"}:
                 asr_cfg_final = await settings_ai_service.asr_config(db)
-                allow_keep = asr_cfg_final.get("allow_local_audio") == "1"
+                allow_keep = (
+                    row.type == "video_file"
+                    or asr_cfg_final.get("allow_local_audio") == "1"
+                )
                 if allow_keep and cues:
                     write_cues_file(folder / "cues.json", cues)
                 if allow_keep and audio_path is not None:
                     persist_media_copy(Path(audio_path), folder)
                 elif not allow_keep and audio_path is not None:
-                    # 理论上不应走到；兜底不落盘
                     audio_path = None
 
             row.text_path = str(text_file.relative_to(_data_root())).replace("\\", "/")
