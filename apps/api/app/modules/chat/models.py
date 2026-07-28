@@ -30,5 +30,10 @@ class ChatMessage(Base):
     role = mapped_column(String(20), default="user")  # user | assistant
     content = mapped_column(Text, default="")
     refused = mapped_column(Boolean, default=False)
+    # ok | suspect | conflict —— 答前资料可信度（非拒答）
+    trust = mapped_column(String(20), default="ok")
+    trust_note = mapped_column(Text, default="")
+    # done | pending | error —— pending 时 content 可为空，便于切页后轮询
+    status = mapped_column(String(20), default="done", index=True)
     citations_json = mapped_column(Text, default="")
     created_at = mapped_column(DateTime(timezone=True), server_default=func.now())

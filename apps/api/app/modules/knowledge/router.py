@@ -4,8 +4,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.modules.knowledge.schemas import (
     AnnotationCreate,
+    AnnotationExpandIn,
     AnnotationListOut,
     AnnotationOut,
+    AnnotationPromoteIn,
     AnnotationUpdate,
     BookshelfListOut,
     CategoryListOut,
@@ -146,6 +148,34 @@ async def update_annotation(
     db: AsyncSession = Depends(get_db),
 ) -> AnnotationOut:
     return await knowledge_service.update_annotation(db, ann_id, payload)
+
+
+@router.post(
+    "/annotations/{ann_id}/promote",
+    response_model=AnnotationOut,
+    summary="确认预笔记为正式笔记",
+    description="仅 kind=chat_anchor 的对话预笔记可升级；不会自动混入正式笔记。",
+)
+async def promote_annotation(
+    ann_id: int,
+    payload: AnnotationPromoteIn = AnnotationPromoteIn(),
+    db: AsyncSession = Depends(get_db),
+) -> AnnotationOut:
+    return await knowledge_service.promote_annotation(db, ann_id, payload)
+
+
+@router.post(
+    "/annotations/{ann_id}/expand",
+    response_model=AnnotationOut,
+    summary="补全高亮段落",
+    description="把当前高亮向前/后扩成更完整的句子段落，缓解没头没尾。",
+)
+async def expand_annotation(
+    ann_id: int,
+    payload: AnnotationExpandIn = AnnotationExpandIn(),
+    db: AsyncSession = Depends(get_db),
+) -> AnnotationOut:
+    return await knowledge_service.expand_annotation(db, ann_id, payload)
 
 
 @router.delete(

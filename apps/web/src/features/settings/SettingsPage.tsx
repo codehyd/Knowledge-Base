@@ -17,6 +17,7 @@ import {
   Card,
   Form,
   Input,
+  InputNumber,
   Progress,
   Radio,
   Select,
@@ -76,6 +77,8 @@ export function SettingsPage() {
   const [asrModel, setAsrModel] = useState("");
   const [asrLocalModel, setAsrLocalModel] = useState("base");
   const [allowLocalAudio, setAllowLocalAudio] = useState(false);
+  const [chatMaxTokens, setChatMaxTokens] = useState(1200);
+  const [quoteRefineMaxTokens, setQuoteRefineMaxTokens] = useState(8000);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -188,6 +191,8 @@ export function SettingsPage() {
           setAsrModel(settings.asr_model || "");
           setAsrLocalModel(settings.asr_local_model || "base");
           setAllowLocalAudio(Boolean(settings.allow_local_audio));
+          setChatMaxTokens(settings.chat_max_tokens ?? 1200);
+          setQuoteRefineMaxTokens(settings.quote_refine_max_tokens ?? 8000);
 
           const p = listRes.providers.find((x) => x.id === settings.provider);
           if (p) {
@@ -641,6 +646,8 @@ export function SettingsPage() {
         asr_model: asrModel,
         asr_local_model: asrLocalModel,
         allow_local_audio: allowLocalAudio,
+        chat_max_tokens: chatMaxTokens,
+        quote_refine_max_tokens: quoteRefineMaxTokens,
       });
       setMasked(data.api_key_masked);
       setConfigured(data.configured);
@@ -1099,6 +1106,41 @@ export function SettingsPage() {
                         </Form.Item>
 
                         <Typography.Title level={5} style={{ marginTop: 8 }}>
+                          输出额度（max_tokens）
+                        </Typography.Title>
+                        <p className={styles.tabHint}>
+                          限制每次调用的输出 token 上限，直接影响费用。注意：推理模型（如
+                          deepseek-v4-flash、R1 类）的「思考过程」也占这个额度——给太小会导致正文被挤没（空回复），
+                          给太大会增加单次成本上限。
+                        </p>
+                        <Form.Item
+                          label="对话主回答"
+                          extra="每次提问 1 次调用。普通模型 1200 足够；推理模型建议 2000~4000。"
+                        >
+                          <InputNumber
+                            min={100}
+                            max={128000}
+                            step={100}
+                            value={chatMaxTokens}
+                            onChange={(v) => setChatMaxTokens(Number(v) || 1200)}
+                            style={{ width: 220 }}
+                          />
+                        </Form.Item>
+                        <Form.Item
+                          label="知识点 AI 摘段"
+                          extra="每次问答后 1 次调用，用于把知识点高亮摘成有头有尾的段落。推理模型建议 6000~8000；调为 0 附近的小值可变相关闭（摘段会静默回退为规则截取）。"
+                        >
+                          <InputNumber
+                            min={500}
+                            max={128000}
+                            step={500}
+                            value={quoteRefineMaxTokens}
+                            onChange={(v) => setQuoteRefineMaxTokens(Number(v) || 8000)}
+                            style={{ width: 220 }}
+                          />
+                        </Form.Item>
+
+                        <Typography.Title level={5} style={{ marginTop: 8 }}>
                           视频语音转写
                         </Typography.Title>
                         <p className={styles.tabHint}>
@@ -1348,9 +1390,23 @@ export function SettingsPage() {
           </div>
 
           <aside className={styles.tips}>
-            <Card size="small" title={<><DollarOutlined /> 费用说明</>}>
-              <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-                大模型 Token 费用由你的服务商账户承担；ctext 为机构订阅制，个人通常无需配置。
+            <Card size="small" title={<><DollarOutlined /> Token 消耗点</>}>
+              <ul className={styles.checklist}>
+                <li>
+                  <b>对话主回答</b>：每次提问 1 次（输入含检索到的资料片段+你的问题，输出受「对话主回答」额度限制）
+                </li>
+                <li>
+                  <b>知识点 AI 摘段</b>：每次问答 1 次，精修知识点高亮范围（输出受「知识点 AI 摘段」额度限制）
+                </li>
+                <li>
+                  <b>Embedding 向量化</b>：喂养入库时按切片批量调用；提问时问题本身 1 次
+                </li>
+                <li>
+                  <b>云端语音转写</b>：无字幕视频按音频时长计费（独立于对话模型，在未授权音轨下载时不发生）
+                </li>
+              </ul>
+              <Typography.Paragraph type="secondary" style={{ marginBottom: 0, marginTop: 8 }}>
+                推理模型（deepseek-v4-flash / R1 类）的思考过程也计入输出 token，同等额度下实际正文更少、费用更高；想省钱可在「对话模型」换非推理模型（如 deepseek-chat）。ctext 为机构订阅制，个人通常无需配置。
               </Typography.Paragraph>
             </Card>
             <Card size="small" title={<><SafetyCertificateOutlined /> 安全提示</>}>

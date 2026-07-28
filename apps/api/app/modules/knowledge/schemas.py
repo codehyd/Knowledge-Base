@@ -74,6 +74,20 @@ _LEGACY_COLOR_HEX = {
     "coral": "#f47c5a",
 }
 
+# 对话预笔记调色板：尽量让同书多条高亮一眼可区分
+CHAT_ANCHOR_COLORS: tuple[str, ...] = (
+    "#60a5fa",  # 蓝
+    "#f47c5a",  # 橙
+    "#34d399",  # 绿
+    "#c084fc",  # 紫
+    "#facc15",  # 黄
+    "#fb7185",  # 玫红
+    "#2a6f6a",  # 青
+    "#f97316",  # 深橙
+    "#818cf8",  # 靛
+    "#a3e635",  # 黄绿
+)
+
 
 def normalize_ann_color(raw: str | None, *, default: str = "#facc15") -> str:
     """接受 #RRGGBB，或兼容旧版 yellow/teal/coral。"""
@@ -86,6 +100,16 @@ def normalize_ann_color(raw: str | None, *, default: str = "#facc15") -> str:
     raise ValueError("颜色请使用 #RRGGBB，或 yellow / teal / coral")
 
 
+def pick_chat_anchor_color(used: set[str]) -> str:
+    """从调色板里挑一个本条目尚未使用的颜色；用尽则循环。"""
+    used_low = {u.lower() for u in used if u}
+    for c in CHAT_ANCHOR_COLORS:
+        if c.lower() not in used_low:
+            return c
+    # 全部占用时按数量取模，保证仍落在调色板
+    return CHAT_ANCHOR_COLORS[len(used_low) % len(CHAT_ANCHOR_COLORS)]
+
+
 class AnnotationOut(BaseModel):
     id: int
     entry_id: int
@@ -93,6 +117,8 @@ class AnnotationOut(BaseModel):
     end_offset: int
     quote: str
     note: str = ""
+    # note | chat_anchor
+    kind: str = "note"
     color: str = "#facc15"
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -110,11 +136,29 @@ class AnnotationCreate(BaseModel):
     quote: str = Field(min_length=1, max_length=2000)
     note: str = Field(default="", max_length=2000)
     color: str = Field(default="#facc15", max_length=20)
+    kind: str = Field(default="note", max_length=20)
 
 
 class AnnotationUpdate(BaseModel):
     note: Optional[str] = Field(default=None, max_length=2000)
     color: Optional[str] = Field(default=None, max_length=20)
+    start_offset: Optional[int] = Field(default=None, ge=0)
+    end_offset: Optional[int] = Field(default=None, ge=1)
+    quote: Optional[str] = Field(default=None, max_length=2000)
+
+
+class AnnotationPromoteIn(BaseModel):
+    """将对话预笔记确认为正式笔记。"""
+    note: str = Field(default="", max_length=2000)
+    color: Optional[str] = Field(default=None, max_length=20)
+
+
+class AnnotationExpandIn(BaseModel):
+    """手动小步调整高亮区间。"""
+    # 扩展：both | before | after；收缩：shrink_before | shrink_after
+    direction: str = Field(default="after", max_length=16)
+    # 每次扩/缩的句子（或转写文本的行）数
+    sentences: int = Field(default=1, ge=1, le=10)
 
 
 class ReindexOut(BaseModel):

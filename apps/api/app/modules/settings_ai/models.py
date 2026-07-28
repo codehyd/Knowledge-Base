@@ -23,6 +23,9 @@ class AiSettings(Base):
     asr_local_model = mapped_column(String(50), default="base")
     # 用户明确授权后，才下载/缓存视频音轨到本机（跟读与无字幕转写）
     allow_local_audio = mapped_column(Boolean, default=False)
+    # 输出 token 上限：主回答 / 知识点 AI 摘段。推理模型的思考过程也占用该额度，需给足
+    chat_max_tokens = mapped_column(Integer, default=1200)
+    quote_refine_max_tokens = mapped_column(Integer, default=8000)
     updated_at = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

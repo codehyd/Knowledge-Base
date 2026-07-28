@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -11,6 +11,7 @@ from app.modules.chat.schemas import (
     ChatSessionOut,
 )
 from app.modules.chat.service import chat_service
+from app.modules.chat.tasks import run_chat_job
 
 router = APIRouter(tags=["知识对话"])
 
@@ -61,7 +62,17 @@ async def delete_session(session_id: int, db: AsyncSession = Depends(get_db)) ->
     "/chat",
     response_model=ChatOut,
     summary="知识库问答",
-    description="基于已入库切片检索作答；证据不足则拒答。可选 session_id 落库历史（不增加多轮 LLM 上下文）。",
+    description=(
+        "受理后立刻落库用户消息与 pending 助手占位，后台检索生成；"
+        "客户端可切页，稍后用会话消息接口轮询直至 status!=pending。"
+    ),
 )
-async def chat(payload: ChatIn, db: AsyncSession = Depends(get_db)) -> ChatOut:
-    return await chat_service.chat(db, payload)
+async def chat(
+    payload: ChatIn,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+) -> ChatOut:
+    out = await chat_service.begin_chat(db, payload)
+    if out.status == "pending" and out.pending_message_id is not None:
+        background_tasks.add_task(run_chat_job, out.pending_message_id)
+    return out

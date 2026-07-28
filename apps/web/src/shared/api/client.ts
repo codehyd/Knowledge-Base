@@ -31,6 +31,8 @@ export type AiSettings = {
   asr_local_model?: string;
   asr_cloud_configured?: boolean;
   allow_local_audio?: boolean;
+  chat_max_tokens?: number;
+  quote_refine_max_tokens?: number;
 };
 
 export type DbSettings = {
@@ -183,6 +185,7 @@ export type EntryAnnotation = {
   end_offset: number;
   quote: string;
   note: string;
+  kind?: "note" | "chat_anchor" | string;
   color: string;
   created_at?: string | null;
   updated_at?: string | null;
@@ -238,14 +241,22 @@ export type ChatCitation = {
   title: string;
   snippet: string;
   score: number;
+  char_offset?: number;
+  highlight_query?: string;
+  annotation_id?: number | null;
+  point_label?: string;
 };
 
 export type ChatResult = {
   answer: string;
   refused: boolean;
+  trust?: "ok" | "suspect" | "conflict" | string;
+  trust_note?: string;
   citations: ChatCitation[];
   retrieval?: string;
   session_id?: number | null;
+  status?: "done" | "pending" | "error" | string;
+  pending_message_id?: number | null;
 };
 
 export type ChatSession = {
@@ -262,6 +273,9 @@ export type ChatMessageItem = {
   role: "user" | "assistant" | string;
   content: string;
   refused: boolean;
+  trust?: "ok" | "suspect" | "conflict" | string;
+  trust_note?: string;
+  status?: "done" | "pending" | "error" | string;
   citations: ChatCitation[];
   created_at?: string | null;
 };
@@ -364,6 +378,8 @@ export const api = {
     asr_model?: string;
     asr_local_model?: string;
     allow_local_audio?: boolean;
+    chat_max_tokens?: number;
+    quote_refine_max_tokens?: number;
   }) =>
     request<AiSettings>("/api/settings/ai", {
       method: "PUT",
@@ -650,16 +666,42 @@ export const api = {
       quote: string;
       note?: string;
       color?: string;
+      kind?: "note" | "chat_anchor" | string;
     },
   ) =>
     request<EntryAnnotation>(`/api/entries/${entryId}/annotations`, {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  updateAnnotation: (annId: number, body: { note?: string; color?: string }) =>
+  updateAnnotation: (
+    annId: number,
+    body: {
+      note?: string;
+      color?: string;
+      start_offset?: number;
+      end_offset?: number;
+      quote?: string;
+    },
+  ) =>
     request<EntryAnnotation>(`/api/annotations/${annId}`, {
       method: "PATCH",
       body: JSON.stringify(body),
+    }),
+  promoteAnnotation: (annId: number, body?: { note?: string; color?: string }) =>
+    request<EntryAnnotation>(`/api/annotations/${annId}/promote`, {
+      method: "POST",
+      body: JSON.stringify(body || {}),
+    }),
+  expandAnnotation: (
+    annId: number,
+    body?: {
+      direction?: "both" | "before" | "after" | "shrink_before" | "shrink_after" | string;
+      sentences?: number;
+    },
+  ) =>
+    request<EntryAnnotation>(`/api/annotations/${annId}/expand`, {
+      method: "POST",
+      body: JSON.stringify(body || { direction: "after" }),
     }),
   deleteAnnotation: (annId: number) =>
     request<void>(`/api/annotations/${annId}`, { method: "DELETE" }),

@@ -17,6 +17,8 @@ class AiSettingsOut(BaseModel):
     asr_local_model: str = "base"
     asr_cloud_configured: bool = False
     allow_local_audio: bool = False
+    chat_max_tokens: int = 1200
+    quote_refine_max_tokens: int = 8000
 
 
 class AiSettingsUpdate(BaseModel):
@@ -31,6 +33,8 @@ class AiSettingsUpdate(BaseModel):
     asr_model: Optional[str] = None
     asr_local_model: Optional[str] = None
     allow_local_audio: Optional[bool] = None
+    chat_max_tokens: Optional[int] = Field(default=None, ge=100, le=128000)
+    quote_refine_max_tokens: Optional[int] = Field(default=None, ge=500, le=128000)
 
 
 class AiTestOut(BaseModel):

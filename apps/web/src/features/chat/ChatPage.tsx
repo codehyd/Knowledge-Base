@@ -1,10 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  BookOutlined,
   CommentOutlined,
   DeleteOutlined,
+  DownOutlined,
   PlusOutlined,
+  RightOutlined,
   SendOutlined,
   SettingOutlined,
+  WarningOutlined,
 } from "@ant-design/icons";
 import { Alert, App, Button, Input, Popconfirm, Select, Space, Typography } from "antd";
 import { Link } from "react-router-dom";
@@ -12,18 +16,138 @@ import {
   api,
   type CategoryItem,
   type ChatCitation,
+  type ChatMessageItem,
   type ChatSession,
 } from "@/shared/api/client";
 import { formatError } from "@/shared/ui/feedback";
+import { TextPreviewModal } from "@/shared/ui/TextPreviewModal";
 import styles from "./ChatPage.module.css";
+
+const ACTIVE_SESSION_KEY = "kongku.chat.activeSessionId";
+const POLL_MS = 900;
+
+type TrustLevel = "ok" | "suspect" | "conflict";
+type MsgStatus = "done" | "pending" | "error";
 
 type Msg = {
   id: string;
   role: "user" | "assistant";
   content: string;
   refused?: boolean;
+  trust?: TrustLevel;
+  trust_note?: string;
+  status?: MsgStatus;
   citations?: ChatCitation[];
 };
+
+function normalizeTrust(value?: string | null): TrustLevel {
+  if (value === "suspect" || value === "conflict") return value;
+  return "ok";
+}
+
+function normalizeStatus(value?: string | null): MsgStatus {
+  if (value === "pending" || value === "error") return value;
+  return "done";
+}
+
+function mapMessages(items: ChatMessageItem[]): Msg[] {
+  return (items || []).map((m) => ({
+    id: String(m.id),
+    role: m.role === "assistant" ? "assistant" : "user",
+    content: m.content || "",
+    refused: m.refused,
+    trust: normalizeTrust(m.trust),
+    trust_note: m.trust_note || "",
+    status: normalizeStatus(m.status),
+    citations: m.citations || [],
+  }));
+}
+
+function hasPending(items: Msg[]) {
+  return items.some((m) => m.role === "assistant" && m.status === "pending");
+}
+
+function citationFocusQuery(citation: ChatCitation): string {
+  const preferred = (citation.highlight_query || "").trim();
+  if (preferred) return preferred.slice(0, 60);
+  return (citation.snippet || "")
+    .replace(/…/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 48)
+    .trim();
+}
+
+function pointLabelOf(c: ChatCitation, index: number) {
+  const label = (c.point_label || c.highlight_query || "").trim();
+  if (label) return label.slice(0, 36);
+  const snip = (c.snippet || "").replace(/\s+/g, " ").trim();
+  if (snip) return snip.slice(0, 36) + (snip.length > 36 ? "…" : "");
+  return `知识点 ${index + 1}`;
+}
+
+type CitationGroup = {
+  entry_id: number;
+  title: string;
+  items: ChatCitation[];
+};
+
+function groupCitations(citations: ChatCitation[]): CitationGroup[] {
+  const map = new Map<number, CitationGroup>();
+  for (const c of citations) {
+    const cur = map.get(c.entry_id);
+    if (cur) {
+      cur.items.push(c);
+    } else {
+      map.set(c.entry_id, {
+        entry_id: c.entry_id,
+        title: c.title || `条目 #${c.entry_id}`,
+        items: [c],
+      });
+    }
+  }
+  return [...map.values()];
+}
+
+function readStoredSessionId(): number | null {
+  try {
+    const raw = sessionStorage.getItem(ACTIVE_SESSION_KEY);
+    if (!raw) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+function storeSessionId(id: number | null) {
+  try {
+    if (id == null) sessionStorage.removeItem(ACTIVE_SESSION_KEY);
+    else sessionStorage.setItem(ACTIVE_SESSION_KEY, String(id));
+  } catch {
+    /* ignore */
+  }
+}
+
+function trustBanner(trust: TrustLevel, note?: string) {
+  if (trust === "conflict") {
+    return {
+      title: "知识库材料明显有问题",
+      detail:
+        note?.trim() ||
+        "命中的资料存在硬伤或彼此冲突，请勿当作正确答案。可点击下方引用来源去修正或删除。",
+    };
+  }
+  if (trust === "suspect") {
+    return {
+      title: "依据来自知识库，但可信度存疑",
+      detail:
+        note?.trim() ||
+        "模型对这段库内内容没有十足把握。请核对引用来源，必要时回喂养页修正。",
+    };
+  }
+  return null;
+}
 
 function formatTime(value?: string | null) {
   if (!value) return "";
@@ -37,6 +161,98 @@ function formatTime(value?: string | null) {
   });
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function CitationPanel({
+  citations,
+  onOpenPoint,
+}: {
+  citations: ChatCitation[];
+  onOpenPoint: (c: ChatCitation) => void;
+}) {
+  const groups = useMemo(() => groupCitations(citations), [citations]);
+  const [expandedMap, setExpandedMap] = useState<Record<number, boolean>>({});
+  const scrollable = groups.length > 3;
+
+  function isExpanded(g: CitationGroup) {
+    if (g.items.length <= 1) return false;
+    if (Object.prototype.hasOwnProperty.call(expandedMap, g.entry_id)) {
+      return Boolean(expandedMap[g.entry_id]);
+    }
+    // 只有一本书时默认展开知识点
+    return groups.length === 1;
+  }
+
+  function onBookClick(g: CitationGroup) {
+    if (g.items.length === 1) {
+      onOpenPoint(g.items[0]);
+      return;
+    }
+    setExpandedMap((prev) => {
+      const cur = Object.prototype.hasOwnProperty.call(prev, g.entry_id)
+        ? Boolean(prev[g.entry_id])
+        : groups.length === 1;
+      return { ...prev, [g.entry_id]: !cur };
+    });
+  }
+
+  return (
+    <div className={styles.citations}>
+      <div className={styles.citeHead}>出处 · 先选书，再看知识点</div>
+      <div className={`${styles.citeGroups}${scrollable ? ` ${styles.citeGroupsScroll}` : ""}`}>
+        {groups.map((g) => {
+          const expanded = isExpanded(g);
+          const multi = g.items.length > 1;
+          return (
+            <div key={g.entry_id} className={styles.citeGroup}>
+              <button
+                type="button"
+                className={styles.citeBook}
+                title={multi ? "展开本书知识点" : "查看原文定位"}
+                onClick={() => onBookClick(g)}
+              >
+                <BookOutlined className={styles.citeBookIcon} />
+                <span className={styles.citeBookBody}>
+                  <strong>{g.title}</strong>
+                  <em>
+                    {g.items.length} 个知识点
+                    {multi ? (expanded ? " · 点击收起" : " · 点击展开") : " · 点击查看"}
+                  </em>
+                </span>
+                {multi ? (
+                  expanded ? (
+                    <DownOutlined className={styles.citeChevron} />
+                  ) : (
+                    <RightOutlined className={styles.citeChevron} />
+                  )
+                ) : null}
+              </button>
+              {expanded && (
+                <div className={styles.citePoints}>
+                  {g.items.map((c, i) => (
+                    <button
+                      key={`${c.entry_id}-${c.annotation_id ?? i}-${i}`}
+                      type="button"
+                      className={styles.citePoint}
+                      title="跳到预高亮原文位置"
+                      onClick={() => onOpenPoint(c)}
+                    >
+                      <strong>{pointLabelOf(c, i)}</strong>
+                      <span>{c.snippet}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function ChatPage() {
   const { message } = App.useApp();
   const [configured, setConfigured] = useState(false);
@@ -48,12 +264,94 @@ export function ChatPage() {
   const [sending, setSending] = useState(false);
   const [loadingSession, setLoadingSession] = useState(false);
   const [msgs, setMsgs] = useState<Msg[]>([]);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewTitle, setPreviewTitle] = useState("");
+  const [previewEntryId, setPreviewEntryId] = useState<number | null>(null);
+  const [previewSourceId, setPreviewSourceId] = useState<number | null>(null);
+  const [previewQuery, setPreviewQuery] = useState("");
+  const [previewOffset, setPreviewOffset] = useState<number | null>(null);
+  const [previewAnnId, setPreviewAnnId] = useState<number | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const sessionIdRef = useRef<number | null>(null);
+  const pollTokenRef = useRef(0);
+
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
+
+  useEffect(() => {
+    return () => {
+      // 切走页面时停止轮询，避免卸载后 setState；回来会按 pending 重新同步
+      pollTokenRef.current += 1;
+      sessionIdRef.current = null;
+    };
+  }, []);
 
   async function refreshSessions() {
     const res = await api.listChatSessions();
     setSessions(res.items || []);
     return res.items || [];
+  }
+
+  async function loadMessages(id: number): Promise<Msg[]> {
+    const res = await api.listChatMessages(id);
+    const next = mapMessages(res.items || []);
+    if (sessionIdRef.current === id) {
+      setMsgs(next);
+    }
+    return next;
+  }
+
+  async function pollPending(id: number) {
+    const token = ++pollTokenRef.current;
+    setSending(true);
+    try {
+      for (;;) {
+        if (pollTokenRef.current !== token || sessionIdRef.current !== id) return;
+        const next = await loadMessages(id);
+        if (pollTokenRef.current !== token || sessionIdRef.current !== id) return;
+        if (!hasPending(next)) {
+          await refreshSessions();
+          return;
+        }
+        await sleep(POLL_MS);
+      }
+    } catch (err) {
+      if (pollTokenRef.current === token) {
+        message.error(formatError(err, "同步回答失败"));
+      }
+    } finally {
+      if (pollTokenRef.current === token) {
+        setSending(false);
+      }
+    }
+  }
+
+  async function openSession(id: number | null, opts?: { silent?: boolean }) {
+    pollTokenRef.current += 1;
+    setSending(false);
+    setSessionId(id);
+    storeSessionId(id);
+    sessionIdRef.current = id;
+    if (id == null) {
+      setMsgs([]);
+      return;
+    }
+    if (!opts?.silent) setLoadingSession(true);
+    try {
+      const next = await loadMessages(id);
+      const list = await refreshSessions();
+      const s = list.find((x) => x.id === id) || sessions.find((x) => x.id === id);
+      if (s?.category_id != null) setCategoryId(s.category_id);
+      if (hasPending(next)) {
+        void pollPending(id);
+      }
+    } catch (err) {
+      message.error(formatError(err, "加载会话失败"));
+      setMsgs([]);
+    } finally {
+      setLoadingSession(false);
+    }
   }
 
   useEffect(() => {
@@ -66,11 +364,23 @@ export function ChatPage() {
         ]);
         setConfigured(ai.configured);
         setCategories(cats.items || []);
-        setSessions(sess.items || []);
+        const list = sess.items || [];
+        setSessions(list);
+
+        const saved = readStoredSessionId();
+        const preferred =
+          saved != null && list.some((s) => s.id === saved)
+            ? saved
+            : list[0]?.id ?? null;
+        if (preferred != null) {
+          await openSession(preferred, { silent: true });
+        }
       } catch (err) {
         message.error(formatError(err, "加载对话配置失败"));
       }
     })();
+    // 仅挂载时恢复；openSession 稳定依赖由 ref 控制轮询
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [message]);
 
   useEffect(() => {
@@ -79,41 +389,18 @@ export function ChatPage() {
     el.scrollTop = el.scrollHeight;
   }, [msgs, sending]);
 
-  async function openSession(id: number | null) {
-    setSessionId(id);
-    if (id == null) {
-      setMsgs([]);
-      return;
-    }
-    setLoadingSession(true);
-    try {
-      const res = await api.listChatMessages(id);
-      setMsgs(
-        (res.items || []).map((m) => ({
-          id: String(m.id),
-          role: m.role === "assistant" ? "assistant" : "user",
-          content: m.content,
-          refused: m.refused,
-          citations: m.citations || [],
-        })),
-      );
-      const s = sessions.find((x) => x.id === id);
-      if (s?.category_id != null) setCategoryId(s.category_id);
-    } catch (err) {
-      message.error(formatError(err, "加载会话失败"));
-    } finally {
-      setLoadingSession(false);
-    }
-  }
-
   async function newSession() {
     try {
+      pollTokenRef.current += 1;
+      setSending(false);
       const s = await api.createChatSession({
         category_id: categoryId,
         title: "新对话",
       });
       await refreshSessions();
       setSessionId(s.id);
+      storeSessionId(s.id);
+      sessionIdRef.current = s.id;
       setMsgs([]);
     } catch (err) {
       message.error(formatError(err, "新建会话失败"));
@@ -141,44 +428,89 @@ export function ChatPage() {
       return;
     }
 
-    const tempId = `tmp-${Date.now()}`;
-    setMsgs((prev) => [...prev, { id: tempId, role: "user", content: text }]);
     setInput("");
     setSending(true);
+    // 本地先插入用户气泡，避免等待 begin 接口的空窗
+    const tempUserId = `tmp-u-${Date.now()}`;
+    setMsgs((prev) => [...prev, { id: tempUserId, role: "user", content: text }]);
+
     try {
       const res = await api.chat({
         message: text,
         category_id: categoryId,
         session_id: sessionId,
       });
-      if (res.session_id != null) {
-        setSessionId(res.session_id);
+      const sid = res.session_id ?? sessionId;
+      if (sid == null) {
+        throw new Error("未返回会话 ID");
       }
-      setMsgs((prev) => [
-        ...prev,
-        {
-          id: `a-${Date.now()}`,
-          role: "assistant",
-          content: res.answer,
-          refused: res.refused,
-          citations: res.citations || [],
-        },
-      ]);
+      setSessionId(sid);
+      storeSessionId(sid);
+      sessionIdRef.current = sid;
       await refreshSessions();
+      const next = await loadMessages(sid);
+      if (hasPending(next) || res.status === "pending") {
+        await pollPending(sid);
+      } else {
+        setSending(false);
+      }
     } catch (err) {
       message.error(formatError(err, "发送失败"));
       setMsgs((prev) => [
-        ...prev,
+        ...prev.filter((m) => m.id !== tempUserId),
         {
           id: `err-${Date.now()}`,
           role: "assistant",
           content: formatError(err, "发送失败"),
           refused: true,
+          trust: "ok",
+          status: "error",
         },
       ]);
-    } finally {
       setSending(false);
     }
+  }
+
+  const waiting = sending || hasPending(msgs);
+
+  async function openCitation(c: ChatCitation) {
+    const focus = citationFocusQuery(c);
+    const offset =
+      c.char_offset != null && Number.isFinite(c.char_offset) && c.char_offset >= 0
+        ? Math.floor(c.char_offset)
+        : null;
+    const annId =
+      c.annotation_id != null && Number.isFinite(c.annotation_id) && c.annotation_id > 0
+        ? Math.floor(c.annotation_id)
+        : null;
+    try {
+      const detail = await api.getEntry(c.entry_id);
+      setPreviewTitle(detail.title || c.title || `条目 #${c.entry_id}`);
+      setPreviewEntryId(c.entry_id);
+      setPreviewSourceId(detail.source_id ?? null);
+      setPreviewQuery(focus);
+      setPreviewOffset(offset);
+      setPreviewAnnId(annId);
+      setPreviewOpen(true);
+    } catch (err) {
+      message.error(formatError(err, "打开引用失败"));
+      setPreviewTitle(c.title || `条目 #${c.entry_id}`);
+      setPreviewEntryId(c.entry_id);
+      setPreviewSourceId(null);
+      setPreviewQuery(focus);
+      setPreviewOffset(offset);
+      setPreviewAnnId(annId);
+      setPreviewOpen(true);
+    }
+  }
+
+  function closePreview() {
+    setPreviewOpen(false);
+    setPreviewEntryId(null);
+    setPreviewSourceId(null);
+    setPreviewQuery("");
+    setPreviewOffset(null);
+    setPreviewAnnId(null);
   }
 
   return (
@@ -189,7 +521,7 @@ export function ChatPage() {
             <CommentOutlined /> 知识对话
           </h1>
           <Typography.Paragraph type="secondary" className={styles.subtitle}>
-            只按库内作答；历史落库回看，问答仍按单轮检索（不额外耗 Token）。
+            只按库内作答；发送后可切到其他页面，回来会自动同步生成中的回答。
           </Typography.Paragraph>
         </div>
         <Space wrap>
@@ -286,48 +618,64 @@ export function ChatPage() {
                 </Space>
               </div>
             ) : (
-              msgs.map((m) => (
-                <div
-                  key={m.id}
-                  className={`${styles.bubbleRow} ${
-                    m.role === "user" ? styles.rowUser : styles.rowAssistant
-                  }`}
-                >
+              msgs.map((m) => {
+                const isPending = m.role === "assistant" && m.status === "pending";
+                const trust = m.refused || isPending ? "ok" : normalizeTrust(m.trust);
+                const banner =
+                  m.role === "assistant" && !isPending
+                    ? trustBanner(trust, m.trust_note)
+                    : null;
+                const bubbleClass =
+                  m.role === "user"
+                    ? styles.bubbleUser
+                    : m.refused || m.status === "error"
+                      ? styles.bubbleRefuse
+                      : isPending
+                        ? `${styles.bubbleAssistant} ${styles.typing}`
+                        : trust === "conflict"
+                          ? styles.bubbleConflict
+                          : trust === "suspect"
+                            ? styles.bubbleSuspect
+                            : styles.bubbleAssistant;
+                return (
                   <div
-                    className={`${styles.bubble} ${
-                      m.role === "user"
-                        ? styles.bubbleUser
-                        : m.refused
-                          ? styles.bubbleRefuse
-                          : styles.bubbleAssistant
+                    key={m.id}
+                    className={`${styles.bubbleRow} ${
+                      m.role === "user" ? styles.rowUser : styles.rowAssistant
                     }`}
                   >
-                    <div className={styles.bubbleText}>{m.content}</div>
-                    {m.role === "assistant" && m.citations && m.citations.length > 0 && (
-                      <div className={styles.citations}>
-                        {m.citations.map((c, i) => (
-                          <Link
-                            key={`${c.entry_id}-${i}`}
-                            to={`/knowledge?entry=${c.entry_id}`}
-                            className={styles.chip}
-                            title={c.snippet}
-                          >
-                            <strong>{c.title || `条目 #${c.entry_id}`}</strong>
-                            <span>{c.snippet}</span>
-                          </Link>
-                        ))}
+                    <div className={`${styles.bubble} ${bubbleClass}`}>
+                      {banner && (
+                        <div
+                          className={`${styles.trustBanner} ${
+                            trust === "conflict"
+                              ? styles.trustBannerConflict
+                              : styles.trustBannerSuspect
+                          }`}
+                        >
+                          <WarningOutlined />
+                          <div>
+                            <strong>{banner.title}</strong>
+                            <p>{banner.detail}</p>
+                          </div>
+                        </div>
+                      )}
+                      <div className={styles.bubbleText}>
+                        {isPending ? "正在检索并作答…" : m.content}
                       </div>
-                    )}
+                      {m.role === "assistant" &&
+                        !isPending &&
+                        m.citations &&
+                        m.citations.length > 0 && (
+                          <CitationPanel
+                            citations={m.citations}
+                            onOpenPoint={(c) => void openCitation(c)}
+                          />
+                        )}
+                    </div>
                   </div>
-                </div>
-              ))
-            )}
-            {sending && (
-              <div className={`${styles.bubbleRow} ${styles.rowAssistant}`}>
-                <div className={`${styles.bubble} ${styles.bubbleAssistant} ${styles.typing}`}>
-                  正在检索并作答…
-                </div>
-              </div>
+                );
+              })
             )}
           </div>
 
@@ -335,9 +683,15 @@ export function ChatPage() {
             <Input.TextArea
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder={configured ? "输入与知识库相关的问题…" : "请先配置 API Key"}
+              placeholder={
+                waiting
+                  ? "正在生成回答，可先去其他页面…"
+                  : configured
+                    ? "输入与知识库相关的问题…"
+                    : "请先配置 API Key"
+              }
               autoSize={{ minRows: 2, maxRows: 6 }}
-              disabled={!configured || sending}
+              disabled={!configured || waiting}
               onPressEnter={(e) => {
                 if (!e.shiftKey) {
                   e.preventDefault();
@@ -348,8 +702,8 @@ export function ChatPage() {
             <Button
               type="primary"
               icon={<SendOutlined />}
-              loading={sending}
-              disabled={!configured || !input.trim()}
+              loading={waiting}
+              disabled={!configured || !input.trim() || waiting}
               onClick={() => void send()}
             >
               发送
@@ -357,6 +711,51 @@ export function ChatPage() {
           </div>
         </div>
       </div>
+
+      <TextPreviewModal
+        open={previewOpen}
+        title={previewTitle || "引用原文"}
+        entryId={previewEntryId}
+        sourceId={previewSourceId}
+        initialQuery={previewQuery}
+        initialOffset={previewOffset}
+        initialAnnotationId={previewAnnId}
+        onClose={closePreview}
+        loadSegment={async (offset, limit) => {
+          if (previewEntryId == null) {
+            return { text: "", char_count: 0, offset: 0, truncated: false };
+          }
+          try {
+            const res = await api.previewEntry(previewEntryId, { offset, limit });
+            return {
+              text: res.text,
+              char_count: res.char_count,
+              offset: res.offset,
+              truncated: res.truncated,
+            };
+          } catch (err) {
+            if (previewSourceId == null) throw err;
+            const res = await api.previewSource(previewSourceId, { offset, limit });
+            return {
+              text: res.text,
+              char_count: res.char_count,
+              offset: res.offset,
+              truncated: res.truncated,
+            };
+          }
+        }}
+        searchAll={async (q, params) => {
+          if (previewEntryId == null) return { total: 0, offset: 0, hits: [] };
+          try {
+            const res = await api.searchEntryPreview(previewEntryId, q, params);
+            return { total: res.total, offset: res.offset, hits: res.hits };
+          } catch (err) {
+            if (previewSourceId == null) throw err;
+            const res = await api.searchSourcePreview(previewSourceId, q, params);
+            return { total: res.total, offset: res.offset, hits: res.hits };
+          }
+        }}
+      />
     </section>
   );
 }

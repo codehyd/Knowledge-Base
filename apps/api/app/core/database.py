@@ -170,6 +170,12 @@ async def _ensure_ai_settings_columns(conn) -> None:
     await _add_column_if_missing(
         conn, "ai_settings", "allow_local_audio", "BOOLEAN DEFAULT 0"
     )
+    await _add_column_if_missing(
+        conn, "ai_settings", "chat_max_tokens", "INTEGER DEFAULT 1200"
+    )
+    await _add_column_if_missing(
+        conn, "ai_settings", "quote_refine_max_tokens", "INTEGER DEFAULT 8000"
+    )
 
 
 async def _ensure_entry_columns(conn) -> None:
@@ -180,6 +186,40 @@ async def _ensure_entry_columns(conn) -> None:
     )
     await conn.execute(
         text("CREATE INDEX IF NOT EXISTS ix_entries_content_hash ON entries (content_hash)")
+    )
+    await _add_column_if_missing(
+        conn, "entry_annotations", "kind", "VARCHAR(20) DEFAULT 'note'"
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_entry_annotations_kind ON entry_annotations (kind)"
+        )
+    )
+    # 旧版用 note 前缀标记的对话引用 → 归入预笔记分类
+    await conn.execute(
+        text(
+            """
+            UPDATE entry_annotations
+            SET kind = 'chat_anchor'
+            WHERE (kind IS NULL OR kind = '' OR kind = 'note')
+              AND note LIKE '对话引用%'
+            """
+        )
+    )
+
+
+async def _ensure_chat_message_columns(conn) -> None:
+    await _add_column_if_missing(
+        conn, "chat_messages", "trust", "VARCHAR(20) DEFAULT 'ok'"
+    )
+    await _add_column_if_missing(
+        conn, "chat_messages", "trust_note", "TEXT DEFAULT ''"
+    )
+    await _add_column_if_missing(
+        conn, "chat_messages", "status", "VARCHAR(20) DEFAULT 'done'"
+    )
+    await conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_chat_messages_status ON chat_messages (status)")
     )
 
 
@@ -274,6 +314,7 @@ async def init_db() -> dict[str, Any]:
         await _ensure_ai_settings_columns(conn)
         await _ensure_entry_columns(conn)
         await _ensure_source_book_columns(conn)
+        await _ensure_chat_message_columns(conn)
 
     await _ensure_seed_rows()
 

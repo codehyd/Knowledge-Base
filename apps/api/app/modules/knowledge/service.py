@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -10,8 +11,10 @@ from app.core.config import get_settings
 from app.modules.knowledge.models import Category, Entry, EntryAnnotation, EntryCategory
 from app.modules.knowledge.schemas import (
     AnnotationCreate,
+    AnnotationExpandIn,
     AnnotationListOut,
     AnnotationOut,
+    AnnotationPromoteIn,
     AnnotationUpdate,
     BookshelfItemOut,
     BookshelfListOut,
@@ -24,7 +27,10 @@ from app.modules.knowledge.schemas import (
     MediaItemOut,
     MediaListOut,
     normalize_ann_color,
+    pick_chat_anchor_color,
 )
+from app.modules.knowledge.index import read_entry_text
+from app.modules.knowledge.passage import ranges_same_passage, step_expand, step_shrink
 from app.modules.sources.models import Source
 from app.modules.sources.preview_search import search_text_hits
 from app.modules.sources.schemas import PreviewSearchOut
@@ -405,7 +411,7 @@ class KnowledgeService:
         q = (query or "").strip()
         if not q:
             raise HTTPException(status_code=400, detail="请输入搜索词")
-        if len(q) > 80:
+        if len(q) > 120:
             raise HTTPException(status_code=400, detail="搜索词过长")
 
         if row.source_id:
@@ -451,7 +457,44 @@ class KnowledgeService:
         await self._prune_empty_categories(db)
 
     def _ann_out(self, row: EntryAnnotation) -> AnnotationOut:
-        return AnnotationOut.model_validate(row)
+        kind = (getattr(row, "kind", None) or "").strip().lower()
+        if not kind:
+            kind = "chat_anchor" if (row.note or "").startswith("对话引用") else "note"
+        data = {
+            "id": row.id,
+            "entry_id": row.entry_id,
+            "start_offset": row.start_offset,
+            "end_offset": row.end_offset,
+            "quote": row.quote or "",
+            "note": row.note or "",
+            "kind": kind if kind in {"note", "chat_anchor"} else "note",
+            "color": row.color or "#facc15",
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+        }
+        return AnnotationOut.model_validate(data)
+
+    async def _next_chat_anchor_color(
+        self,
+        db: AsyncSession,
+        entry_id: int,
+        *,
+        exclude_id: int | None = None,
+    ) -> str:
+        """为本条目挑一个尚未被其他预笔记占用的颜色。"""
+        result = await db.execute(
+            select(EntryAnnotation.id, EntryAnnotation.color).where(
+                EntryAnnotation.entry_id == entry_id,
+                EntryAnnotation.kind == "chat_anchor",
+            )
+        )
+        used: set[str] = set()
+        for rid, color in result.all():
+            if exclude_id is not None and int(rid) == int(exclude_id):
+                continue
+            if color:
+                used.add(str(color).lower())
+        return pick_chat_anchor_color(used)
 
     async def list_annotations(self, db: AsyncSession, entry_id: int) -> AnnotationListOut:
         entry = await db.get(Entry, entry_id)
@@ -463,7 +506,201 @@ class KnowledgeService:
             .order_by(EntryAnnotation.start_offset, EntryAnnotation.id)
         )
         rows = list(result.scalars().all())
+        changed = await self._dedupe_chat_anchor_colors(db, rows)
+        changed = await self._collapse_nested_chat_anchors(db, rows) or changed
+        if changed:
+            await db.commit()
+            result = await db.execute(
+                select(EntryAnnotation)
+                .where(EntryAnnotation.entry_id == entry_id)
+                .order_by(EntryAnnotation.start_offset, EntryAnnotation.id)
+            )
+            rows = list(result.scalars().all())
         return AnnotationListOut(items=[self._ann_out(r) for r in rows])
+
+    async def _collapse_nested_chat_anchors(
+        self, db: AsyncSession, rows: list[EntryAnnotation]
+    ) -> bool:
+        """删除被更长预笔记覆盖（或紧邻同段）的短预笔记。"""
+        anchors = [
+            r
+            for r in rows
+            if (getattr(r, "kind", None) or "") == "chat_anchor"
+            or (not getattr(r, "kind", None) and (r.note or "").startswith("对话引用"))
+        ]
+        if len(anchors) < 2:
+            return False
+        # 长的优先保留
+        ordered = sorted(
+            anchors,
+            key=lambda r: (-(int(r.end_offset) - int(r.start_offset)), int(r.id)),
+        )
+        keep: list[EntryAnnotation] = []
+        delete_ids: list[int] = []
+        for row in ordered:
+            s, e = int(row.start_offset), int(row.end_offset)
+            if any(ranges_same_passage(s, e, int(k.start_offset), int(k.end_offset)) for k in keep):
+                delete_ids.append(int(row.id))
+            else:
+                keep.append(row)
+        if not delete_ids:
+            return False
+        for did in delete_ids:
+            victim = await db.get(EntryAnnotation, did)
+            if victim is not None:
+                await db.delete(victim)
+        await db.flush()
+        return True
+
+    async def _dedupe_chat_anchor_colors(
+        self, db: AsyncSession, rows: list[EntryAnnotation]
+    ) -> bool:
+        """同条目预笔记若颜色撞车，自动换成调色板中未占用的颜色。正式笔记不动。"""
+        anchors = [r for r in rows if (getattr(r, "kind", None) or "") == "chat_anchor"
+                   or (not getattr(r, "kind", None) and (r.note or "").startswith("对话引用"))]
+        if len(anchors) < 2:
+            return False
+        used: set[str] = set()
+        changed = False
+        for row in anchors:
+            c = (row.color or "").strip().lower() or "#60a5fa"
+            if c in used:
+                new_c = pick_chat_anchor_color(used)
+                row.color = new_c
+                used.add(new_c.lower())
+                changed = True
+            else:
+                used.add(c)
+                if not (row.color or "").strip():
+                    row.color = c
+                    changed = True
+        if changed:
+            await db.flush()
+        return changed
+
+    async def ensure_chat_anchor(
+        self,
+        db: AsyncSession,
+        entry_id: int,
+        *,
+        start_offset: int,
+        end_offset: int,
+        quote: str,
+        label: str = "",
+    ) -> EntryAnnotation | None:
+        """为对话引用创建或复用预笔记高亮（kind=chat_anchor，不混入正式笔记）。"""
+        entry = await db.get(Entry, entry_id)
+        if not entry:
+            return None
+
+        start = max(0, int(start_offset))
+        end = max(start + 1, int(end_offset))
+        if end - start > 2000:
+            end = start + 2000
+        q = (quote or "").strip()
+        if not q:
+            return None
+        if len(q) > 2000:
+            q = q[:2000]
+
+        label_clean = re.sub(r"\s+", " ", (label or "").strip())[:40]
+        note = f"对话引用｜{label_clean}" if label_clean else "对话引用"
+
+        # 复用同 entry 下同段落锚点（重叠 / 短段被包含 / 相邻），避免一条知识点多条高亮。
+        overlap = await db.execute(
+            select(EntryAnnotation)
+            .where(
+                EntryAnnotation.entry_id == entry_id,
+                EntryAnnotation.kind == "chat_anchor",
+                EntryAnnotation.start_offset < end + 120,
+                EntryAnnotation.end_offset > start - 120,
+            )
+            .order_by(EntryAnnotation.id.desc())
+        )
+        rows = overlap.scalars().all()
+
+        best: EntryAnnotation | None = None
+        best_score = -1.0
+        for cand in rows:
+            cs, ce = int(cand.start_offset), int(cand.end_offset)
+            if not ranges_same_passage(start, end, cs, ce):
+                continue
+            # 优先合并进更长的已有锚点
+            score = float(ce - cs)
+            if score > best_score:
+                best_score = score
+                best = cand
+
+        if best is not None:
+            row = best
+            old_len = int(row.end_offset) - int(row.start_offset)
+            new_len = end - start
+            # 取更长的那一段作为最终高亮；短段并入长段时不缩短
+            if new_len >= old_len:
+                row.start_offset = start
+                row.end_offset = end
+                row.quote = q
+            else:
+                # 长段已存在：只更新标签（若更合适），不动区间
+                pass
+            if label_clean:
+                old_label = (row.note or "").replace("对话引用｜", "").strip()
+                if (not old_label) or (len(label_clean) <= max(len(old_label), 2) + 4):
+                    row.note = note
+            if not (row.color or "").strip():
+                row.color = await self._next_chat_anchor_color(db, entry_id, exclude_id=row.id)
+            row.kind = "chat_anchor"
+            await db.flush()
+            return row
+
+        existing = await db.execute(
+            select(EntryAnnotation)
+            .where(
+                EntryAnnotation.entry_id == entry_id,
+                EntryAnnotation.start_offset == start,
+                EntryAnnotation.kind == "chat_anchor",
+            )
+            .order_by(EntryAnnotation.id.desc())
+            .limit(1)
+        )
+        row = existing.scalar_one_or_none()
+        if row is None:
+            # 兼容旧数据：曾用 note 前缀标记
+            legacy = await db.execute(
+                select(EntryAnnotation)
+                .where(
+                    EntryAnnotation.entry_id == entry_id,
+                    EntryAnnotation.start_offset == start,
+                    EntryAnnotation.note.like("对话引用%"),
+                )
+                .order_by(EntryAnnotation.id.desc())
+                .limit(1)
+            )
+            row = legacy.scalar_one_or_none()
+
+        if row is not None:
+            row.end_offset = end
+            row.quote = q
+            row.note = note
+            if not (row.color or "").strip():
+                row.color = await self._next_chat_anchor_color(db, entry_id, exclude_id=row.id)
+            row.kind = "chat_anchor"
+            await db.flush()
+            return row
+
+        color = await self._next_chat_anchor_color(db, entry_id)
+        row = EntryAnnotation(
+            entry_id=entry_id,
+            start_offset=start,
+            end_offset=end,
+            quote=q,
+            note=note,
+            kind="chat_anchor",
+            color=color,
+        )
+        db.add(row)
+        await db.flush()
+        return row
 
     async def create_annotation(
         self, db: AsyncSession, entry_id: int, payload: AnnotationCreate
@@ -485,6 +722,10 @@ class KnowledgeService:
         if len(quote) > 2000:
             quote = quote[:2000]
 
+        kind = (payload.kind or "note").strip().lower()
+        if kind not in {"note", "chat_anchor"}:
+            kind = "note"
+
         try:
             color = normalize_ann_color(payload.color)
         except ValueError as exc:
@@ -496,9 +737,50 @@ class KnowledgeService:
             end_offset=end,
             quote=quote,
             note=(payload.note or "").strip(),
+            kind=kind,
             color=color,
         )
         db.add(row)
+        await db.commit()
+        await db.refresh(row)
+        return self._ann_out(row)
+
+    async def promote_annotation(
+        self,
+        db: AsyncSession,
+        ann_id: int,
+        payload: AnnotationPromoteIn | None = None,
+    ) -> AnnotationOut:
+        """将对话预笔记确认为正式笔记。"""
+        payload = payload or AnnotationPromoteIn()
+        row = await db.get(EntryAnnotation, ann_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="笔记不存在")
+        kind = (getattr(row, "kind", None) or "note").strip().lower()
+        is_anchor = kind == "chat_anchor" or (row.note or "").startswith("对话引用")
+        if not is_anchor:
+            raise HTTPException(status_code=400, detail="仅对话预笔记可确认加入正式笔记")
+
+        note = (payload.note or "").strip()
+        if not note:
+            # 去掉「对话引用｜」前缀，保留标签作默认笔记名
+            raw = (row.note or "").strip()
+            if raw.startswith("对话引用｜"):
+                note = raw[len("对话引用｜") :].strip()
+            elif raw.startswith("对话引用"):
+                note = ""
+            else:
+                note = raw
+        row.note = note
+        row.kind = "note"
+        if payload.color is not None:
+            try:
+                row.color = normalize_ann_color(payload.color)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        elif (row.color or "").lower() == "#60a5fa":
+            # 预笔记默认蓝 → 正式笔记默认黄，便于区分
+            row.color = "#facc15"
         await db.commit()
         await db.refresh(row)
         return self._ann_out(row)
@@ -516,6 +798,71 @@ class KnowledgeService:
                 row.color = normalize_ann_color(payload.color)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if payload.start_offset is not None or payload.end_offset is not None or payload.quote is not None:
+            start = int(payload.start_offset) if payload.start_offset is not None else int(row.start_offset)
+            end = int(payload.end_offset) if payload.end_offset is not None else int(row.end_offset)
+            if start < 0 or end <= start:
+                raise HTTPException(status_code=400, detail="划选区间无效")
+            if end - start > 2000:
+                end = start + 2000
+            quote = (payload.quote if payload.quote is not None else row.quote or "").strip()
+            if not quote:
+                raise HTTPException(status_code=400, detail="缺少划选原文")
+            if len(quote) > 2000:
+                quote = quote[:2000]
+            row.start_offset = start
+            row.end_offset = end
+            row.quote = quote
+        await db.commit()
+        await db.refresh(row)
+        return self._ann_out(row)
+
+    async def expand_annotation(
+        self,
+        db: AsyncSession,
+        ann_id: int,
+        payload: AnnotationExpandIn | None = None,
+    ) -> AnnotationOut:
+        """手动小步扩/缩高亮区间（一次一句或一行）。"""
+        payload = payload or AnnotationExpandIn()
+        row = await db.get(EntryAnnotation, ann_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="笔记不存在")
+        entry = await db.get(Entry, row.entry_id)
+        if not entry:
+            raise HTTPException(status_code=404, detail="条目不存在")
+        source = await db.get(Source, entry.source_id) if entry.source_id else None
+        full = read_entry_text(entry, source)
+        if not full:
+            raise HTTPException(status_code=400, detail="找不到原文，无法调整高亮")
+
+        direction = (payload.direction or "after").strip().lower()
+        sentences = max(1, int(payload.sentences or 1))
+        cur_start = int(row.start_offset or 0)
+        cur_end = int(row.end_offset or cur_start + 1)
+
+        if direction in ("shrink_before", "shrink_after"):
+            start, end = step_shrink(
+                full,
+                cur_start,
+                cur_end,
+                direction="before" if direction == "shrink_before" else "after",
+                sentences=sentences,
+            )
+        elif direction in ("before", "after", "both"):
+            start, end = step_expand(full, cur_start, cur_end, direction=direction, sentences=sentences)
+        else:
+            raise HTTPException(status_code=400, detail="direction 无效")
+
+        if end <= start:
+            raise HTTPException(status_code=400, detail="不能再收缩了")
+        if end - start > 2000:
+            # 以原起点为优先保留
+            end = start + 2000
+        quote = full[start:end]
+        row.start_offset = start
+        row.end_offset = end
+        row.quote = quote
         await db.commit()
         await db.refresh(row)
         return self._ann_out(row)

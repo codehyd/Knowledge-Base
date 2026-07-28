@@ -40,6 +40,16 @@ function sourceTypeLabel(type?: string) {
   }
 }
 
+const LIST_TAG_LIMIT = 4;
+
+function visibleTags(names: string[], limit = LIST_TAG_LIMIT) {
+  const cleaned = (names || []).map((n) => n.trim()).filter(Boolean);
+  return {
+    shown: cleaned.slice(0, limit),
+    more: Math.max(0, cleaned.length - limit),
+  };
+}
+
 function formatDate(value?: string | null) {
   if (!value) return "";
   const d = new Date(value);
@@ -313,8 +323,10 @@ export function KnowledgePage() {
                     }`}
                     onClick={() => setSelectedId(item.id)}
                   >
-                    <strong>{item.title || `条目 #${item.id}`}</strong>
-                    <p>{item.summary || "暂无摘要"}</p>
+                    <strong title={item.title || `条目 #${item.id}`}>
+                      {item.title || `条目 #${item.id}`}
+                    </strong>
+                    <p title={item.summary || undefined}>{item.summary || "暂无摘要"}</p>
                     <div className={styles.listMeta}>
                       {sourceTypeLabel(item.source_type) ? (
                         <Tag
@@ -328,10 +340,24 @@ export function KnowledgePage() {
                           {sourceTypeLabel(item.source_type)}
                         </Tag>
                       ) : null}
-                      {item.categories.map((name) => (
-                        <Tag key={name}>{name}</Tag>
-                      ))}
-                      <span>{formatDate(item.created_at)}</span>
+                      {(() => {
+                        const { shown, more } = visibleTags(item.categories);
+                        return (
+                          <>
+                            {shown.map((name) => (
+                              <Tag key={name} title={name}>
+                                {name}
+                              </Tag>
+                            ))}
+                            {more > 0 ? (
+                              <span className={styles.listMetaMore} title={item.categories.join("、")}>
+                                +{more}
+                              </span>
+                            ) : null}
+                          </>
+                        );
+                      })()}
+                      <span className={styles.listMetaDate}>{formatDate(item.created_at)}</span>
                     </div>
                   </button>
                   <Popconfirm
@@ -368,10 +394,10 @@ export function KnowledgePage() {
           ) : detail ? (
             <div className={styles.detailInner}>
               <div className={styles.detailHead}>
-                <h2>{detail.title}</h2>
+                <h2 title={detail.title}>{detail.title}</h2>
                 <div className={styles.detailTags}>
                   {detail.categories.map((name) => (
-                    <Tag key={name} color="processing">
+                    <Tag key={name} color="processing" title={name}>
                       {name}
                     </Tag>
                   ))}

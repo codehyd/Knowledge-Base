@@ -507,7 +507,7 @@ class SourcesService:
         q = (query or "").strip()
         if not q:
             raise HTTPException(status_code=400, detail="请输入搜索词")
-        if len(q) > 80:
+        if len(q) > 120:
             raise HTTPException(status_code=400, detail="搜索词过长")
         text = self._read_extracted_text(row)
         offset = max(0, offset)

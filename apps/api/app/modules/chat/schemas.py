@@ -17,14 +17,28 @@ class ChatCitation(BaseModel):
     title: str = ""
     snippet: str = ""
     score: float = 0.0
+    # 原文绝对字符偏移；-1 表示未知，前端可回退搜索
+    char_offset: int = -1
+    # 适合精确高亮的短句（尽量来自原文连续行，避免换行被压空格）
+    highlight_query: str = ""
+    # 对话预笔记 id；点击出处时优先跳到该高亮，而不是乱搜关键词
+    annotation_id: int | None = None
+    # 知识点短标题（分组展开后展示）
+    point_label: str = ""
 
 
 class ChatOut(BaseModel):
     answer: str
     refused: bool = False
+    # ok=可信作答；suspect=库内有据但存疑；conflict=库内材料明显有问题
+    trust: str = "ok"
+    trust_note: str = ""
     citations: list[ChatCitation] = Field(default_factory=list)
     retrieval: str = "keyword"  # keyword | vector
     session_id: int | None = None
+    # done=已完成；pending=已受理，后台生成中（切页可轮询消息）
+    status: str = "done"
+    pending_message_id: int | None = None
 
 
 class ChatSessionCreate(BaseModel):
@@ -52,6 +66,9 @@ class ChatMessageOut(BaseModel):
     role: str
     content: str
     refused: bool = False
+    trust: str = "ok"
+    trust_note: str = ""
+    status: str = "done"  # done | pending | error
     citations: list[ChatCitation] = Field(default_factory=list)
     created_at: Optional[datetime] = None
 

@@ -51,6 +51,8 @@ class EntryAnnotation(Base):
     end_offset = mapped_column(Integer, default=0)
     quote = mapped_column(Text, default="")
     note = mapped_column(Text, default="")
+    # note=用户笔记；chat_anchor=对话预笔记（默认不混入笔记列表，需确认才升级）
+    kind = mapped_column(String(20), default="note", index=True)
     # yellow | teal | coral | #rrggbb
     color = mapped_column(String(20), default="#facc15")
     created_at = mapped_column(DateTime(timezone=True), server_default=func.now())

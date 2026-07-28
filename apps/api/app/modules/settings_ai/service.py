@@ -62,6 +62,10 @@ class SettingsAiService:
             or "base",
             "asr_cloud_configured": bool(asr_key.strip()),
             "allow_local_audio": bool(getattr(row, "allow_local_audio", False)),
+            "chat_max_tokens": int(getattr(row, "chat_max_tokens", None) or 1200),
+            "quote_refine_max_tokens": int(
+                getattr(row, "quote_refine_max_tokens", None) or 8000
+            ),
         }
 
     async def get(self, db: AsyncSession) -> AiSettingsOut:
@@ -115,6 +119,10 @@ class SettingsAiService:
             row.asr_local_model = payload.asr_local_model.strip() or "base"
         if payload.allow_local_audio is not None:
             row.allow_local_audio = bool(payload.allow_local_audio)
+        if payload.chat_max_tokens is not None:
+            row.chat_max_tokens = int(payload.chat_max_tokens)
+        if payload.quote_refine_max_tokens is not None:
+            row.quote_refine_max_tokens = int(payload.quote_refine_max_tokens)
         await db.commit()
         await db.refresh(row)
         return await self.get(db)

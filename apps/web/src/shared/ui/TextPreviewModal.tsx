@@ -45,6 +45,12 @@ type Props = {
   entryId?: number | null;
   /** 喂养来源 id；优先用于阅读进度键（比 entry 更稳定） */
   sourceId?: number | null;
+  /** 打开时自动搜索并跳到首个命中（对话引用定位） */
+  initialQuery?: string;
+  /** 已知原文偏移时优先按偏移打开并高亮（比纯搜索稳，尤其视频转写） */
+  initialOffset?: number | null;
+  /** 对话预笔记：打开后直接跳到该高亮 */
+  initialAnnotationId?: number | null;
 };
 
 const WINDOW = 10000;
@@ -144,11 +150,16 @@ const SCROLL_EDGE = 72;
 const PAGE_CHARS = 8000;
 const DEFAULT_COLOR = "#facc15";
 const PRESET_COLORS = [
-  { id: "#facc15", label: "黄" },
-  { id: "#2a6f6a", label: "青" },
-  { id: "#f47c5a", label: "橙" },
   { id: "#60a5fa", label: "蓝" },
+  { id: "#f47c5a", label: "橙" },
+  { id: "#34d399", label: "绿" },
   { id: "#c084fc", label: "紫" },
+  { id: "#facc15", label: "黄" },
+  { id: "#fb7185", label: "玫" },
+  { id: "#2a6f6a", label: "青" },
+  { id: "#f97316", label: "深橙" },
+  { id: "#818cf8", label: "靛" },
+  { id: "#a3e635", label: "黄绿" },
 ] as const;
 
 const LEGACY_COLOR_HEX: Record<string, string> = {
@@ -246,7 +257,15 @@ function collectSearchSpans(
 ): MarkSpan[] {
   const q = query.trim();
   if (!q) return [];
-  const pattern = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+  const parts = q.split(/\s+/).filter(Boolean);
+  if (!parts.length) return [];
+  const pattern =
+    parts.length === 1
+      ? new RegExp(parts[0].replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi")
+      : new RegExp(
+          parts.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s*"),
+          "gi",
+        );
   const spans: MarkSpan[] = [];
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(text)) != null) {
@@ -259,6 +278,8 @@ function collectSearchSpans(
       kind: "search",
       active: activeAbsOffset != null && abs === activeAbsOffset,
     });
+    // 避免零宽匹配死循环
+    if (match[0].length === 0) pattern.lastIndex += 1;
   }
   return spans;
 }
@@ -268,19 +289,26 @@ function collectAnnSpans(
   baseOffset: number,
   annotations: EntryAnnotation[],
   activeAnnId: number | null,
+  editRange?: { start: number; end: number } | null,
+  editColor?: string | null,
 ): MarkSpan[] {
   const winEnd = baseOffset + textLen;
   const spans: MarkSpan[] = [];
   for (const ann of annotations) {
-    const a0 = Math.max(ann.start_offset, baseOffset);
-    const a1 = Math.min(ann.end_offset, winEnd);
+    const useEdit = activeAnnId === ann.id && editRange != null;
+    const rawStart = useEdit ? editRange.start : ann.start_offset;
+    const rawEnd = useEdit ? editRange.end : ann.end_offset;
+    const a0 = Math.max(rawStart, baseOffset);
+    const a1 = Math.min(rawEnd, winEnd);
     if (a1 <= a0) continue;
     spans.push({
       start: a0 - baseOffset,
       end: a1 - baseOffset,
       kind: "ann",
       annId: ann.id,
-      color: normalizeColor(ann.color),
+      color: normalizeColor(
+        activeAnnId === ann.id && editColor ? editColor : ann.color,
+      ),
       active: activeAnnId === ann.id,
     });
   }
@@ -351,10 +379,19 @@ function buildHighlightedHtml(
   annotations: EntryAnnotation[],
   activeAnnId: number | null,
   pending: PendingSel | null,
+  editRange?: { start: number; end: number } | null,
+  editColor?: string | null,
 ) {
   const spans = mergeSpans([
     ...collectSearchSpans(text, baseOffset, query, activeAbsOffset),
-    ...collectAnnSpans(text.length, baseOffset, annotations, activeAnnId),
+    ...collectAnnSpans(
+      text.length,
+      baseOffset,
+      annotations,
+      activeAnnId,
+      editRange,
+      editColor,
+    ),
     ...collectPendingSpan(text.length, baseOffset, pending),
   ]);
   if (!spans.length) return escapeHtml(text);
@@ -365,7 +402,7 @@ function buildHighlightedHtml(
     if (span.start > last) html += escapeHtml(text.slice(last, span.start));
     const chunk = escapeHtml(text.slice(span.start, span.end));
     if (span.kind === "ann" || span.kind === "pending") {
-      const bg = hexToRgba(span.color, 0.42);
+      const bg = hexToRgba(normalizeColor(span.color), 0.42);
       const activeCls = span.active ? ` ${styles.annActive}` : "";
       const pendingCls = span.kind === "pending" ? ` ${styles.annPending}` : "";
       const annAttr =
@@ -417,6 +454,17 @@ function formatTime(value?: string | null) {
   });
 }
 
+function isChatAnchor(ann: EntryAnnotation) {
+  return ann.kind === "chat_anchor" || (ann.note || "").startsWith("对话引用");
+}
+
+function anchorLabel(ann: EntryAnnotation) {
+  const n = (ann.note || "").trim();
+  if (n.startsWith("对话引用｜")) return n.slice("对话引用｜".length).trim() || "对话定位";
+  if (n.startsWith("对话引用")) return n.replace(/^对话引用｜?/, "").trim() || "对话定位";
+  return n || "对话定位";
+}
+
 export function TextPreviewModal({
   open,
   title,
@@ -425,6 +473,9 @@ export function TextPreviewModal({
   searchAll,
   entryId = null,
   sourceId = null,
+  initialQuery = "",
+  initialOffset = null,
+  initialAnnotationId = null,
 }: Props) {
   const { message } = App.useApp();
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -456,6 +507,7 @@ export function TextPreviewModal({
   const [totalPages, setTotalPages] = useState(1);
 
   const [annotations, setAnnotations] = useState<EntryAnnotation[]>([]);
+  const [noteTab, setNoteTab] = useState<"note" | "anchor">("note");
   const [activeAnnId, setActiveAnnId] = useState<number | null>(null);
   const [pendingSel, setPendingSel] = useState<PendingSel | null>(null);
   const [draftOpen, setDraftOpen] = useState(false);
@@ -469,6 +521,13 @@ export function TextPreviewModal({
   const [editAnn, setEditAnn] = useState<EntryAnnotation | null>(null);
   const [editNote, setEditNote] = useState("");
   const [editColor, setEditColor] = useState(DEFAULT_COLOR);
+  const [editRange, setEditRange] = useState<{
+    start: number;
+    end: number;
+    quote: string;
+  } | null>(null);
+  const editOpenRef = useRef(false);
+  editOpenRef.current = editOpen;
   const [fontSize, setFontSize] = useState(() => readStoredFontSize());
   const [fontWeight, setFontWeight] = useState(() => readStoredFontWeight());
 
@@ -680,8 +739,16 @@ export function TextPreviewModal({
             const mark = el.querySelector(
               `mark[data-abs="${options.highlightOffset}"]`,
             ) as HTMLElement | null;
-            mark?.scrollIntoView({ block: "center", behavior: "smooth" });
-            updatePageByScroll();
+            if (mark) {
+              mark.scrollIntoView({ block: "center", behavior: "smooth" });
+              updatePageByScroll();
+              return;
+            }
+            if (options.anchorChar != null) {
+              settleAnchorScroll(el, res.text.length, res.offset, options.anchorChar);
+              return;
+            }
+            settleAnchorScroll(el, res.text.length, res.offset, options.highlightOffset);
             return;
           }
 
@@ -742,18 +809,142 @@ export function TextPreviewModal({
     setDraftSel(null);
     setActiveAnnId(null);
 
-    const saved = readStoredProgress(key);
-    lastProgressRef.current = saved;
-    if (saved > 0) {
-      beginResumeGuard();
-      // 让目标落在窗口前半段，便于精确定位到视口顶部附近
-      const windowStart = Math.max(0, saved - Math.floor(WINDOW / 4));
-      setResumedHint(true);
-      void loadAt(windowStart, { preserve: "anchor", anchorChar: saved });
-      window.setTimeout(() => setResumedHint(false), 3200);
-    } else {
+    const focusQ = (initialQuery || "").replace(/…/g, " ").replace(/\s+/g, " ").trim();
+    const focusOffset =
+      initialOffset != null && Number.isFinite(initialOffset) && initialOffset >= 0
+        ? Math.floor(initialOffset)
+        : null;
+    const focusAnnId =
+      initialAnnotationId != null &&
+      Number.isFinite(initialAnnotationId) &&
+      initialAnnotationId > 0
+        ? Math.floor(initialAnnotationId)
+        : null;
+
+    if (focusAnnId != null || focusOffset != null || focusQ) {
+      // 对话引用：预笔记高亮 > 偏移 > 搜索；不恢复上次阅读进度
       suppressProgressRef.current = false;
-      void loadAt(0, { preserve: "top" });
+      if (focusQ) setQuery(focusQ);
+      void (async () => {
+        setSearching(true);
+        try {
+          if (focusAnnId != null && notesEnabled && entryId != null) {
+            try {
+              const res = await api.listAnnotations(entryId);
+              const items = res.items || [];
+              setAnnotations(items);
+              const ann = items.find((a) => a.id === focusAnnId);
+              if (ann) {
+                setActiveAnnId(ann.id);
+                setNoteTab(isChatAnchor(ann) ? "anchor" : "note");
+                await jumpToAnnotation(ann);
+                return;
+              }
+            } catch {
+              /* 回退到偏移/搜索 */
+            }
+          }
+
+          if (focusOffset != null) {
+            const q = focusQ;
+            if (q) {
+              setActiveQuery(q);
+              setQuery(q);
+            }
+            await loadAt(Math.max(0, focusOffset - PAD), {
+              highlightOffset: q ? focusOffset : undefined,
+              highlightQuery: q || undefined,
+              preserve: q ? "none" : "anchor",
+              anchorChar: focusOffset,
+            });
+            if (q) {
+              const res = await searchAll(q, { offset: 0, limit: PAGE_SIZE });
+              setHits(res.hits);
+              setHitTotal(res.total);
+              setPageOffset(res.offset);
+              setActiveQuery(q);
+              if (res.hits.length) {
+                const near =
+                  res.hits.find((h) => Math.abs(h.offset - focusOffset) <= 120) ||
+                  res.hits[0];
+                const idx = Math.max(0, res.hits.indexOf(near));
+                setLocalIndex(idx);
+                if (Math.abs(near.offset - focusOffset) > 12) {
+                  await loadAt(Math.max(0, near.offset - PAD), {
+                    highlightOffset: near.offset,
+                    highlightQuery: q,
+                    preserve: "none",
+                  });
+                }
+              }
+            }
+            return;
+          }
+
+          let q = focusQ;
+          let res = await searchAll(q, { offset: 0, limit: PAGE_SIZE });
+          if (!res.hits.length && q.length > 16) {
+            for (const len of [48, 36, 24, 16, 10]) {
+              if (q.length <= len) continue;
+              q = focusQ.slice(0, len).trim();
+              if (q.length < 2) break;
+              res = await searchAll(q, { offset: 0, limit: PAGE_SIZE });
+              if (res.hits.length) break;
+            }
+          }
+          if (!res.hits.length) {
+            const parts = focusQ
+              .split(/\s+/)
+              .map((p) => p.trim())
+              .filter((p) => p.length >= 4)
+              .sort((a, b) => b.length - a.length);
+            for (const part of parts.slice(0, 5)) {
+              const probe = part.slice(0, 60);
+              res = await searchAll(probe, { offset: 0, limit: PAGE_SIZE });
+              if (res.hits.length) {
+                q = probe;
+                break;
+              }
+            }
+          }
+          setHits(res.hits);
+          setHitTotal(res.total);
+          setPageOffset(res.offset);
+          setActiveQuery(q);
+          setQuery(q);
+          if (!res.hits.length) {
+            setLocalIndex(-1);
+            await loadAt(0, { preserve: "top", highlightQuery: q });
+            message.warning("未能定位到引用原文，已打开全文，可在上方搜索框改关键词");
+            return;
+          }
+          const hit = res.hits[0];
+          setLocalIndex(0);
+          await loadAt(Math.max(0, hit.offset - PAD), {
+            highlightOffset: hit.offset,
+            highlightQuery: q,
+            preserve: "none",
+          });
+        } catch (err) {
+          message.error(formatError(err, "定位引用失败"));
+          void loadAt(0, { preserve: "top" });
+        } finally {
+          setSearching(false);
+        }
+      })();
+    } else {
+      const saved = readStoredProgress(key);
+      lastProgressRef.current = saved;
+      if (saved > 0) {
+        beginResumeGuard();
+        const windowStart = Math.max(0, saved - Math.floor(WINDOW / 4));
+        setResumedHint(true);
+        void loadAt(windowStart, { preserve: "anchor", anchorChar: saved });
+        window.setTimeout(() => setResumedHint(false), 3200);
+      } else {
+        suppressProgressRef.current = false;
+        void loadAt(0, { preserve: "top" });
+      }
     }
 
     if (notesEnabled) {
@@ -779,7 +970,7 @@ export function TextPreviewModal({
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, entryId, sourceId]);
+  }, [open, entryId, sourceId, initialQuery, initialOffset, initialAnnotationId]);
 
   useEffect(() => {
     if (!pendingSel || draftOpen) return;
@@ -818,6 +1009,18 @@ export function TextPreviewModal({
     if (!notesEnabled || !bodyRef.current) return;
     const target = e.target as HTMLElement;
     if (target.closest?.("[data-sel-popup]")) return;
+
+    // 编辑笔记时：在正文重新划选 = 重定高亮范围
+    if (editOpenRef.current) {
+      const sel = getSelectionOffsets(bodyRef.current, baseOffsetRef.current);
+      if (!sel) return;
+      ignoreDismissUntilRef.current = Date.now() + 350;
+      setEditRange({ start: sel.start, end: sel.end, quote: sel.quote });
+      window.getSelection()?.removeAllRanges();
+      message.success("已更新划选范围，点保存生效");
+      return;
+    }
+
     if (target.closest?.(`mark[data-ann-id]`)) return;
 
     const sel = getSelectionOffsets(bodyRef.current, baseOffsetRef.current);
@@ -837,6 +1040,7 @@ export function TextPreviewModal({
   }
 
   function onBodyClick(e: ReactMouseEvent) {
+    if (editOpenRef.current) return;
     const target = e.target as HTMLElement;
     if (target.closest?.("[data-sel-popup]")) return;
     const mark = target.closest?.("mark[data-ann-id]") as HTMLElement | null;
@@ -854,9 +1058,12 @@ export function TextPreviewModal({
   function openAnnotationDetail(ann: EntryAnnotation) {
     clearPendingSel();
     setActiveAnnId(ann.id);
+    setNoteTab(isChatAnchor(ann) ? "anchor" : "note");
     setEditAnn(ann);
-    setEditNote(ann.note || "");
+    // 预笔记编辑框默认给干净标签，而不是「对话引用｜xxx」
+    setEditNote(isChatAnchor(ann) ? anchorLabel(ann) : ann.note || "");
     setEditColor(normalizeColor(ann.color));
+    setEditRange(null);
     setEditOpen(true);
   }
 
@@ -941,8 +1148,10 @@ export function TextPreviewModal({
         quote: payload.quote,
         note: payload.note,
         color: normalizeColor(payload.color),
+        kind: "note",
       });
       await refreshAnnotations();
+      setNoteTab("note");
       message.success(payload.note ? "笔记已保存" : "已高亮");
       setDraftOpen(false);
       setDraftSel(null);
@@ -954,18 +1163,59 @@ export function TextPreviewModal({
     }
   }
 
+  async function promoteAnn() {
+    if (!editAnn || !isChatAnchor(editAnn)) return;
+    setSaving(true);
+    try {
+      await api.promoteAnnotation(editAnn.id, {
+        note: editNote.trim(),
+        color: normalizeColor(editColor),
+      });
+      await refreshAnnotations();
+      setNoteTab("note");
+      setEditOpen(false);
+      setEditAnn(null);
+      message.success("已加入正式笔记");
+    } catch (err) {
+      message.error(formatError(err, "加入笔记失败"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function saveEdit() {
     if (!editAnn) return;
     setSaving(true);
     try {
-      await api.updateAnnotation(editAnn.id, {
-        note: editNote,
+      const body: {
+        note?: string;
+        color?: string;
+        start_offset?: number;
+        end_offset?: number;
+        quote?: string;
+      } = {
         color: normalizeColor(editColor),
-      });
+      };
+      if (isChatAnchor(editAnn)) {
+        const label = editNote.trim() || anchorLabel(editAnn);
+        body.note = label ? `对话引用｜${label}` : "对话引用";
+      } else {
+        body.note = editNote;
+      }
+      if (editRange) {
+        body.start_offset = editRange.start;
+        body.end_offset = editRange.end;
+        body.quote = editRange.quote;
+      }
+      const updated = await api.updateAnnotation(editAnn.id, body);
       await refreshAnnotations();
-      message.success("已更新");
-      setEditOpen(false);
-      setEditAnn(null);
+      setEditAnn(updated);
+      setEditRange(null);
+      message.success("已保存");
+      if (!isChatAnchor(updated)) {
+        setEditOpen(false);
+        setEditAnn(null);
+      }
     } catch (err) {
       message.error(formatError(err, "更新失败"));
     } finally {
@@ -988,6 +1238,7 @@ export function TextPreviewModal({
 
   async function jumpToAnnotation(ann: EntryAnnotation) {
     setActiveAnnId(ann.id);
+    setNoteTab(isChatAnchor(ann) ? "anchor" : "note");
     const windowStart = Math.max(0, ann.start_offset - PAD);
     if (
       ann.start_offset >= baseOffsetRef.current &&
@@ -1092,6 +1343,10 @@ export function TextPreviewModal({
     }
   }
 
+  const userNotes = annotations.filter((a) => !isChatAnchor(a));
+  const chatAnchors = annotations.filter((a) => isChatAnchor(a));
+  const paneNotes = noteTab === "anchor" ? chatAnchors : userNotes;
+
   const html = buildHighlightedHtml(
     segment,
     baseOffset,
@@ -1100,6 +1355,8 @@ export function TextPreviewModal({
     annotations,
     activeAnnId,
     pendingSel,
+    editOpen ? editRange : null,
+    editOpen ? editColor : null,
   );
 
   const endPos = baseOffset + segment.length;
@@ -1196,7 +1453,8 @@ export function TextPreviewModal({
             第 {currentPage} / {totalPages} 页
           </span>
           共 {charCount.toLocaleString()} 字
-          {notesEnabled ? ` · 笔记 ${annotations.length}` : ""}
+          {notesEnabled ? ` · 笔记 ${userNotes.length}` : ""}
+          {notesEnabled && chatAnchors.length > 0 ? ` · 预笔记 ${chatAnchors.length}` : ""}
           {resumedHint ? " · 已回到上次阅读位置" : ""}
           {loading ? " · 加载中…" : ""}
         </Typography.Paragraph>
@@ -1235,19 +1493,39 @@ export function TextPreviewModal({
           {notesEnabled && (
             <aside className={styles.notePane} onScroll={dismissPendingIfIdle}>
               <div className={styles.notePaneHead}>
-                <HighlightOutlined /> 笔记 ({annotations.length})
+                <HighlightOutlined /> 标注
               </div>
-              {annotations.length === 0 ? (
-                <p className={styles.noteEmpty}>划选正文即可添加高亮或笔记</p>
+              <div className={styles.noteTabs}>
+                <button
+                  type="button"
+                  className={`${styles.noteTab}${noteTab === "note" ? ` ${styles.noteTabActive}` : ""}`}
+                  onClick={() => setNoteTab("note")}
+                >
+                  我的笔记 ({userNotes.length})
+                </button>
+                <button
+                  type="button"
+                  className={`${styles.noteTab}${noteTab === "anchor" ? ` ${styles.noteTabActive}` : ""}`}
+                  onClick={() => setNoteTab("anchor")}
+                >
+                  对话预笔记 ({chatAnchors.length})
+                </button>
+              </div>
+              {paneNotes.length === 0 ? (
+                <p className={styles.noteEmpty}>
+                  {noteTab === "anchor"
+                    ? "对话引用定位会出现在这里；确认后才会进入「我的笔记」。"
+                    : "划选正文即可添加高亮或笔记"}
+                </p>
               ) : (
                 <ul className={styles.noteList}>
-                  {annotations.map((ann) => (
+                  {paneNotes.map((ann) => (
                     <li key={ann.id}>
                       <button
                         type="button"
                         className={`${styles.noteItem}${
                           activeAnnId === ann.id ? ` ${styles.noteItemActive}` : ""
-                        }`}
+                        }${isChatAnchor(ann) ? ` ${styles.noteItemAnchor}` : ""}`}
                         onClick={() => void focusAnnotation(ann)}
                       >
                         <span
@@ -1255,9 +1533,25 @@ export function TextPreviewModal({
                           style={{ background: normalizeColor(ann.color) }}
                         />
                         <div className={styles.noteBody}>
-                          <strong>{ann.quote.slice(0, 48)}{ann.quote.length > 48 ? "…" : ""}</strong>
-                          {ann.note ? <p>{ann.note}</p> : <p className={styles.noteMuted}>仅高亮</p>}
-                          <em>{formatTime(ann.created_at)}</em>
+                          {isChatAnchor(ann) ? (
+                            <>
+                              <strong>{anchorLabel(ann)}</strong>
+                              <p className={styles.noteMuted}>
+                                {ann.quote.slice(0, 48)}
+                                {ann.quote.length > 48 ? "…" : ""}
+                              </p>
+                              <em>预笔记 · 需确认才加入正式笔记</em>
+                            </>
+                          ) : (
+                            <>
+                              <strong>
+                                {ann.quote.slice(0, 48)}
+                                {ann.quote.length > 48 ? "…" : ""}
+                              </strong>
+                              {ann.note ? <p>{ann.note}</p> : <p className={styles.noteMuted}>仅高亮</p>}
+                              <em>{formatTime(ann.created_at)}</em>
+                            </>
+                          )}
                         </div>
                       </button>
                     </li>
@@ -1355,36 +1649,84 @@ export function TextPreviewModal({
       </Modal>
 
       <Modal
-        title="笔记详情"
+        title={editAnn && isChatAnchor(editAnn) ? "对话预笔记" : "笔记详情"}
         open={editOpen}
         onCancel={() => {
           setEditOpen(false);
           setEditAnn(null);
+          setEditRange(null);
         }}
+        width={640}
         footer={
-          <Space>
-            <Popconfirm title="确定删除这条笔记？" onConfirm={() => editAnn && void removeAnn(editAnn.id)}>
+          <Space wrap>
+            <Popconfirm
+              title={editAnn && isChatAnchor(editAnn) ? "确定删除这条预笔记？" : "确定删除这条笔记？"}
+              onConfirm={() => editAnn && void removeAnn(editAnn.id)}
+            >
               <Button danger icon={<DeleteOutlined />}>
                 删除
               </Button>
             </Popconfirm>
-            <Button onClick={() => setEditOpen(false)}>取消</Button>
-            <Button type="primary" icon={<EditOutlined />} loading={saving} onClick={() => void saveEdit()}>
+            <Button
+              onClick={() => {
+                setEditOpen(false);
+                setEditAnn(null);
+                setEditRange(null);
+              }}
+            >
+              取消
+            </Button>
+            <Button loading={saving} onClick={() => void saveEdit()}>
               保存
             </Button>
+            {editAnn && isChatAnchor(editAnn) ? (
+              <>
+                <Popconfirm
+                  title="确认加入正式笔记？"
+                  description="加入后会出现在「我的笔记」，可随时再编辑。"
+                  okText="确认加入"
+                  cancelText="再想想"
+                  onConfirm={() => void promoteAnn()}
+                >
+                  <Button type="primary" loading={saving}>
+                    加入正式笔记
+                  </Button>
+                </Popconfirm>
+              </>
+            ) : (
+              <Button type="primary" icon={<EditOutlined />} loading={saving} onClick={() => void saveEdit()}>
+                保存并关闭
+              </Button>
+            )}
           </Space>
         }
         destroyOnHidden
       >
         <Typography.Paragraph type="secondary" className={styles.quoteBox}>
-          {editAnn?.quote}
+          {editRange?.quote ?? editAnn?.quote}
         </Typography.Paragraph>
+        {editRange ? (
+          <Typography.Paragraph type="success" style={{ marginTop: 0 }}>
+            已用新划选替换范围（未保存）。不满意可在正文再划一次，或点「还原」。
+            <Button type="link" size="small" onClick={() => setEditRange(null)}>
+              还原
+            </Button>
+          </Typography.Paragraph>
+        ) : (
+          <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
+            在左侧/下方正文中直接用鼠标划选一段文字，即可重定高亮范围；也可改颜色后点保存。
+          </Typography.Paragraph>
+        )}
         {renderColorPicker(editColor, setEditColor)}
         <Input.TextArea
           rows={4}
           value={editNote}
           onChange={(e) => setEditNote(e.target.value)}
-          placeholder="批注内容"
+          placeholder={
+            editAnn && isChatAnchor(editAnn)
+              ? "知识点标题（可编辑）"
+              : "批注内容"
+          }
           maxLength={2000}
         />
       </Modal>
