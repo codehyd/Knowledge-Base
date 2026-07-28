@@ -441,9 +441,9 @@ function buildHighlightedHtml(
   editRange?: { start: number; end: number } | null,
   editColor?: string | null,
   showHighlights = true,
+  /** 仅编辑弹窗打开时只画当前条；关闭后恢复全部 */
+  focusActiveOnly = false,
 ) {
-  // 点选某条标注时：只显示该条真实范围+颜色；未选中时显示全部，重叠处打角标
-  const focusActiveOnly = activeAnnId != null;
   const spans = mergeSpans([
     ...collectSearchSpans(text, baseOffset, query, activeAbsOffset),
     ...(showHighlights
@@ -1391,7 +1391,6 @@ export function TextPreviewModal({
     e.preventDefault();
     window.getSelection()?.removeAllRanges();
     clearPendingSel();
-    skipAnnClickRef.current = true;
     setStackPopup(null);
     const id = Number(mark.getAttribute("data-ann-id"));
     if (!id) return;
@@ -1537,6 +1536,7 @@ export function TextPreviewModal({
       setEditAnn(null);
       setEditRange(null);
       setReselectMode(false);
+      setActiveAnnId(null);
       message.success("已加入正式笔记");
     } catch (err) {
       message.error(formatError(err, "加入笔记失败"));
@@ -1577,6 +1577,7 @@ export function TextPreviewModal({
       if (!isChatAnchor(updated)) {
         setEditOpen(false);
         setEditAnn(null);
+        setActiveAnnId(null);
       }
     } catch (err) {
       message.error(formatError(err, "更新失败"));
@@ -1722,6 +1723,8 @@ export function TextPreviewModal({
     editOpen || reselectMode ? editRange : null,
     editOpen || reselectMode ? editColor : null,
     showHighlights,
+    // 只在打开笔记弹窗/重划选时聚焦单条；关闭后立刻恢复全部，不必再点空白
+    activeAnnId != null && (editOpen || reselectMode),
   );
 
   const stackPopupItems = stackPopup
@@ -2107,6 +2110,7 @@ export function TextPreviewModal({
           setEditAnn(null);
           setEditRange(null);
           setReselectMode(false);
+          setActiveAnnId(null);
         }}
         width={640}
         footer={
@@ -2125,6 +2129,7 @@ export function TextPreviewModal({
                 setEditAnn(null);
                 setEditRange(null);
                 setReselectMode(false);
+                setActiveAnnId(null);
               }}
             >
               取消
