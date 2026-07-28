@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>空库 - 求反馈</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;600;700;900&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 1080px; height: 1080px;
+    font-family: 'Noto Sans SC', 'PingFang SC', sans-serif;
+    background: #0a0a0f;
+    padding: 80px 100px;
+    position: relative; overflow: hidden;
+  }
+  .bg-glow {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(circle 400px at 30% 50%, rgba(99,102,241,0.06) 0%, transparent 100%),
+      radial-gradient(circle 300px at 70% 40%, rgba(139,92,246,0.05) 0%, transparent 100%),
+      radial-gradient(circle 250px at 50% 80%, rgba(6,182,212,0.04) 0%, transparent 100%);
+  }
+  .content { position: relative; z-index: 10; }
+  .header {
+    text-align: center; margin-bottom: 48px;
+  }
+  .emoji { font-size: 64px; margin-bottom: 16px; }
+  .title {
+    font-size: 44px; font-weight: 900;
+    background: linear-gradient(135deg, #e0e7ff, #c4b5fd);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text; letter-spacing: 4px;
+  }
+  .subtitle {
+    font-size: 20px; color: #64748b;
+    margin-top: 12px; letter-spacing: 2px;
+  }
+  .question-cards {
+    display: flex; flex-direction: column;
+    gap: 18px; max-width: 760px; margin: 0 auto;
+  }
+  .q-card {
+    display: flex; align-items: flex-start; gap: 18px;
+    padding: 24px 28px;
+    border-radius: 16px;
+    border: 1px solid rgba(255,255,255,0.06);
+    background: rgba(255,255,255,0.02);
+  }
+  .q-num {
+    width: 36px; height: 36px;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; font-weight: 900; color: #818cf8;
+    background: rgba(99,102,241,0.15);
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+  .q-text {
+    font-size: 20px; color: #cbd5e1;
+    line-height: 1.6; letter-spacing: 0.5px;
+  }
+  .q-tag {
+    font-size: 14px; color: #6366f1;
+    letter-spacing: 1px; margin-top: 6px;
+  }
+  .platform-row {
+    display: flex; justify-content: center;
+    gap: 20px; margin-top: 44px;
+  }
+  .platform-tag {
+    padding: 10px 24px;
+    border-radius: 30px;
+    border: 1px solid rgba(99,102,241,0.25);
+    background: rgba(99,102,241,0.06);
+    font-size: 17px; color: #94a3b8;
+    letter-spacing: 1px;
+  }
+  .cta-text {
+    text-align: center; margin-top: 32px;
+    font-size: 18px; color: #475569;
+    letter-spacing: 2px;
+  }
+  .hashtag-row {
+    display: flex; justify-content: center;
+    gap: 14px; margin-top: 20px;
+    flex-wrap: wrap;
+  }
+  .hashtag {
+    font-size: 15px; color: #6366f1;
+    letter-spacing: 1px;
+  }
+</style>
+</head>
+<body>
+  <div class="bg-glow"></div>
+  <div class="content">
+    <div class="header">
+      <div class="emoji">🚀</div>
+      <div class="title">Vibecoding 作品 · 求拍砖</div>
+      <div class="subtitle">用 AI 搓了个桌面知识库，想听听你的意见</div>
+    </div>
+    <div class="question-cards">
+      <div class="q-card">
+        <div class="q-num">1</div>
+        <div class="q-text">这个「空库」的产品方向靠不靠谱？<br/><span class="q-tag">方向验证</span></div>
+      </div>
+      <div class="q-card">
+        <div class="q-num">2</div>
+        <div class="q-text">你会用它装什么资料？最担心的点是什么？<br/><span class="q-tag">用户场景</span></div>
+      </div>
+      <div class="q-card">
+        <div class="q-num">3</div>
+        <div class="q-text">下一版最想补的功能：移动端 / 协作 / 插件？<br/><span class="q-tag">优先级建议</span></div>
+      </div>
+      <div class="q-card">
+        <div class="q-num">4</div>
+        <div class="q-text">开源 vs 卖安装包，你更能接受哪种？<br/><span class="q-tag">商业模式</span></div>
+      </div>
+    </div>
+    <div class="platform-row">
+      <div class="platform-tag">📕 小红书</div>
+      <div class="platform-tag">🐦 Twitter/X</div>
+      <div class="platform-tag">📱 即刻</div>
+    </div>
+    <div class="cta-text">评论区随便喷，建议吐槽都欢迎 🙏</div>
+    <div class="hashtag-row">
+      <span class="hashtag">#Vibecoding</span>
+      <span class="hashtag">#独立开发</span>
+      <span class="hashtag">#知识库</span>
+      <span class="hashtag">#Electron</span>
+      <span class="hashtag">#AI应用</span>
+    </div>
+  </div>
+</body>
+</html>

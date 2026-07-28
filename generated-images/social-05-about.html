@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>空库 - 关于项目</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;600;700;900&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 1080px; height: 1080px;
+    font-family: 'Noto Sans SC', 'PingFang SC', sans-serif;
+    background: #0a0a0f;
+    padding: 72px 100px;
+    position: relative; overflow: hidden;
+  }
+  .bg-glow {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(circle 350px at 20% 30%, rgba(139,92,246,0.06) 0%, transparent 100%),
+      radial-gradient(circle 350px at 80% 70%, rgba(99,102,241,0.05) 0%, transparent 100%);
+  }
+  .grid-bg {
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+  .content { position: relative; z-index: 10; }
+  .header { text-align: center; margin-bottom: 28px; }
+  .badge {
+    display: inline-block; padding: 8px 20px;
+    border-radius: 20px; background: rgba(99,102,241,0.12);
+    border: 1px solid rgba(99,102,241,0.3);
+    font-size: 16px; color: #818cf8;
+    letter-spacing: 3px; font-weight: 600;
+    margin-bottom: 16px;
+  }
+  .title {
+    font-size: 44px; font-weight: 900;
+    color: #e2e8f0; letter-spacing: 4px;
+    margin-bottom: 8px;
+  }
+  .title-gradient {
+    background: linear-gradient(135deg, #6366f1, #8b5cf6, #06b6d4);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .subtitle { font-size: 20px; color: #64748b; letter-spacing: 2px; }
+  .divider {
+    width: 80px; height: 2px;
+    background: linear-gradient(90deg, #6366f1, #8b5cf6);
+    margin: 24px auto; border-radius: 1px;
+  }
+  .stats-row {
+    display: flex; justify-content: center;
+    gap: 48px; margin: 28px 0 40px;
+  }
+  .stat { text-align: center; }
+  .stat-num {
+    font-size: 38px; font-weight: 900;
+    background: linear-gradient(135deg, #e0e7ff, #c4b5fd);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .stat-label { font-size: 15px; color: #475569; margin-top: 4px; letter-spacing: 1px; }
+  .info-cards {
+    display: flex; flex-wrap: wrap;
+    gap: 20px; justify-content: center;
+    max-width: 860px; margin: 0 auto;
+  }
+  .info-card {
+    flex: 0 0 calc(50% - 10px);
+    padding: 22px 24px;
+    border-radius: 14px;
+    border: 1px solid rgba(255,255,255,0.06);
+    background: rgba(255,255,255,0.02);
+    display: flex; align-items: center; gap: 16px;
+  }
+  .info-icon {
+    font-size: 28px; width: 48px; height: 48px;
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .info-card:nth-child(1) .info-icon { background: rgba(99,102,241,0.12); }
+  .info-card:nth-child(2) .info-icon { background: rgba(139,92,246,0.12); }
+  .info-card:nth-child(3) .info-icon { background: rgba(6,182,212,0.12); }
+  .info-card:nth-child(4) .info-icon { background: rgba(34,197,94,0.12); }
+  .info-title { font-size: 17px; font-weight: 700; color: #cbd5e1; margin-bottom: 4px; letter-spacing: 1px; }
+  .info-desc { font-size: 14px; color: #64748b; line-height: 1.5; }
+  .footer {
+    text-align: center; margin-top: 36px;
+    font-size: 16px; color: #475569; letter-spacing: 2px;
+  }
+</style>
+</head>
+<body>
+  <div class="bg-glow"></div>
+  <div class="grid-bg"></div>
+  <div class="content">
+    <div class="header">
+      <div class="badge">VIBECODING PROJECT</div>
+      <div class="title"><span class="title-gradient">空库</span> v0.1.19</div>
+      <div class="subtitle">一个「空」的知识库 — 你喂什么，它才懂什么</div>
+    </div>
+    <div class="divider"></div>
+    <div class="stats-row">
+      <div class="stat">
+        <div class="stat-num">1</div>
+        <div class="stat-label">个人开发者</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num">100%</div>
+        <div class="stat-label">Vibecoding 完成</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num">3</div>
+        <div class="stat-label">平台支持</div>
+      </div>
+    </div>
+    <div class="info-cards">
+      <div class="info-card">
+        <div class="info-icon">🖥️</div>
+        <div>
+          <div class="info-title">技术栈</div>
+          <div class="info-desc">Electron + React + FastAPI + SQLite</div>
+        </div>
+      </div>
+      <div class="info-card">
+        <div class="info-icon">🤖</div>
+        <div>
+          <div class="info-title">AI 模型</div>
+          <div class="info-desc">自备 DeepSeek API Key</div>
+        </div>
+      </div>
+      <div class="info-card">
+        <div class="info-icon">📂</div>
+        <div>
+          <div class="info-title">支持格式</div>
+          <div class="info-desc">PDF / EPUB / TXT / 视频链接</div>
+        </div>
+      </div>
+      <div class="info-card">
+        <div class="info-icon">🎯</div>
+        <div>
+          <div class="info-title">设计哲学</div>
+          <div class="info-desc">本地优先 · 拒答保护 · 认知闭环</div>
+        </div>
+      </div>
+    </div>
+    <div class="footer">用 Vibecoding 从零搭建的个人认知系统</div>
+  </div>
+</body>
+</html>

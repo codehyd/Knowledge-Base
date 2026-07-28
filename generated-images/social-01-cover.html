@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>空库 - 封面</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;700;900&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 1080px; height: 1080px;
+    font-family: 'Noto Sans SC', 'PingFang SC', sans-serif;
+    background: #0a0a0f;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+    position: relative;
+  }
+  .bg {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(ellipse 60% 50% at 50% 40%, rgba(99, 102, 241, 0.12) 0%, transparent 70%),
+      radial-gradient(ellipse 50% 40% at 30% 70%, rgba(139, 92, 246, 0.10) 0%, transparent 70%),
+      radial-gradient(ellipse 50% 40% at 70% 60%, rgba(6, 182, 212, 0.08) 0%, transparent 60%);
+  }
+  .grid {
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+    background-size: 60px 60px;
+    mask-image: radial-gradient(ellipse 70% 70% at 50% 50%, black 30%, transparent 70%);
+  }
+  .content {
+    position: relative; z-index: 10;
+    display: flex; flex-direction: column;
+    align-items: center; gap: 24px;
+    padding: 60px;
+  }
+  .logo-icon {
+    width: 100px; height: 100px;
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #06b6d4 100%);
+    border-radius: 24px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 52px; color: white; font-weight: 900;
+    box-shadow: 0 0 80px rgba(99,102,241,0.4), 0 0 160px rgba(139,92,246,0.2);
+    margin-bottom: 8px;
+    letter-spacing: 2px;
+  }
+  .title {
+    font-size: 96px; font-weight: 900;
+    background: linear-gradient(135deg, #e0e7ff 0%, #c4b5fd 50%, #67e8f9 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+    letter-spacing: 16px;
+    line-height: 1.1;
+  }
+  .subtitle {
+    font-size: 32px; color: #94a3b8;
+    font-weight: 400; letter-spacing: 4px;
+    margin-top: -4px;
+  }
+  .tagline {
+    font-size: 28px; color: #6366f1;
+    font-weight: 700; letter-spacing: 8px;
+    margin-top: 8px;
+    padding: 12px 32px;
+    border: 1px solid rgba(99,102,241,0.3);
+    border-radius: 50px;
+    background: rgba(99,102,241,0.08);
+  }
+  .features-row {
+    display: flex; gap: 40px;
+    margin-top: 32px;
+  }
+  .feature-item {
+    display: flex; flex-direction: column;
+    align-items: center; gap: 8px;
+  }
+  .feature-dot {
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    box-shadow: 0 0 16px rgba(99,102,241,0.6);
+  }
+  .feature-label {
+    font-size: 18px; color: #64748b;
+    letter-spacing: 2px;
+  }
+  .divider {
+    width: 120px; height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(99,102,241,0.5), transparent);
+    margin: 8px 0;
+  }
+  .bottom-text {
+    font-size: 22px; color: #475569;
+    margin-top: 16px;
+    letter-spacing: 3px;
+  }
+</style>
+</head>
+<body>
+  <div class="bg"></div>
+  <div class="grid"></div>
+  <div class="content">
+    <div class="logo-icon">空</div>
+    <div class="title">空 库</div>
+    <div class="subtitle">Personal Knowledge Base</div>
+    <div class="divider"></div>
+    <div class="tagline">你喂什么 · 它才懂什么</div>
+    <div class="features-row">
+      <div class="feature-item">
+        <div class="feature-dot"></div>
+        <div class="feature-label">喂养投递</div>
+      </div>
+      <div class="feature-item">
+        <div class="feature-dot"></div>
+        <div class="feature-label">知识对话</div>
+      </div>
+      <div class="feature-item">
+        <div class="feature-dot"></div>
+        <div class="feature-label">拒答保护</div>
+      </div>
+    </div>
+    <div class="bottom-text">Vibecoding · Electron · DeepSeek</div>
+  </div>
+</body>
+</html>

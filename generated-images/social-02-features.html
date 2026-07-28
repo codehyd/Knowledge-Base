@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>空库 - 核心功能</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;600;700;900&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 1080px; height: 1080px;
+    font-family: 'Noto Sans SC', 'PingFang SC', sans-serif;
+    background: #0a0a0f;
+    padding: 80px 90px;
+    position: relative;
+    overflow: hidden;
+  }
+  .bg-glow {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(circle 300px at 15% 20%, rgba(99,102,241,0.08) 0%, transparent 100%),
+      radial-gradient(circle 300px at 85% 80%, rgba(139,92,246,0.06) 0%, transparent 100%);
+  }
+  .grid-bg {
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+    background-size: 50px 50px;
+    mask-image: radial-gradient(ellipse 60% 60% at 50% 50%, black 40%, transparent 80%);
+  }
+  .content { position: relative; z-index: 10; }
+  .section-header {
+    text-align: center; margin-bottom: 52px;
+  }
+  .section-title {
+    font-size: 48px; font-weight: 900;
+    background: linear-gradient(135deg, #e0e7ff, #c4b5fd);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+    letter-spacing: 6px;
+  }
+  .section-subtitle {
+    font-size: 22px; color: #64748b;
+    margin-top: 12px; letter-spacing: 2px;
+  }
+  .cards {
+    display: flex; flex-wrap: wrap;
+    gap: 28px; justify-content: center;
+  }
+  .card {
+    flex: 0 0 calc(50% - 14px);
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 20px; padding: 36px 32px;
+    position: relative; overflow: hidden;
+  }
+  .card::before {
+    content: ''; position: absolute;
+    top: 0; left: 0; right: 0; height: 2px;
+    background: linear-gradient(90deg, #6366f1, #8b5cf6, #06b6d4);
+    opacity: 0.6;
+  }
+  .card-icon {
+    font-size: 36px; margin-bottom: 16px;
+    width: 56px; height: 56px;
+    border-radius: 14px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .card:nth-child(1) .card-icon { background: rgba(99,102,241,0.15); }
+  .card:nth-child(2) .card-icon { background: rgba(139,92,246,0.15); }
+  .card:nth-child(3) .card-icon { background: rgba(6,182,212,0.15); }
+  .card:nth-child(4) .card-icon { background: rgba(34,197,94,0.15); }
+  .card-title {
+    font-size: 26px; font-weight: 700; color: #e2e8f0;
+    margin-bottom: 10px; letter-spacing: 1px;
+  }
+  .card-desc {
+    font-size: 17px; color: #64748b;
+    line-height: 1.7; letter-spacing: 0.5px;
+  }
+  .tag-row {
+    display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap;
+  }
+  .tag {
+    font-size: 13px; padding: 4px 12px;
+    border-radius: 20px; letter-spacing: 1px;
+    background: rgba(99,102,241,0.12);
+    color: #818cf8; border: 1px solid rgba(99,102,241,0.2);
+  }
+  .footer { text-align: center; margin-top: 48px; }
+  .footer-text {
+    font-size: 18px; color: #475569; letter-spacing: 2px;
+  }
+</style>
+</head>
+<body>
+  <div class="bg-glow"></div>
+  <div class="grid-bg"></div>
+  <div class="content">
+    <div class="section-header">
+      <div class="section-title">核心能力</div>
+      <div class="section-subtitle">打造你的专属认知知识库</div>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <div class="card-icon">📥</div>
+        <div class="card-title">智能喂养</div>
+        <div class="card-desc">支持电子书（PDF/EPUB/TXT）、Markdown 笔记、视频链接，自动解析正文，扫描件 OCR 识别</div>
+        <div class="tag-row">
+          <span class="tag">PDF</span><span class="tag">EPUB</span><span class="tag">OCR</span><span class="tag">视频字幕</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-icon">💬</div>
+        <div class="card-title">库内对话</div>
+        <div class="card-desc">基于你喂养的知识精准作答，向量检索 + 关键词匹配，只回答库内已有内容</div>
+        <div class="tag-row">
+          <span class="tag">Embedding</span><span class="tag">RAG</span><span class="tag">DeepSeek</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-icon">🛡️</div>
+        <div class="card-title">拒答机制</div>
+        <div class="card-desc">超出库内范围的提问明确拒绝，不瞎编、不依赖模型通识，确保知识可靠性</div>
+        <div class="tag-row">
+          <span class="tag">防幻觉</span><span class="tag">可信回答</span><span class="tag">白名单</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-icon">🔒</div>
+        <div class="card-title">隐私优先</div>
+        <div class="card-desc">所有数据存于本机 SQLite，API Key 自备，无需 Docker/云服务，资料可随时导出</div>
+        <div class="tag-row">
+          <span class="tag">本地存储</span><span class="tag">自备Key</span><span class="tag">可导出</span>
+        </div>
+      </div>
+    </div>
+    <div class="footer">
+      <div class="footer-text">Electron · React · FastAPI · SQLite</div>
+    </div>
+  </div>
+</body>
+</html>

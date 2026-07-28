@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>空库 - 使用流程</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;600;700;900&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 1080px; height: 1080px;
+    font-family: 'Noto Sans SC', 'PingFang SC', sans-serif;
+    background: #0a0a0f;
+    padding: 72px 90px;
+    position: relative; overflow: hidden;
+  }
+  .bg-glow {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(ellipse 40% 50% at 50% 0%, rgba(99,102,241,0.07) 0%, transparent 100%),
+      radial-gradient(ellipse 40% 50% at 50% 100%, rgba(139,92,246,0.05) 0%, transparent 100%);
+  }
+  .grid-bg {
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+  .content { position: relative; z-index: 10; }
+  .section-header { text-align: center; margin-bottom: 56px; }
+  .section-title {
+    font-size: 48px; font-weight: 900;
+    background: linear-gradient(135deg, #e0e7ff, #c4b5fd);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text; letter-spacing: 6px;
+  }
+  .section-subtitle {
+    font-size: 22px; color: #64748b; margin-top: 10px;
+    letter-spacing: 3px;
+  }
+  .flow {
+    display: flex; align-items: center;
+    justify-content: center; gap: 0;
+    margin: 0 auto; max-width: 900px;
+  }
+  .step {
+    display: flex; flex-direction: column;
+    align-items: center; gap: 14px;
+    text-align: center;
+    flex: 1;
+  }
+  .step-num {
+    width: 48px; height: 48px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px; font-weight: 900; color: white;
+    box-shadow: 0 0 24px rgba(99,102,241,0.3);
+  }
+  .step-icon {
+    width: 72px; height: 72px;
+    border-radius: 18px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 34px;
+  }
+  .step:nth-child(1) .step-icon { background: rgba(99,102,241,0.12); }
+  .step:nth-child(3) .step-icon { background: rgba(139,92,246,0.12); }
+  .step:nth-child(5) .step-icon { background: rgba(6,182,212,0.12); }
+  .step-title {
+    font-size: 22px; font-weight: 700; color: #e2e8f0;
+    letter-spacing: 2px;
+  }
+  .step-desc {
+    font-size: 15px; color: #64748b;
+    line-height: 1.6; letter-spacing: 0.5px;
+  }
+  .arrow {
+    font-size: 28px; color: rgba(99,102,241,0.4);
+    flex: 0 0 auto; margin: 0 8px;
+    padding-bottom: 40px;
+  }
+  .highlight-box {
+    margin: 52px auto 0;
+    max-width: 800px;
+    background: linear-gradient(135deg, rgba(99,102,241,0.08), rgba(139,92,246,0.06));
+    border: 1px solid rgba(99,102,241,0.2);
+    border-radius: 16px; padding: 28px 36px;
+    text-align: center;
+  }
+  .highlight-label {
+    font-size: 16px; color: #6366f1;
+    letter-spacing: 3px; font-weight: 600; margin-bottom: 8px;
+  }
+  .highlight-text {
+    font-size: 24px; font-weight: 700;
+    color: #cbd5e1; line-height: 1.6;
+    letter-spacing: 1px;
+  }
+  .highlight-accent {
+    color: #818cf8;
+  }
+  .footer {
+    text-align: center; margin-top: 36px;
+  }
+  .footer-text {
+    font-size: 16px; color: #475569; letter-spacing: 2px;
+  }
+</style>
+</head>
+<body>
+  <div class="bg-glow"></div>
+  <div class="grid-bg"></div>
+  <div class="content">
+    <div class="section-header">
+      <div class="section-title">使用流程</div>
+      <div class="section-subtitle">简单三步，构建你的认知知识库</div>
+    </div>
+    <div class="flow">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-icon">📤</div>
+        <div class="step-title">喂养投递</div>
+        <div class="step-desc">上传电子书、笔记<br/>链接、视频等资料</div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-icon">🏷️</div>
+        <div class="step-title">归类确认</div>
+        <div class="step-desc">AI 自动打标签<br/>人工审核修改</div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-icon">💬</div>
+        <div class="step-title">知识对话</div>
+        <div class="step-desc">按库内知识作答<br/>超出范围拒答</div>
+      </div>
+    </div>
+    <div class="highlight-box">
+      <div class="highlight-label">✦ 核心理念 ✦</div>
+      <div class="highlight-text">
+        <span class="highlight-accent">你喂什么，它才懂什么</span><br/>
+        超出范围 · 直接拒答 · 不瞎编
+      </div>
+    </div>
+    <div class="footer">
+      <div class="footer-text">桌面端 Electron · Windows / macOS / Linux</div>
+    </div>
+  </div>
+</body>
+</html>
