@@ -5,10 +5,12 @@ import {
   ArrowUpOutlined,
   DeleteOutlined,
   EditOutlined,
+  EyeInvisibleOutlined,
+  EyeOutlined,
   HighlightOutlined,
   SearchOutlined,
 } from "@ant-design/icons";
-import { App, Button, Input, Modal, Popconfirm, Select, Space, Typography } from "antd";
+import { Alert, App, Button, Input, Modal, Popconfirm, Select, Space, Switch, Typography } from "antd";
 import { api, type EntryAnnotation } from "@/shared/api/client";
 import { formatError } from "@/shared/ui/feedback";
 import styles from "./TextPreviewModal.module.css";
@@ -221,6 +223,13 @@ type MarkSpan = {
   annId?: number;
   color?: string;
   active?: boolean;
+  /** 对话预笔记（叠层时正式笔记优先着色） */
+  isAnchor?: boolean;
+  /** 同一位置叠了几条标注 */
+  stackCount?: number;
+  stackIds?: number[];
+  /** 本连续叠层片段是否显示角标（只在开头显示一次） */
+  showBadge?: boolean;
 };
 
 type PendingSel = {
@@ -230,6 +239,7 @@ type PendingSel = {
   end: number;
   quote: string;
   color: string;
+  placeBelow?: boolean;
 };
 
 function calcPageInfo(viewPos: number, totalChars: number) {
@@ -291,10 +301,16 @@ function collectAnnSpans(
   activeAnnId: number | null,
   editRange?: { start: number; end: number } | null,
   editColor?: string | null,
+  /** 选中某条时只画它自己的真实区间与颜色，避免被更长重叠笔记「吞掉」 */
+  focusActiveOnly = false,
 ): MarkSpan[] {
   const winEnd = baseOffset + textLen;
   const spans: MarkSpan[] = [];
-  for (const ann of annotations) {
+  const list =
+    focusActiveOnly && activeAnnId != null
+      ? annotations.filter((a) => a.id === activeAnnId)
+      : annotations;
+  for (const ann of list) {
     const useEdit = activeAnnId === ann.id && editRange != null;
     const rawStart = useEdit ? editRange.start : ann.start_offset;
     const rawEnd = useEdit ? editRange.end : ann.end_offset;
@@ -310,6 +326,7 @@ function collectAnnSpans(
         activeAnnId === ann.id && editColor ? editColor : ann.color,
       ),
       active: activeAnnId === ann.id,
+      isAnchor: isChatAnchor(ann),
     });
   }
   return spans;
@@ -335,7 +352,7 @@ function collectPendingSpan(
   ];
 }
 
-/** 将区间切成不重叠片段；待确认划选 > 笔记 > 搜索 */
+/** 将区间切成不重叠片段；待确认划选 > 笔记 > 搜索。多条笔记重叠时保留主色并记 stack。 */
 function mergeSpans(spans: MarkSpan[]): MarkSpan[] {
   if (!spans.length) return [];
   const points = new Set<number>();
@@ -352,21 +369,63 @@ function mergeSpans(spans: MarkSpan[]): MarkSpan[] {
     const covering = spans.filter((s) => s.start <= a && s.end >= b);
     if (!covering.length) continue;
     const pending = covering.find((s) => s.kind === "pending");
-    const ann = covering.find((s) => s.kind === "ann");
-    const pick = pending ?? ann ?? covering[0];
+    const anns = covering.filter((s) => s.kind === "ann");
+    // 主色：优先当前激活，其次正式笔记，再取第一条
+    const pickAnn =
+      anns.find((s) => s.active) ||
+      anns.find((s) => !s.isAnchor) ||
+      anns[0] ||
+      null;
+    const pick = pending ?? pickAnn ?? covering[0];
+    const stackIds = [
+      ...new Set(anns.map((s) => s.annId).filter((id): id is number => id != null)),
+    ];
+    const stackCount = stackIds.length;
+    const stackKey = stackIds.slice().sort((x, y) => x - y).join(",");
     const last = out[out.length - 1];
-    if (
+    const sameStack =
+      last &&
+      last.end === a &&
+      last.kind === "ann" &&
+      pick.kind === "ann" &&
+      stackCount > 1 &&
+      (last.stackIds || []).join(",") === stackKey;
+    const sameSingle =
       last &&
       last.end === a &&
       last.kind === pick.kind &&
       last.annId === pick.annId &&
       last.color === pick.color &&
-      last.active === pick.active
-    ) {
-      last.end = b;
+      last.active === pick.active &&
+      (last.stackIds || []).join(",") === stackKey;
+    if (sameStack || sameSingle) {
+      last!.end = b;
+      if (sameStack && pick.active) {
+        last!.annId = pick.annId;
+        last!.color = pick.color;
+        last!.active = true;
+        last!.isAnchor = pick.isAnchor;
+      }
     } else {
-      out.push({ ...pick, start: a, end: b });
+      out.push({
+        ...pick,
+        start: a,
+        end: b,
+        stackCount: pick.kind === "ann" ? stackCount : undefined,
+        stackIds: pick.kind === "ann" && stackCount > 1 ? stackIds : undefined,
+        showBadge: false,
+      });
     }
+  }
+  // 同一叠层组只保留一个角标（取最后一段），避免划选切开后出现两个
+  const lastBadgeAt = new Map<string, number>();
+  out.forEach((s, i) => {
+    if (s.kind === "ann" && s.stackIds && s.stackIds.length > 1) {
+      lastBadgeAt.set(s.stackIds.slice().sort((x, y) => x - y).join(","), i);
+    }
+  });
+  for (const idx of lastBadgeAt.values()) {
+    out[idx].showBadge = true;
   }
   return out;
 }
@@ -381,17 +440,23 @@ function buildHighlightedHtml(
   pending: PendingSel | null,
   editRange?: { start: number; end: number } | null,
   editColor?: string | null,
+  showHighlights = true,
 ) {
+  // 点选某条标注时：只显示该条真实范围+颜色；未选中时显示全部，重叠处打角标
+  const focusActiveOnly = activeAnnId != null;
   const spans = mergeSpans([
     ...collectSearchSpans(text, baseOffset, query, activeAbsOffset),
-    ...collectAnnSpans(
-      text.length,
-      baseOffset,
-      annotations,
-      activeAnnId,
-      editRange,
-      editColor,
-    ),
+    ...(showHighlights
+      ? collectAnnSpans(
+          text.length,
+          baseOffset,
+          annotations,
+          activeAnnId,
+          editRange,
+          editColor,
+          focusActiveOnly,
+        )
+      : []),
     ...collectPendingSpan(text.length, baseOffset, pending),
   ]);
   if (!spans.length) return escapeHtml(text);
@@ -405,9 +470,22 @@ function buildHighlightedHtml(
       const bg = hexToRgba(normalizeColor(span.color), 0.42);
       const activeCls = span.active ? ` ${styles.annActive}` : "";
       const pendingCls = span.kind === "pending" ? ` ${styles.annPending}` : "";
+      const stackedCls =
+        span.kind === "ann" && (span.stackCount || 0) > 1 ? ` ${styles.annStacked}` : "";
       const annAttr =
         span.kind === "ann" ? ` data-ann-id="${span.annId}"` : ` data-pending="1"`;
-      html += `<mark class="${styles.ann}${activeCls}${pendingCls}" style="background:${bg}"${annAttr}>${chunk}</mark>`;
+      const stackAttr =
+        span.kind === "ann" && span.stackIds && span.stackIds.length > 1
+          ? ` data-stack-ids="${span.stackIds.join(",")}"`
+          : "";
+      const badge =
+        !focusActiveOnly &&
+        span.showBadge &&
+        span.stackCount &&
+        span.stackCount > 1
+          ? `<sup class="${styles.annBadge}" data-offset-ignore="1" data-count="${span.stackCount}" title="此处有 ${span.stackCount} 条标注" aria-hidden="true"></sup>`
+          : "";
+      html += `<mark class="${styles.ann}${activeCls}${pendingCls}${stackedCls}" style="background:${bg}"${annAttr}${stackAttr}>${chunk}</mark>${badge}`;
     } else {
       const cls = span.active ? `${styles.hit} ${styles.hitActive}` : styles.hit;
       const abs = baseOffset + span.start;
@@ -419,27 +497,201 @@ function buildHighlightedHtml(
   return html;
 }
 
-function getSelectionOffsets(container: HTMLElement, baseOffset: number) {
+function isOffsetIgnoredNode(node: Node, container: HTMLElement): boolean {
+  let el: Element | null =
+    node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
+  while (el && el !== container) {
+    if (el.hasAttribute("data-offset-ignore")) return true;
+    el = el.parentElement;
+  }
+  return false;
+}
+
+/** 把 Range 边界规范到正文文本节点（跳过角标等装饰） */
+function normalizeTextPoint(
+  container: HTMLElement,
+  node: Node,
+  offset: number,
+): { node: Text; offset: number } | null {
+  if (node.nodeType === Node.TEXT_NODE) {
+    if (isOffsetIgnoredNode(node, container)) return null;
+    return { node: node as Text, offset };
+  }
+  const kids = node.childNodes;
+  const probe =
+    offset < kids.length
+      ? kids[offset]
+      : offset > 0
+        ? kids[offset - 1]
+        : null;
+  if (!probe) return null;
+
+  if (offset < kids.length) {
+    // 落在 child 开头：找该子树第一个正文文本
+    if (probe.nodeType === Node.TEXT_NODE && !isOffsetIgnoredNode(probe, container)) {
+      return { node: probe as Text, offset: 0 };
+    }
+    if (probe.nodeType === Node.ELEMENT_NODE && !isOffsetIgnoredNode(probe, container)) {
+      const walker = document.createTreeWalker(probe, NodeFilter.SHOW_TEXT);
+      let t: Node | null;
+      while ((t = walker.nextNode())) {
+        if (!isOffsetIgnoredNode(t, container)) return { node: t as Text, offset: 0 };
+      }
+    }
+    // 跳过 ignore 节点，继续往后找
+    let sib: Node | null = probe.nextSibling;
+    while (sib) {
+      if (sib.nodeType === Node.TEXT_NODE && !isOffsetIgnoredNode(sib, container)) {
+        return { node: sib as Text, offset: 0 };
+      }
+      if (sib.nodeType === Node.ELEMENT_NODE && !isOffsetIgnoredNode(sib, container)) {
+        const walker = document.createTreeWalker(sib, NodeFilter.SHOW_TEXT);
+        let t: Node | null;
+        while ((t = walker.nextNode())) {
+          if (!isOffsetIgnoredNode(t, container)) return { node: t as Text, offset: 0 };
+        }
+      }
+      sib = sib.nextSibling;
+    }
+    return null;
+  }
+
+  // offset === kids.length：落在节点末尾
+  if (probe.nodeType === Node.TEXT_NODE && !isOffsetIgnoredNode(probe, container)) {
+    return { node: probe as Text, offset: (probe.textContent || "").length };
+  }
+  if (probe.nodeType === Node.ELEMENT_NODE && !isOffsetIgnoredNode(probe, container)) {
+    const walker = document.createTreeWalker(probe, NodeFilter.SHOW_TEXT);
+    let last: Text | null = null;
+    let t: Node | null;
+    while ((t = walker.nextNode())) {
+      if (!isOffsetIgnoredNode(t, container)) last = t as Text;
+    }
+    if (last) return { node: last, offset: (last.textContent || "").length };
+  }
+  return null;
+}
+
+function plainOffsetInContainer(
+  container: HTMLElement,
+  node: Node,
+  offset: number,
+): number | null {
+  const point = normalizeTextPoint(container, node, offset);
+  let len = 0;
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  let t: Node | null;
+  while ((t = walker.nextNode())) {
+    if (isOffsetIgnoredNode(t, container)) continue;
+    if (point && t === point.node) {
+      return len + Math.min(point.offset, (t.textContent || "").length);
+    }
+    // 边界落在角标等装饰节点上：取该装饰之前的正文字符数
+    if (
+      !point &&
+      (t === node ||
+        (node.nodeType === Node.ELEMENT_NODE && (node as Element).contains(t)))
+    ) {
+      return len;
+    }
+    if (
+      !point &&
+      node.nodeType === Node.ELEMENT_NODE &&
+      isOffsetIgnoredNode(node, container) &&
+      node.compareDocumentPosition(t) & Node.DOCUMENT_POSITION_FOLLOWING
+    ) {
+      return len;
+    }
+    len += (t.textContent || "").length;
+  }
+  return point ? len : len;
+}
+
+function plainTextOfContainer(container: HTMLElement): string {
+  let s = "";
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  let t: Node | null;
+  while ((t = walker.nextNode())) {
+    if (isOffsetIgnoredNode(t, container)) continue;
+    s += t.textContent || "";
+  }
+  return s;
+}
+
+function getSelectionOffsets(
+  container: HTMLElement,
+  baseOffset: number,
+  pointer?: { x: number; y: number } | null,
+) {
   const sel = window.getSelection();
   if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
   const range = sel.getRangeAt(0);
   if (!container.contains(range.commonAncestorContainer)) return null;
-  const pre = range.cloneRange();
-  pre.selectNodeContents(container);
-  pre.setEnd(range.startContainer, range.startOffset);
-  const startRel = pre.toString().length;
-  const quote = range.toString();
+
+  const startRel = plainOffsetInContainer(container, range.startContainer, range.startOffset);
+  const endRel = plainOffsetInContainer(container, range.endContainer, range.endOffset);
+  if (startRel == null || endRel == null || endRel <= startRel) return null;
+  if (endRel - startRel > 2000) return null;
+
+  const plain = plainTextOfContainer(container);
+  const quote = plain.slice(startRel, endRel);
   if (!quote.trim()) return null;
-  const endRel = startRel + quote.length;
-  if (endRel <= startRel || endRel - startRel > 2000) return null;
-  const rect = range.getBoundingClientRect();
+
+  // 大段划选时整段 boundingRect 顶部可能远在视口外；优先用指针位置 / 末行可见矩形
+  let x = pointer?.x ?? 0;
+  let y = pointer?.y ?? 0;
+  const rects = Array.from(range.getClientRects()).filter((r) => r.width > 0 && r.height > 0);
+  if ((!x && !y) || pointer == null) {
+    const last = rects[rects.length - 1];
+    const first = rects[0];
+    const pick =
+      last && last.bottom > 0 && last.top < window.innerHeight
+        ? last
+        : first && first.bottom > 0 && first.top < window.innerHeight
+          ? first
+          : last || first || range.getBoundingClientRect();
+    x = pick.left + pick.width / 2;
+    y = pick.top;
+  } else if (rects.length) {
+    // 指针附近那一行，避免整段矩形把浮层拉飞
+    let best = rects[rects.length - 1];
+    let bestDist = Infinity;
+    for (const r of rects) {
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      const d = Math.hypot(cx - pointer.x, cy - pointer.y);
+      if (d < bestDist) {
+        bestDist = d;
+        best = r;
+      }
+    }
+    x = pointer.x;
+    y = Math.min(pointer.y, best.top + 4);
+  }
+
+  const pos = clampPopupPos(x, y);
   return {
     start: baseOffset + startRel,
     end: baseOffset + endRel,
     quote,
-    x: rect.left + rect.width / 2,
-    y: rect.top,
+    x: pos.x,
+    y: pos.y,
+    placeBelow: pos.placeBelow,
   };
+}
+
+function clampPopupPos(x: number, y: number) {
+  const margin = 16;
+  const approxW = 360;
+  const approxH = 56;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const cx = Math.min(Math.max(x, margin + approxW / 2), vw - margin - approxW / 2);
+  // 默认浮层在锚点上方；太靠上则改到下方，避免「飞出屏幕」
+  const placeBelow = y < margin + approxH;
+  let cy = placeBelow ? y + 12 : y;
+  cy = Math.min(Math.max(cy, margin), vh - margin);
+  return { x: cx, y: cy, placeBelow };
 }
 
 function formatTime(value?: string | null) {
@@ -526,8 +778,18 @@ export function TextPreviewModal({
     end: number;
     quote: string;
   } | null>(null);
+  /** 关闭编辑弹窗、进入正文划选模式，避免弹窗挡住正文 */
+  const [reselectMode, setReselectMode] = useState(false);
+  const [showHighlights, setShowHighlights] = useState(true);
+  const [stackPopup, setStackPopup] = useState<{
+    x: number;
+    y: number;
+    ids: number[];
+  } | null>(null);
   const editOpenRef = useRef(false);
   editOpenRef.current = editOpen;
+  const reselectModeRef = useRef(false);
+  reselectModeRef.current = reselectMode;
   const [fontSize, setFontSize] = useState(() => readStoredFontSize());
   const [fontWeight, setFontWeight] = useState(() => readStoredFontWeight());
 
@@ -538,6 +800,8 @@ export function TextPreviewModal({
   const draftOpenRef = useRef(false);
   draftOpenRef.current = draftOpen;
   const ignoreDismissUntilRef = useRef(0);
+  /** 刚在高亮上划选完成时，吞掉随后的 click，避免直接打开已有笔记 */
+  const skipAnnClickRef = useRef(false);
 
   function clearPendingSel() {
     setPendingSel(null);
@@ -984,8 +1248,25 @@ export function TextPreviewModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingSel, draftOpen]);
 
+  useEffect(() => {
+    if (!stackPopup) return;
+    function onDocPointerDown(e: PointerEvent) {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest?.("[data-stack-popup]")) return;
+      if (target?.closest?.("mark[data-stack-ids]")) return;
+      setStackPopup(null);
+    }
+    document.addEventListener("pointerdown", onDocPointerDown, true);
+    return () => document.removeEventListener("pointerdown", onDocPointerDown, true);
+  }, [stackPopup]);
+
+  useEffect(() => {
+    if (!showHighlights) setStackPopup(null);
+  }, [showHighlights]);
+
   function onBodyScroll() {
     dismissPendingIfIdle();
+    setStackPopup(null);
     updatePageByScroll();
     scheduleProgressSave();
     const el = bodyRef.current;
@@ -1009,45 +1290,109 @@ export function TextPreviewModal({
     if (!notesEnabled || !bodyRef.current) return;
     const target = e.target as HTMLElement;
     if (target.closest?.("[data-sel-popup]")) return;
+    // 双击第二次 mouseup 常带词选区，不当作划选记笔记
+    if (e.detail >= 2) return;
 
-    // 编辑笔记时：在正文重新划选 = 重定高亮范围
-    if (editOpenRef.current) {
-      const sel = getSelectionOffsets(bodyRef.current, baseOffsetRef.current);
-      if (!sel) return;
+    const pointer = { x: e.clientX, y: e.clientY };
+
+    // 重新划选模式：收下新范围后回到编辑弹窗
+    if (reselectModeRef.current) {
+      const sel = getSelectionOffsets(bodyRef.current, baseOffsetRef.current, pointer);
+      if (!sel) {
+        message.info("请按住鼠标拖选一段文字（不超过 2000 字）");
+        return;
+      }
       ignoreDismissUntilRef.current = Date.now() + 350;
+      skipAnnClickRef.current = true;
       setEditRange({ start: sel.start, end: sel.end, quote: sel.quote });
+      setReselectMode(false);
+      setEditOpen(true);
       window.getSelection()?.removeAllRanges();
-      message.success("已更新划选范围，点保存生效");
+      message.success("范围已更新，确认后点保存");
       return;
     }
 
-    if (target.closest?.(`mark[data-ann-id]`)) return;
+    // 编辑弹窗打开时不在正文划选（会被挡住）；请用「重新划选」
+    if (editOpenRef.current) return;
 
-    const sel = getSelectionOffsets(bodyRef.current, baseOffsetRef.current);
+    // 有真实划选时（含在已有高亮上拖选）优先弹出「高亮/记笔记」，不打开已有笔记
+    const sel = getSelectionOffsets(bodyRef.current, baseOffsetRef.current, pointer);
     if (!sel) return;
 
     ignoreDismissUntilRef.current = Date.now() + 350;
+    skipAnnClickRef.current = true;
+    setStackPopup(null);
     setPendingSel({
-      x: sel.x || e.clientX,
-      y: sel.y || e.clientY,
+      x: sel.x,
+      y: sel.y,
       start: sel.start,
       end: sel.end,
       quote: sel.quote,
       color: normalizeColor(pendingSelRef.current?.color),
+      placeBelow: sel.placeBelow,
     });
     // 用持久预览替代原生选区，避免点浮层时选区消失
     window.getSelection()?.removeAllRanges();
   }
 
   function onBodyClick(e: ReactMouseEvent) {
-    if (editOpenRef.current) return;
+    if (editOpenRef.current || reselectModeRef.current) return;
+    // 划选松手后的 click：只保留记笔记浮层
+    if (skipAnnClickRef.current) {
+      skipAnnClickRef.current = false;
+      return;
+    }
     const target = e.target as HTMLElement;
     if (target.closest?.("[data-sel-popup]")) return;
+    if (target.closest?.("[data-stack-popup]")) return;
     const mark = target.closest?.("mark[data-ann-id]") as HTMLElement | null;
     if (!mark) {
+      setStackPopup(null);
+      setActiveAnnId(null);
       dismissPendingIfIdle();
       return;
     }
+    // 叠层：单击弹出选择列表
+    const stackRaw = mark.getAttribute("data-stack-ids") || "";
+    const stackIds = stackRaw
+      .split(",")
+      .map((s) => Number(s))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    if (stackIds.length > 1) {
+      setStackPopup({
+        x: e.clientX,
+        y: e.clientY,
+        ids: stackIds,
+      });
+      clearPendingSel();
+      return;
+    }
+    // 单层：单击不打开，留给双击（避免和划选冲突）
+    setStackPopup(null);
+  }
+
+  function onBodyDoubleClick(e: ReactMouseEvent) {
+    if (editOpenRef.current || reselectModeRef.current) return;
+    if (!notesEnabled) return;
+    const target = e.target as HTMLElement;
+    if (target.closest?.("[data-sel-popup]")) return;
+    if (target.closest?.("[data-stack-popup]")) return;
+    const mark = target.closest?.("mark[data-ann-id]") as HTMLElement | null;
+    if (!mark) return;
+
+    const stackRaw = mark.getAttribute("data-stack-ids") || "";
+    const stackIds = stackRaw
+      .split(",")
+      .map((s) => Number(s))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    // 叠层仍走单击选择，双击不抢
+    if (stackIds.length > 1) return;
+
+    e.preventDefault();
+    window.getSelection()?.removeAllRanges();
+    clearPendingSel();
+    skipAnnClickRef.current = true;
+    setStackPopup(null);
     const id = Number(mark.getAttribute("data-ann-id"));
     if (!id) return;
     const ann = annotations.find((a) => a.id === id);
@@ -1057,6 +1402,8 @@ export function TextPreviewModal({
 
   function openAnnotationDetail(ann: EntryAnnotation) {
     clearPendingSel();
+    setStackPopup(null);
+    setReselectMode(false);
     setActiveAnnId(ann.id);
     setNoteTab(isChatAnchor(ann) ? "anchor" : "note");
     setEditAnn(ann);
@@ -1065,6 +1412,19 @@ export function TextPreviewModal({
     setEditColor(normalizeColor(ann.color));
     setEditRange(null);
     setEditOpen(true);
+  }
+
+  function beginReselectRange() {
+    if (!editAnn) return;
+    clearPendingSel();
+    setEditOpen(false);
+    setReselectMode(true);
+    message.info("请在正文中拖选新的高亮范围");
+  }
+
+  function cancelReselectMode() {
+    setReselectMode(false);
+    if (editAnn) setEditOpen(true);
   }
 
   function setPendingColor(color: string) {
@@ -1175,6 +1535,8 @@ export function TextPreviewModal({
       setNoteTab("note");
       setEditOpen(false);
       setEditAnn(null);
+      setEditRange(null);
+      setReselectMode(false);
       message.success("已加入正式笔记");
     } catch (err) {
       message.error(formatError(err, "加入笔记失败"));
@@ -1230,6 +1592,8 @@ export function TextPreviewModal({
       if (activeAnnId === id) setActiveAnnId(null);
       setEditOpen(false);
       setEditAnn(null);
+      setEditRange(null);
+      setReselectMode(false);
       message.success("已删除");
     } catch (err) {
       message.error(formatError(err, "删除失败"));
@@ -1355,9 +1719,22 @@ export function TextPreviewModal({
     annotations,
     activeAnnId,
     pendingSel,
-    editOpen ? editRange : null,
-    editOpen ? editColor : null,
+    editOpen || reselectMode ? editRange : null,
+    editOpen || reselectMode ? editColor : null,
+    showHighlights,
   );
+
+  const stackPopupItems = stackPopup
+    ? stackPopup.ids
+        .map((id) => annotations.find((a) => a.id === id))
+        .filter((a): a is EntryAnnotation => a != null)
+        .sort((a, b) => {
+          const ak = isChatAnchor(a) ? 1 : 0;
+          const bk = isChatAnchor(b) ? 1 : 0;
+          if (ak !== bk) return ak - bk;
+          return String(b.created_at || "").localeCompare(String(a.created_at || ""));
+        })
+    : [];
 
   const endPos = baseOffset + segment.length;
   const listStart = pageOffset;
@@ -1376,7 +1753,7 @@ export function TextPreviewModal({
         footer={
           <Space wrap>
             <Typography.Text type="secondary" className={styles.scrollTip}>
-              {notesEnabled ? "划选后选色并确认高亮 · " : ""}
+              {notesEnabled ? "划选记笔记 · 双击高亮查看 · 叠层单击选择 · " : ""}
               滚到顶部/底部可自动加载
               {progressKeyRef.current ? " · 自动记住阅读位置" : ""}
             </Typography.Text>
@@ -1461,6 +1838,20 @@ export function TextPreviewModal({
 
         <div className={notesEnabled ? styles.mainSplit : undefined}>
           <div className={styles.bodyWrap}>
+            {reselectMode ? (
+              <Alert
+                className={styles.reselectBanner}
+                type="info"
+                showIcon
+                message="正在重新划选高亮范围"
+                description="在下方正文中按住鼠标拖选一段文字（最多 2000 字）。松手后会回到编辑窗口。"
+                action={
+                  <Button size="small" onClick={cancelReselectMode}>
+                    取消划选
+                  </Button>
+                }
+              />
+            ) : null}
             {canUp ? (
               <div
                 className={`${styles.edgeHint}${edgeHint === "up" ? ` ${styles.edgeActive}` : ""}`}
@@ -1472,11 +1863,12 @@ export function TextPreviewModal({
             )}
             <div
               ref={bodyRef}
-              className={styles.body}
+              className={`${styles.body}${reselectMode ? ` ${styles.bodyReselect}` : ""}`}
               style={{ fontSize: `${fontSize}px`, fontWeight }}
               onScroll={onBodyScroll}
               onMouseUp={onBodyMouseUp}
               onClick={onBodyClick}
+              onDoubleClick={onBodyDoubleClick}
               dangerouslySetInnerHTML={{ __html: html || "暂无正文" }}
             />
             {canDown ? (
@@ -1493,7 +1885,19 @@ export function TextPreviewModal({
           {notesEnabled && (
             <aside className={styles.notePane} onScroll={dismissPendingIfIdle}>
               <div className={styles.notePaneHead}>
-                <HighlightOutlined /> 标注
+                <span className={styles.notePaneTitle}>
+                  <HighlightOutlined /> 标注
+                </span>
+                <label className={styles.highlightToggle}>
+                  <Switch
+                    size="small"
+                    checked={showHighlights}
+                    onChange={setShowHighlights}
+                    checkedChildren={<EyeOutlined />}
+                    unCheckedChildren={<EyeInvisibleOutlined />}
+                  />
+                  <span>{showHighlights ? "显示高亮" : "隐藏高亮"}</span>
+                </label>
               </div>
               <div className={styles.noteTabs}>
                 <button
@@ -1584,11 +1988,58 @@ export function TextPreviewModal({
         )}
       </Modal>
 
-      {pendingSel && !draftOpen && (
+      {stackPopup && stackPopupItems.length > 0 && (
         <div
-          className={styles.selPopup}
+          className={styles.stackPopup}
+          data-stack-popup="1"
+          style={{
+            left: Math.min(window.innerWidth - 280, Math.max(12, stackPopup.x)),
+            top: Math.min(window.innerHeight - 200, Math.max(12, stackPopup.y + 8)),
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <div className={styles.stackPopupHead}>此处有 {stackPopupItems.length} 条标注</div>
+          <ul className={styles.stackPopupList}>
+            {stackPopupItems.map((ann) => (
+              <li key={ann.id}>
+                <button
+                  type="button"
+                  className={styles.stackPopupItem}
+                  onClick={() => {
+                    setStackPopup(null);
+                    openAnnotationDetail(ann);
+                  }}
+                >
+                  <span
+                    className={styles.noteDot}
+                    style={{ background: normalizeColor(ann.color) }}
+                  />
+                  <span className={styles.stackPopupText}>
+                    <strong>
+                      {isChatAnchor(ann)
+                        ? anchorLabel(ann)
+                        : ann.note?.trim() || "仅高亮"}
+                    </strong>
+                    <em>
+                      {ann.quote.slice(0, 36)}
+                      {ann.quote.length > 36 ? "…" : ""}
+                    </em>
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <Button size="small" type="text" block onClick={() => setStackPopup(null)}>
+            关闭
+          </Button>
+        </div>
+      )}
+
+      {pendingSel && !draftOpen && !reselectMode && !editOpen && (
+        <div
+          className={`${styles.selPopup}${pendingSel.placeBelow ? ` ${styles.selPopupBelow}` : ""}`}
           data-sel-popup="1"
-          style={{ left: pendingSel.x, top: Math.max(12, pendingSel.y - 8) }}
+          style={{ left: pendingSel.x, top: pendingSel.y }}
           onMouseDown={(e) => e.preventDefault()}
         >
           <span className={styles.selPopupLabel}>颜色</span>
@@ -1655,6 +2106,7 @@ export function TextPreviewModal({
           setEditOpen(false);
           setEditAnn(null);
           setEditRange(null);
+          setReselectMode(false);
         }}
         width={640}
         footer={
@@ -1672,6 +2124,7 @@ export function TextPreviewModal({
                 setEditOpen(false);
                 setEditAnn(null);
                 setEditRange(null);
+                setReselectMode(false);
               }}
             >
               取消
@@ -1705,16 +2158,23 @@ export function TextPreviewModal({
         <Typography.Paragraph type="secondary" className={styles.quoteBox}>
           {editRange?.quote ?? editAnn?.quote}
         </Typography.Paragraph>
+        <Space wrap style={{ marginBottom: 12 }}>
+          <Button type="primary" ghost onClick={beginReselectRange}>
+            重新划选范围
+          </Button>
+          {editRange ? (
+            <Button type="link" onClick={() => setEditRange(null)}>
+              还原为原范围
+            </Button>
+          ) : null}
+        </Space>
         {editRange ? (
           <Typography.Paragraph type="success" style={{ marginTop: 0 }}>
-            已用新划选替换范围（未保存）。不满意可在正文再划一次，或点「还原」。
-            <Button type="link" size="small" onClick={() => setEditRange(null)}>
-              还原
-            </Button>
+            已换成新划选（未保存）。确认无误后点「保存」。
           </Typography.Paragraph>
         ) : (
           <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
-            在左侧/下方正文中直接用鼠标划选一段文字，即可重定高亮范围；也可改颜色后点保存。
+            点「重新划选范围」后，编辑窗会先关掉，请在正文里拖选一段文字；松手即回来。也可只改颜色后保存。
           </Typography.Paragraph>
         )}
         {renderColorPicker(editColor, setEditColor)}

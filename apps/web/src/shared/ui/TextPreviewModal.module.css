@@ -171,6 +171,34 @@
   padding: 0 1px;
   border-radius: 2px;
   cursor: pointer;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.annStacked {
+  /* 叠层：底边示意 */
+  box-shadow: inset 0 -2px 0 rgba(31, 41, 51, 0.22);
+}
+
+/* 叠层数量：CSS 生成，不占正文文本，避免划选偏移错位 */
+.annBadge {
+  display: inline-block;
+  margin-left: 3px;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: rgba(71, 85, 105, 0.9);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.35;
+  vertical-align: super;
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+}
+
+.annBadge::after {
+  content: attr(data-count);
 }
 
 .annYellow {
@@ -186,8 +214,84 @@
 }
 
 .annActive {
-  outline: 2px solid rgba(42, 111, 106, 0.55);
-  outline-offset: 1px;
+  /* 避免 outline 把相邻片段切成多个小框 */
+  box-shadow: inset 0 0 0 1.5px rgba(42, 111, 106, 0.5);
+}
+
+.annStacked.annActive {
+  box-shadow:
+    inset 0 0 0 1.5px rgba(42, 111, 106, 0.45),
+    inset 0 -2px 0 rgba(31, 41, 51, 0.22);
+}
+
+.stackPopup {
+  position: fixed;
+  z-index: 1200;
+  width: min(280px, 92vw);
+  padding: 10px;
+  background: #fff;
+  border: 1px solid #e6eaee;
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(31, 41, 51, 0.16);
+}
+
+.stackPopupHead {
+  font-size: 12px;
+  font-weight: 600;
+  color: #1f2937;
+  margin-bottom: 8px;
+}
+
+.stackPopupList {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.stackPopupItem {
+  appearance: none;
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  text-align: left;
+  border: 1px solid #eef2f6;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 8px;
+  cursor: pointer;
+}
+
+.stackPopupItem:hover {
+  border-color: #cbd5e1;
+  background: #fff;
+}
+
+.stackPopupText {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.stackPopupText strong {
+  font-size: 12px;
+  color: #1f2937;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stackPopupText em {
+  font-style: normal;
+  font-size: 11px;
+  color: #64748b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .notePane {
@@ -206,7 +310,25 @@
   color: var(--color-ink, #1f2937);
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.notePaneTitle {
+  display: inline-flex;
+  align-items: center;
   gap: 6px;
+}
+
+.highlightToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #64748b;
+  cursor: pointer;
+  user-select: none;
 }
 
 .noteTabs {
@@ -346,6 +468,22 @@
   border: 1px solid #e6eaee;
   border-radius: 12px;
   box-shadow: 0 10px 28px rgba(31, 41, 51, 0.14);
+  pointer-events: auto;
+}
+
+.selPopupBelow {
+  transform: translate(-50%, 8px);
+}
+
+.reselectBanner {
+  margin: 0 0 8px;
+}
+
+.bodyReselect {
+  outline: 2px dashed rgba(42, 111, 106, 0.45);
+  outline-offset: -2px;
+  border-radius: 8px;
+  cursor: text;
 }
 
 .selPopupLabel {

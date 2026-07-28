@@ -110,6 +110,63 @@ def pick_chat_anchor_color(used: set[str]) -> str:
     return CHAT_ANCHOR_COLORS[len(used_low) % len(CHAT_ANCHOR_COLORS)]
 
 
+def label_from_anchor_note(note: str | None) -> str:
+    raw = (note or "").strip()
+    if raw.startswith("对话引用｜"):
+        return raw[len("对话引用｜") :].strip()
+    if raw.startswith("对话引用"):
+        return raw[len("对话引用") :].lstrip("｜| ").strip()
+    return raw
+
+
+def merge_point_labels(*labels: str, max_len: int = 48) -> str:
+    """把多条知识点标题合成「A · B」；去重，并丢掉被更长标题包含的短词。"""
+    parts: list[str] = []
+    for raw in labels:
+        text = re.sub(r"\s+", " ", (raw or "").strip())
+        if not text:
+            continue
+        for p in re.split(r"[·|/／、,，;；+＋]+", text):
+            p = p.strip()
+            if len(p) < 2:
+                continue
+            parts.append(p)
+
+    # 短的优先，便于后面用更长的覆盖掉被包含的短词
+    parts.sort(key=lambda s: (len(s), s))
+    kept: list[str] = []
+    for p in parts:
+        low = p.lower()
+        # 已被保留项包含 → 跳过
+        if any(low != k.lower() and low in k.lower() for k in kept):
+            continue
+        # 新项包含已保留的短项 → 替换掉短项
+        kept = [k for k in kept if not (k.lower() != low and k.lower() in low)]
+        if not any(k.lower() == low for k in kept):
+            kept.append(p)
+
+    # 展示时短标题在前，更易读
+    kept.sort(key=lambda s: (len(s), s))
+    if not kept:
+        return ""
+    out = " · ".join(kept)
+    if len(out) <= max_len:
+        return out
+    # 超长则尽量多留几项
+    trimmed: list[str] = []
+    for p in kept:
+        cand = " · ".join(trimmed + [p])
+        if len(cand) > max_len:
+            break
+        trimmed.append(p)
+    return " · ".join(trimmed) if trimmed else kept[0][:max_len]
+
+
+def anchor_note_from_label(label: str | None) -> str:
+    clean = re.sub(r"\s+", " ", (label or "").strip())[:48]
+    return f"对话引用｜{clean}" if clean else "对话引用"
+
+
 class AnnotationOut(BaseModel):
     id: int
     entry_id: int

@@ -39,6 +39,7 @@ from app.modules.sources.preview_search import (
     search_text_hits,
 )
 from app.modules.knowledge.passage import expand_to_complete_passage, ranges_same_passage
+from app.modules.knowledge.schemas import label_from_anchor_note, merge_point_labels
 
 TOP_K = 6
 # 关键词：至少命中分数；向量：cosine 相似度下限
@@ -588,9 +589,16 @@ async def _align_citations_with_answer(
                         upd["point_label"] = new_label
                     refined[refined_pos] = refined[refined_pos].model_copy(update=upd)
 
-    # AI 扩段后可能把原本不相交的两段扩成包含关系，再去一次重
+    # AI 扩段后可能把原本不相交的两段扩成包含关系，再去一次重；标题合并成「A · B」
     if pending_ann:
-        keep_keys = _dedupe_pending_by_passage(pending_ann)
+        keep_keys, label_updates = _dedupe_pending_by_passage(pending_ann)
+        for key, merged_label in label_updates.items():
+            meta = pending_ann.get(key)
+            if meta is not None and merged_label:
+                meta["label"] = merged_label
+            rpos = refined_pos_of.get(key)
+            if rpos is not None and 0 <= rpos < len(refined) and merged_label:
+                refined[rpos] = refined[rpos].model_copy(update={"point_label": merged_label})
         drop_keys = [k for k in list(pending_ann.keys()) if k not in keep_keys]
         for k in drop_keys:
             pending_ann.pop(k, None)
@@ -600,7 +608,6 @@ async def _align_citations_with_answer(
         refined = [c for c in refined if c is not None]
         # 重建 refined_pos_of（仅保留仍在 pending 的）
         refined_pos_of = {}
-        # 简化：落库时用 pending 的 key 对 refined 按 entry+offset 匹配
         offset_to_rpos: dict[tuple[int, int], int] = {}
         for j, c in enumerate(refined):
             if c.char_offset is not None and c.char_offset >= 0:
@@ -624,7 +631,12 @@ async def _align_citations_with_answer(
                 )
                 rpos = refined_pos_of.get(i)
                 if ann is not None and ann.id and rpos is not None:
-                    refined[rpos] = refined[rpos].model_copy(update={"annotation_id": int(ann.id)})
+                    # 用落库后的合并标题回填展示
+                    merged_show = label_from_anchor_note(ann.note)
+                    upd: dict[str, object] = {"annotation_id": int(ann.id)}
+                    if merged_show:
+                        upd["point_label"] = merged_show
+                    refined[rpos] = refined[rpos].model_copy(update=upd)
             except Exception:  # noqa: BLE001
                 pass
     return refined
@@ -632,26 +644,45 @@ async def _align_citations_with_answer(
 
 def _dedupe_pending_by_passage(
     pending: dict[int, dict[str, object]],
-) -> set[int]:
-    """同一本书里同段落只留最长的一条。返回保留的 pending key。"""
+) -> tuple[set[int], dict[int, str]]:
+    """同一本书里同段落只留最长的一条，并把被合并项的标题并入。
+
+    返回 (保留的 pending key, {保留key: 合并后标题})。
+    """
     items = sorted(
         pending.items(),
         key=lambda kv: -(int(kv[1]["end"]) - int(kv[1]["start"])),
     )
     kept: list[tuple[int, int, int, int]] = []  # key, entry, start, end
     keep_keys: set[int] = set()
+    absorb: dict[int, list[str]] = {}
     for key, meta in items:
         eid = int(meta["entry_id"])
         s = int(meta["start"])
         e = int(meta["end"])
-        if any(
-            eid == pe and ranges_same_passage(s, e, ps, pe_)
-            for (_, pe, ps, pe_) in kept
-        ):
+        host_key = next(
+            (
+                hk
+                for (hk, pe, ps, pe_) in kept
+                if eid == pe and ranges_same_passage(s, e, ps, pe_)
+            ),
+            None,
+        )
+        if host_key is not None:
+            absorb.setdefault(host_key, []).append(str(meta.get("label") or ""))
             continue
         kept.append((key, eid, s, e))
         keep_keys.add(key)
-    return keep_keys
+
+    label_updates: dict[int, str] = {}
+    for host_key, extras in absorb.items():
+        host_meta = pending.get(host_key)
+        if host_meta is None:
+            continue
+        merged = merge_point_labels(str(host_meta.get("label") or ""), *extras)
+        if merged:
+            label_updates[host_key] = merged
+    return keep_keys, label_updates
 
 
 _STOPWORDS = {

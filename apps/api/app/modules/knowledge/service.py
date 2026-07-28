@@ -26,6 +26,9 @@ from app.modules.knowledge.schemas import (
     EntryPreviewOut,
     MediaItemOut,
     MediaListOut,
+    anchor_note_from_label,
+    label_from_anchor_note,
+    merge_point_labels,
     normalize_ann_color,
     pick_chat_anchor_color,
 )
@@ -537,14 +540,32 @@ class KnowledgeService:
         )
         keep: list[EntryAnnotation] = []
         delete_ids: list[int] = []
+        # keep_id -> labels absorbed from deleted shorts
+        absorb: dict[int, list[str]] = {}
         for row in ordered:
             s, e = int(row.start_offset), int(row.end_offset)
-            if any(ranges_same_passage(s, e, int(k.start_offset), int(k.end_offset)) for k in keep):
+            host = next(
+                (
+                    k
+                    for k in keep
+                    if ranges_same_passage(s, e, int(k.start_offset), int(k.end_offset))
+                ),
+                None,
+            )
+            if host is not None:
                 delete_ids.append(int(row.id))
+                absorb.setdefault(int(host.id), []).append(label_from_anchor_note(row.note))
             else:
                 keep.append(row)
         if not delete_ids:
             return False
+        for host in keep:
+            extras = absorb.get(int(host.id)) or []
+            if not extras:
+                continue
+            merged = merge_point_labels(label_from_anchor_note(host.note), *extras)
+            if merged:
+                host.note = anchor_note_from_label(merged)
         for did in delete_ids:
             victim = await db.get(EntryAnnotation, did)
             if victim is not None:
@@ -604,7 +625,7 @@ class KnowledgeService:
             q = q[:2000]
 
         label_clean = re.sub(r"\s+", " ", (label or "").strip())[:40]
-        note = f"对话引用｜{label_clean}" if label_clean else "对话引用"
+        note = anchor_note_from_label(label_clean)
 
         # 复用同 entry 下同段落锚点（重叠 / 短段被包含 / 相邻），避免一条知识点多条高亮。
         overlap = await db.execute(
@@ -640,13 +661,10 @@ class KnowledgeService:
                 row.start_offset = start
                 row.end_offset = end
                 row.quote = q
-            else:
-                # 长段已存在：只更新标签（若更合适），不动区间
-                pass
-            if label_clean:
-                old_label = (row.note or "").replace("对话引用｜", "").strip()
-                if (not old_label) or (len(label_clean) <= max(len(old_label), 2) + 4):
-                    row.note = note
+            # 合并标题：思维触觉 + 身体直觉 → 思维触觉 · 身体直觉
+            merged = merge_point_labels(label_from_anchor_note(row.note), label_clean)
+            if merged:
+                row.note = anchor_note_from_label(merged)
             if not (row.color or "").strip():
                 row.color = await self._next_chat_anchor_color(db, entry_id, exclude_id=row.id)
             row.kind = "chat_anchor"
