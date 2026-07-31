@@ -54,6 +54,7 @@
 
 .content {
   min-width: 0;
+  overflow: hidden;
 }
 
 .contentHead {
@@ -106,6 +107,8 @@
 .tips {
   display: grid;
   gap: 12px;
+  min-width: 0;
+  align-self: start;
 }
 
 .checklist {
@@ -123,6 +126,14 @@
 
 .libraryTabs {
   margin-top: 4px;
+  min-width: 0;
+}
+
+.libraryTabs :global(.ant-tabs-content-holder),
+.libraryTabs :global(.ant-tabs-content),
+.libraryTabs :global(.ant-tabs-tabpane) {
+  min-width: 0;
+  overflow: hidden;
 }
 
 .libraryTabLabel {
@@ -165,9 +176,18 @@
 }
 
 .libraryItem {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
   padding: 10px 12px;
   border-radius: 8px;
   background: #f7f9f9;
+}
+
+.libraryItemBody {
+  min-width: 0;
+  flex: 1;
 }
 
 .libraryItemTitle {
@@ -175,6 +195,8 @@
   font-size: 14px;
   font-weight: 600;
   color: var(--color-ink);
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .libraryFiles {

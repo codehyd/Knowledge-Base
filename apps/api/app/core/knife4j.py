@@ -37,6 +37,10 @@ OPENAPI_TAGS = [
         "name": "喂养投递",
         "description": "电子书 / 笔记 / 链接投递、正文抽取与解析队列",
     },
+    {
+        "name": "技能 Skill",
+        "description": "自定义 Skill 本地装包 / 启用 / 卸载；事实仍只认库内检索",
+    },
 ]
 
 

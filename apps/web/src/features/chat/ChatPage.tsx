@@ -24,10 +24,12 @@ import { TextPreviewModal } from "@/shared/ui/TextPreviewModal";
 import styles from "./ChatPage.module.css";
 
 const ACTIVE_SESSION_KEY = "kongku.chat.activeSessionId";
-const POLL_MS = 900;
+const POLL_MS = 450;
 
 type TrustLevel = "ok" | "suspect" | "conflict";
 type MsgStatus = "done" | "pending" | "error";
+
+type ProgressStage = "accepted" | "retrieving" | "generating" | "citing" | string;
 
 type Msg = {
   id: string;
@@ -37,8 +39,43 @@ type Msg = {
   trust?: TrustLevel;
   trust_note?: string;
   status?: MsgStatus;
+  progress?: ProgressStage;
   citations?: ChatCitation[];
 };
+
+const PROGRESS_STEPS: { key: ProgressStage; label: string }[] = [
+  { key: "accepted", label: "受理提问" },
+  { key: "retrieving", label: "检索知识库" },
+  { key: "generating", label: "组织回答" },
+  { key: "citing", label: "核对出处" },
+];
+
+function progressIndex(stage?: string | null): number {
+  const i = PROGRESS_STEPS.findIndex((s) => s.key === stage);
+  return i >= 0 ? i : 0;
+}
+
+function progressHintByIndex(idx: number): string {
+  switch (PROGRESS_STEPS[Math.max(0, Math.min(idx, PROGRESS_STEPS.length - 1))]?.key) {
+    case "retrieving":
+      return "正在检索已入库资料…";
+    case "generating":
+      return "已命中资料，正在组织回答（含已启用技能）…";
+    case "citing":
+      return "回答已生成，正在核对出处…";
+    case "accepted":
+    default:
+      return "已收到问题，准备检索…";
+  }
+}
+
+/** 本地软进度：按等待时长推进，避免长时间停在第一步；服务端 progress 只会往前校正 */
+function softProgressIndex(elapsedMs: number): number {
+  if (elapsedMs >= 12_000) return 2; // 模型调用通常最久，停在「组织回答」
+  if (elapsedMs >= 1_200) return 2;
+  if (elapsedMs >= 400) return 1;
+  return 0;
+}
 
 function normalizeTrust(value?: string | null): TrustLevel {
   if (value === "suspect" || value === "conflict") return value;
@@ -59,6 +96,7 @@ function mapMessages(items: ChatMessageItem[]): Msg[] {
     trust: normalizeTrust(m.trust),
     trust_note: m.trust_note || "",
     status: normalizeStatus(m.status),
+    progress: m.progress || "",
     citations: m.citations || [],
   }));
 }
@@ -271,9 +309,13 @@ export function ChatPage() {
   const [previewQuery, setPreviewQuery] = useState("");
   const [previewOffset, setPreviewOffset] = useState<number | null>(null);
   const [previewAnnId, setPreviewAnnId] = useState<number | null>(null);
+  /** 等待中的展示用进度下标（本地软推进 + 服务端校正） */
+  const [displayProgressIdx, setDisplayProgressIdx] = useState(0);
+  const [waitElapsedSec, setWaitElapsedSec] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
   const sessionIdRef = useRef<number | null>(null);
   const pollTokenRef = useRef(0);
+  const pendingSinceRef = useRef<number | null>(null);
 
   useEffect(() => {
     sessionIdRef.current = sessionId;
@@ -312,6 +354,10 @@ export function ChatPage() {
         if (pollTokenRef.current !== token || sessionIdRef.current !== id) return;
         if (!hasPending(next)) {
           await refreshSessions();
+          // 出处精修可能在答案返回后短暂回写，再拉一次以免要点标签偏旧
+          await sleep(1600);
+          if (pollTokenRef.current !== token || sessionIdRef.current !== id) return;
+          await loadMessages(id);
           return;
         }
         await sleep(POLL_MS);
@@ -430,9 +476,22 @@ export function ChatPage() {
 
     setInput("");
     setSending(true);
-    // 本地先插入用户气泡，避免等待 begin 接口的空窗
+    pendingSinceRef.current = Date.now();
+    setDisplayProgressIdx(0);
+    // 本地先插入用户气泡 + pending 助手占位，立刻能看到动向
     const tempUserId = `tmp-u-${Date.now()}`;
-    setMsgs((prev) => [...prev, { id: tempUserId, role: "user", content: text }]);
+    const tempAssistantId = `tmp-a-${Date.now()}`;
+    setMsgs((prev) => [
+      ...prev,
+      { id: tempUserId, role: "user", content: text },
+      {
+        id: tempAssistantId,
+        role: "assistant",
+        content: "",
+        status: "pending",
+        progress: "accepted",
+      },
+    ]);
 
     try {
       const res = await api.chat({
@@ -457,7 +516,7 @@ export function ChatPage() {
     } catch (err) {
       message.error(formatError(err, "发送失败"));
       setMsgs((prev) => [
-        ...prev.filter((m) => m.id !== tempUserId),
+        ...prev.filter((m) => m.id !== tempUserId && m.id !== tempAssistantId),
         {
           id: `err-${Date.now()}`,
           role: "assistant",
@@ -472,6 +531,43 @@ export function ChatPage() {
   }
 
   const waiting = sending || hasPending(msgs);
+  const serverProgress = useMemo(() => {
+    for (let i = msgs.length - 1; i >= 0; i -= 1) {
+      const m = msgs[i];
+      if (m.role === "assistant" && m.status === "pending") {
+        return m.progress || "accepted";
+      }
+    }
+    return sending ? "accepted" : "";
+  }, [msgs, sending]);
+
+  useEffect(() => {
+    if (!waiting) {
+      pendingSinceRef.current = null;
+      setDisplayProgressIdx(0);
+      setWaitElapsedSec(0);
+      return;
+    }
+    if (pendingSinceRef.current == null) {
+      pendingSinceRef.current = Date.now();
+    }
+    const tick = () => {
+      const start = pendingSinceRef.current ?? Date.now();
+      const elapsed = Date.now() - start;
+      setWaitElapsedSec(Math.floor(elapsed / 1000));
+      const soft = softProgressIndex(elapsed);
+      const fromServer = progressIndex(serverProgress);
+      // citing 只相信服务端，避免本地假推进到最后一步
+      const next =
+        serverProgress === "citing"
+          ? 3
+          : Math.max(soft, Math.min(fromServer, 2));
+      setDisplayProgressIdx(next);
+    };
+    tick();
+    const timer = window.setInterval(tick, 280);
+    return () => window.clearInterval(timer);
+  }, [waiting, serverProgress]);
 
   async function openCitation(c: ChatCitation) {
     const focus = citationFocusQuery(c);
@@ -661,7 +757,56 @@ export function ChatPage() {
                         </div>
                       )}
                       <div className={styles.bubbleText}>
-                        {isPending ? "正在检索并作答…" : m.content}
+                        {isPending ? (
+                          <div className={styles.progressBox}>
+                            <div
+                              key={`hint-${displayProgressIdx}`}
+                              className={styles.progressHintWrap}
+                            >
+                              <p className={styles.progressHint}>
+                                {progressHintByIndex(displayProgressIdx)}
+                                {waitElapsedSec > 0 ? (
+                                  <span className={styles.progressElapsed}>
+                                    {" "}
+                                    · 已等待 {waitElapsedSec}s
+                                  </span>
+                                ) : null}
+                              </p>
+                            </div>
+                            <ol className={styles.progressSteps}>
+                              {PROGRESS_STEPS.map((step, idx) => {
+                                const cur = displayProgressIdx;
+                                const state =
+                                  idx < cur
+                                    ? styles.stepDone
+                                    : idx === cur
+                                      ? styles.stepActive
+                                      : styles.stepTodo;
+                                return (
+                                  <li
+                                    key={step.key}
+                                    className={`${styles.stepItem} ${state}`}
+                                    style={{
+                                      transitionDelay: `${idx * 40}ms`,
+                                    }}
+                                  >
+                                    <span className={styles.stepDot} />
+                                    <span>
+                                      {step.label}
+                                      {idx === cur ? (
+                                        <span className={styles.stepDots} aria-hidden>
+                                          …
+                                        </span>
+                                      ) : null}
+                                    </span>
+                                  </li>
+                                );
+                              })}
+                            </ol>
+                          </div>
+                        ) : (
+                          m.content
+                        )}
                       </div>
                       {m.role === "assistant" &&
                         !isPending &&
@@ -685,7 +830,7 @@ export function ChatPage() {
               onChange={(e) => setInput(e.target.value)}
               placeholder={
                 waiting
-                  ? "正在生成回答，可先去其他页面…"
+                  ? `${progressHintByIndex(displayProgressIdx)}（可先去其他页面）`
                   : configured
                     ? "输入与知识库相关的问题…"
                     : "请先配置 API Key"

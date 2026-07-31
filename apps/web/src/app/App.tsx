@@ -5,6 +5,8 @@ import { FeedPage } from "@/features/feed/FeedPage";
 import { ChatPage } from "@/features/chat/ChatPage";
 import { KnowledgePage } from "@/features/knowledge/KnowledgePage";
 import { SettingsPage } from "@/features/settings/SettingsPage";
+import { SkillsPage } from "@/features/skills/SkillsPage";
+import { NotesPage } from "@/features/notes/NotesPage";
 import { NotFoundPage } from "@/features/not-found/NotFoundPage";
 
 /**
@@ -19,6 +21,8 @@ export function App() {
         <Route path="feed" element={<FeedPage />} />
         <Route path="chat" element={<ChatPage />} />
         <Route path="knowledge" element={<KnowledgePage />} />
+        <Route path="notes" element={<NotesPage />} />
+        <Route path="skills" element={<SkillsPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>

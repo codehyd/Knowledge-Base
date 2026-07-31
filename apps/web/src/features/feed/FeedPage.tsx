@@ -7,6 +7,7 @@ import {
   DeleteOutlined,
   EyeOutlined,
   FileTextOutlined,
+  FormOutlined,
   InboxOutlined,
   LinkOutlined,
   PlayCircleOutlined,
@@ -566,14 +567,22 @@ export function FeedPage() {
                 >
                   <CloudUploadOutlined className={styles.cloud} />
                   <strong>点击或拖拽文件到此处上传</strong>
-                  <span>也可使用下方「粘贴内容」</span>
+                  <span>也可使用下方「写笔记」或快速粘贴</span>
                 </div>
                 <div className={styles.cardActions}>
                   <Button onClick={() => noteRef.current?.click()} disabled={busy}>
                     选择文件
                   </Button>
+                  <Button
+                    type="primary"
+                    icon={<FormOutlined />}
+                    onClick={() => navigate("/notes?new=1")}
+                    disabled={busy}
+                  >
+                    写笔记
+                  </Button>
                   <Button onClick={() => setPasteOpen(true)} disabled={busy}>
-                    粘贴内容
+                    快速粘贴
                   </Button>
                 </div>
                 <input
@@ -1072,7 +1081,7 @@ export function FeedPage() {
       </Modal>
 
       <Modal
-        title="粘贴笔记"
+        title="快速粘贴笔记"
         open={pasteOpen}
         onCancel={() => setPasteOpen(false)}
         okText="投递笔记"

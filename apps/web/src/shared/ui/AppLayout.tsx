@@ -3,9 +3,11 @@ import { useEffect, useState } from "react";
 import {
   BookOutlined,
   CommentOutlined,
+  FormOutlined,
   KeyOutlined,
   RightOutlined,
   SettingOutlined,
+  ThunderboltOutlined,
   UploadOutlined,
   WarningOutlined,
 } from "@ant-design/icons";
@@ -13,11 +15,13 @@ import { api } from "@/shared/api/client";
 import { getDesktopBridge } from "@/shared/desktop";
 import styles from "./AppLayout.module.css";
 
-/** 对齐 figma/01：主导航为喂养 / 对话 / 知识 / 设置；点品牌回首页 */
+/** 主导航：喂养 / 对话 / 知识 / 笔记 / 技能 / 设置；点品牌回首页 */
 const nav = [
   { to: "/feed", label: "喂养", icon: UploadOutlined },
   { to: "/chat", label: "对话", icon: CommentOutlined },
   { to: "/knowledge", label: "知识", icon: BookOutlined },
+  { to: "/notes", label: "笔记", icon: FormOutlined },
+  { to: "/skills", label: "技能", icon: ThunderboltOutlined },
   { to: "/settings", label: "设置", icon: SettingOutlined },
 ];
 
@@ -165,7 +169,10 @@ export function AppLayout() {
         className={`${styles.main}${
           location.pathname.startsWith("/chat") ? ` ${styles.mainChat}` : ""
         }${
-          location.pathname.startsWith("/knowledge") ? ` ${styles.mainFill}` : ""
+          location.pathname.startsWith("/knowledge") ||
+          location.pathname.startsWith("/notes")
+            ? ` ${styles.mainFill}`
+            : ""
         }`}
       >
         {serviceBanner ? (

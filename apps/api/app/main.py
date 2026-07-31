@@ -18,6 +18,8 @@ from app.modules.settings_ai.router import router as settings_ai_router
 from app.modules.settings_db.router import router as settings_db_router
 from app.modules.open_books.router import router as open_books_router
 from app.modules.sources.router import router as sources_router
+from app.modules.skills.router import router as skills_router
+from app.modules.vault.router import router as vault_router
 
 
 @asynccontextmanager
@@ -59,7 +61,6 @@ async def lifespan(_: FastAPI):
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    desktop = os.environ.get("KONGKU_DESKTOP", "").strip() in {"1", "true", "TRUE", "yes"}
     app = FastAPI(
         title="空库 API",
         version="0.1.0",
@@ -75,40 +76,30 @@ def create_app() -> FastAPI:
         redoc_url=None,
     )
 
-    # 桌面端 loadFile → Origin 为 "null"；仅放行 Vite 源会导致 Failed to fetch
-    cors_kwargs: dict = {
-        "allow_methods": ["*"],
-        "allow_headers": ["*"],
-        "expose_headers": ["Content-Disposition", "X-Kongku-Filename"],
-    }
-    if desktop:
-        # 明确放行 Electron file://（Origin: null）与本机开发页
-        origins = list(settings.cors_origins)
-        for extra in (
-            "null",
-            "file://",
-            "http://127.0.0.1:41779",
-            "http://localhost:41779",
-            "http://127.0.0.1:18765",
-            "http://localhost:18765",
-        ):
-            if extra not in origins:
-                origins.append(extra)
-        cors_kwargs.update(
-            {
-                "allow_origins": origins,
-                "allow_credentials": True,
-                "allow_origin_regex": r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
-            }
-        )
-    else:
-        cors_kwargs.update(
-            {
-                "allow_origins": settings.cors_origins,
-                "allow_credentials": True,
-            }
-        )
-    app.add_middleware(CORSMiddleware, **cors_kwargs)
+    # 本机优先：Electron loadFile → Origin "null"；Vite 开发页 41779；
+    # 手动起 API 时也要放行，否则桌面端 / 跨端口会 OPTIONS 400 → Failed to fetch
+    origins = list(settings.cors_origins)
+    for extra in (
+        "null",
+        "file://",
+        "http://127.0.0.1:41779",
+        "http://localhost:41779",
+        "http://127.0.0.1:18765",
+        "http://localhost:18765",
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+    ):
+        if extra not in origins:
+            origins.append(extra)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["Content-Disposition", "X-Kongku-Filename"],
+        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    )
 
     # Knife4j：/doc.html + /v3/api-docs（兼容 springdoc 拉取方式）
     setup_knife4j(app)
@@ -123,6 +114,8 @@ def create_app() -> FastAPI:
     app.include_router(library_router, prefix="/api")
     app.include_router(knowledge_router, prefix="/api")
     app.include_router(chat_router, prefix="/api")
+    app.include_router(skills_router, prefix="/api")
+    app.include_router(vault_router, prefix="/api")
 
     # 桌面端：由 API 同源托管前端静态资源，避免 file:// 跨域
     web_dir = os.environ.get("KONGKU_WEB_DIR", "").strip()

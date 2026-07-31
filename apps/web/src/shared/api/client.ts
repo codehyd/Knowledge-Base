@@ -86,8 +86,30 @@ export type SourceItem = {
   progress: number;
   error_message: string;
   char_count: number;
+  vault_path?: string;
   created_at?: string | null;
   updated_at?: string | null;
+};
+
+export type VaultNode = {
+  id: string;
+  name: string;
+  kind: "folder" | "note" | string;
+  path: string;
+  source_id?: number | null;
+  title?: string;
+  status?: string;
+  children?: VaultNode[];
+};
+
+export type VaultNote = {
+  source_id: number;
+  title: string;
+  path: string;
+  content: string;
+  status: string;
+  committed: boolean;
+  char_count: number;
 };
 
 export type LibraryFile = {
@@ -267,6 +289,33 @@ export type ChatSession = {
   updated_at?: string | null;
 };
 
+export type SkillItem = {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  type: "workflow" | "persona" | "toolkit" | string;
+  permissions: string[];
+  knowledge_policy: string;
+  enabled: boolean;
+  has_knowledge: boolean;
+  knowledge_imported: boolean;
+  installed_at?: string | null;
+  author?: string;
+  readme?: string;
+};
+
+export type SkillDetail = SkillItem & {
+  entry: string;
+  skill_md: string;
+};
+
+export type SkillInstallResult = {
+  skill: SkillItem;
+  knowledge_queued: number;
+  message: string;
+};
+
 export type ChatMessageItem = {
   id: number;
   session_id: number;
@@ -276,6 +325,8 @@ export type ChatMessageItem = {
   trust?: "ok" | "suspect" | "conflict" | string;
   trust_note?: string;
   status?: "done" | "pending" | "error" | string;
+  /** pending 阶段：accepted | retrieving | generating | citing */
+  progress?: string;
   citations: ChatCitation[];
   created_at?: string | null;
 };
@@ -558,6 +609,75 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  getSourceContent: (id: number) =>
+    request<{
+      source_id: number;
+      title: string;
+      content: string;
+      format: string;
+      status: string;
+      editable: boolean;
+    }>(`/api/sources/${id}/content`),
+  updateSourceContent: (id: number, body: { title?: string; content: string }) =>
+    request<{
+      source_id: number;
+      title: string;
+      content: string;
+      format: string;
+      status: string;
+      editable: boolean;
+    }>(`/api/sources/${id}/content`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+
+  getVaultTree: () =>
+    request<{
+      root: string;
+      absolute_root: string;
+      nodes: VaultNode[];
+    }>("/api/vault/tree"),
+  createVaultFolder: (body: { parent?: string; name: string }) =>
+    request<VaultNode>("/api/vault/folders", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  createVaultNote: (body: { parent?: string; title?: string }) =>
+    request<VaultNote>("/api/vault/notes", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  getVaultNote: (sourceId: number) =>
+    request<VaultNote>(`/api/vault/notes/${sourceId}`),
+  saveVaultNote: (sourceId: number, body: { title?: string; content: string }) =>
+    request<VaultNote>(`/api/vault/notes/${sourceId}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  patchVaultNode: (body: {
+    path: string;
+    new_parent?: string | null;
+    new_name?: string | null;
+  }) =>
+    request<VaultNode>("/api/vault/nodes", {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  deleteVaultNote: (sourceId: number) =>
+    request<{ ok: boolean; source_id: number }>(`/api/vault/notes/${sourceId}`, {
+      method: "DELETE",
+    }),
+  deleteVaultFolder: (path: string) =>
+    request<{ ok: boolean; path: string }>(
+      `/api/vault/folders?path=${encodeURIComponent(path)}`,
+      { method: "DELETE" },
+    ),
+  importVaultNote: (body: { source_id: number; parent?: string }) =>
+    request<VaultNote>("/api/vault/import", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
   urlSource: (url: string) =>
     request<SourceItem>("/api/sources/url", {
       method: "POST",
@@ -710,6 +830,11 @@ export const api = {
   getLibrary: () => request<LibraryOut>("/api/library"),
   rebuildLibrary: () =>
     request<LibraryRebuildOut>("/api/library/rebuild", { method: "POST" }),
+  deleteLibraryItem: (sourceId: number) =>
+    request<{ ok: boolean; source_id: number; message: string }>(
+      `/api/library/items/${sourceId}`,
+      { method: "DELETE" },
+    ),
   chat: (body: {
     message: string;
     category_id?: number | null;
@@ -733,5 +858,51 @@ export const api = {
     request<{ entries: number; chunks: number; mode: string }>(
       `/api/knowledge/reindex?mode=${mode}`,
       { method: "POST" },
+    ),
+
+  listSkills: () => request<{ items: SkillItem[]; total: number }>("/api/skills"),
+  getSkill: (id: string) => request<SkillDetail>(`/api/skills/${encodeURIComponent(id)}`),
+  installSkillZip: (file: File, importKnowledge = false, overwrite = true) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("import_knowledge", String(importKnowledge));
+    form.append("overwrite", String(overwrite));
+    return request<SkillInstallResult>("/api/skills/install", {
+      method: "POST",
+      body: form,
+    });
+  },
+  setSkillEnabled: (id: string, enabled: boolean) =>
+    request<SkillItem>(`/api/skills/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
+    }),
+  importSkillKnowledge: (id: string) =>
+    request<SkillInstallResult>(
+      `/api/skills/${encodeURIComponent(id)}/import-knowledge`,
+      { method: "POST" },
+    ),
+  uninstallSkill: (id: string, removeImported = true) => {
+    const q = new URLSearchParams({
+      remove_imported: String(removeImported),
+    });
+    return request<{
+      ok: boolean;
+      id: string;
+      removed_imported: number;
+      message: string;
+    }>(`/api/skills/${encodeURIComponent(id)}?${q}`, { method: "DELETE" });
+  },
+  listSkillLeftovers: () =>
+    request<{
+      items: { skill_id: string; source_count: number; titles: string[] }[];
+    }>("/api/skills/imported-leftovers"),
+  purgeSkillImported: (skillId: string) =>
+    request<{ skill_id: string; removed: number; message: string }>(
+      "/api/skills/purge-imported",
+      {
+        method: "POST",
+        body: JSON.stringify({ skill_id: skillId }),
+      },
     ),
 };

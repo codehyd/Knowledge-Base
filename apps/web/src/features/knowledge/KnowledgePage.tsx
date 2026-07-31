@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import {
   BookOutlined,
   DeleteOutlined,
+  EditOutlined,
   EyeOutlined,
+  FormOutlined,
   PlayCircleOutlined,
   ReadOutlined,
   SearchOutlined,
@@ -63,6 +65,7 @@ function formatDate(value?: string | null) {
 
 export function KnowledgePage() {
   const { message } = App.useApp();
+  const navigate = useNavigate();
   const [categories, setCategories] = useState<CategoryItem[]>([]);
   const [totalEntries, setTotalEntries] = useState(0);
   const [items, setItems] = useState<EntryListItem[]>([]);
@@ -205,6 +208,9 @@ export function KnowledgePage() {
             </Typography.Paragraph>
           </div>
           <div className={styles.headerActions}>
+            <Button type="primary" icon={<FormOutlined />} onClick={() => navigate("/notes?new=1")}>
+              写笔记
+            </Button>
             <Button icon={<ReadOutlined />} onClick={() => setBookshelfOpen(true)}>
               书架
             </Button>
@@ -215,9 +221,14 @@ export function KnowledgePage() {
         </header>
         <div className={styles.emptyBox}>
           <Empty description="知识库仍为空">
-            <Link to="/feed">
-              <Button type="primary">去喂养投递材料</Button>
-            </Link>
+            <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+              <Button type="primary" icon={<FormOutlined />} onClick={() => navigate("/notes?new=1")}>
+                写笔记
+              </Button>
+              <Link to="/feed">
+                <Button>去喂养投递材料</Button>
+              </Link>
+            </div>
           </Empty>
         </div>
         <BookshelfModal open={bookshelfOpen} onClose={() => setBookshelfOpen(false)} />
@@ -252,6 +263,9 @@ export function KnowledgePage() {
               </button>
             ))}
           </div>
+          <Button type="primary" icon={<FormOutlined />} onClick={() => navigate("/notes?new=1")}>
+            写笔记
+          </Button>
           <Button icon={<ReadOutlined />} onClick={() => setBookshelfOpen(true)}>
             书架
           </Button>
@@ -480,6 +494,16 @@ export function KnowledgePage() {
                     删除
                   </Button>
                 </Popconfirm>
+                {detail.source_type === "note" && detail.source_id ? (
+                  <Button
+                    icon={<EditOutlined />}
+                    onClick={() =>
+                      navigate(`/notes?import=${detail.source_id}`)
+                    }
+                  >
+                    在笔记库编辑
+                  </Button>
+                ) : null}
                 <Button
                   icon={<EyeOutlined />}
                   loading={previewLoading}

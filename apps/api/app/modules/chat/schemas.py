@@ -69,6 +69,8 @@ class ChatMessageOut(BaseModel):
     trust: str = "ok"
     trust_note: str = ""
     status: str = "done"  # done | pending | error
+    # pending 阶段：accepted | retrieving | generating | citing
+    progress: str = ""
     citations: list[ChatCitation] = Field(default_factory=list)
     created_at: Optional[datetime] = None
 

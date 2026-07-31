@@ -17,6 +17,7 @@ class SourceOut(BaseModel):
     progress: float
     error_message: str
     char_count: int
+    vault_path: str = ""
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -66,6 +67,20 @@ class SourcePreviewOut(BaseModel):
     offset: int = 0
     limit: int = 0
     truncated: bool = False
+
+
+class SourceContentOut(BaseModel):
+    source_id: int
+    title: str
+    content: str
+    format: str = "markdown"
+    status: str = ""
+    editable: bool = True
+
+
+class SourceContentIn(BaseModel):
+    title: str = Field(default="", max_length=500)
+    content: str = Field(min_length=1)
 
 
 class PreviewSearchHit(BaseModel):

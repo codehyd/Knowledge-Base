@@ -41,3 +41,9 @@ class LibraryRebuildOut(BaseModel):
     synced: int = 0
     removed: int = 0
     message: str = ""
+
+
+class LibraryDeleteOut(BaseModel):
+    ok: bool = True
+    source_id: int
+    message: str = ""

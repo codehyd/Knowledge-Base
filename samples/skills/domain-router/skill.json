@@ -1,0 +1,12 @@
+{
+  "id": "domain-router",
+  "name": "多领域分流",
+  "version": "1.0.0",
+  "description": "多主题并存时，先判断问题属于哪个领域，再只依据该领域相关库内资料作答；跨域未喂养则拒答。",
+  "type": "workflow",
+  "entry": "SKILL.md",
+  "permissions": ["chat.prompt"],
+  "knowledge_policy": "library_only",
+  "author": "空库",
+  "min_app_version": "0.1.0"
+}

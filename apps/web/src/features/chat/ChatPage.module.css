@@ -297,12 +297,163 @@
 }
 
 .typing {
-  color: #94a3b8;
-  font-style: italic;
+  color: #64748b;
+  font-style: normal;
+  animation: bubbleFadeIn 0.35s ease both;
 }
 
 .bubbleText {
   margin: 0;
+}
+
+.progressBox {
+  display: grid;
+  gap: 10px;
+  animation: bubbleFadeIn 0.4s ease both;
+}
+
+.progressHintWrap {
+  min-height: 1.5em;
+  animation: hintFadeIn 0.38s ease both;
+}
+
+.progressHint {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #475569;
+}
+
+.progressElapsed {
+  color: #94a3b8;
+  font-weight: 400;
+}
+
+.stepDots {
+  display: inline-block;
+  min-width: 1.2em;
+  margin-left: 2px;
+  animation: stepDotsBlink 1.2s ease-in-out infinite;
+}
+
+.progressSteps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.stepItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  transition:
+    color 0.35s ease,
+    opacity 0.35s ease,
+    transform 0.35s ease,
+    font-weight 0.2s ease;
+}
+
+.stepDone {
+  color: #2a6f6a;
+  opacity: 0.92;
+  transform: translateX(0);
+}
+
+.stepActive {
+  color: #0f172a;
+  font-weight: 600;
+  opacity: 1;
+  transform: translateX(2px);
+}
+
+.stepTodo {
+  color: #94a3b8;
+  opacity: 0.55;
+  transform: translateX(0);
+}
+
+.stepDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: currentColor;
+  transition:
+    transform 0.35s ease,
+    box-shadow 0.35s ease,
+    background-color 0.35s ease;
+}
+
+.stepActive .stepDot {
+  transform: scale(1.15);
+  box-shadow: 0 0 0 3px rgba(42, 111, 106, 0.18);
+  animation: progressPulse 1.2s ease-in-out infinite;
+}
+
+.stepDone .stepDot {
+  background: #2a6f6a;
+}
+
+@keyframes bubbleFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes hintFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes progressPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px rgba(42, 111, 106, 0.16);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(42, 111, 106, 0.08);
+  }
+}
+
+@keyframes stepDotsBlink {
+  0%,
+  20% {
+    opacity: 0.2;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.2;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .typing,
+  .progressBox,
+  .progressHintWrap,
+  .stepItem,
+  .stepDot,
+  .stepDots,
+  .stepActive .stepDot {
+    animation: none !important;
+    transition: none !important;
+  }
 }
 
 .citations {

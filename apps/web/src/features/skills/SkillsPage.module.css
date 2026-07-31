@@ -1,0 +1,198 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  background: #fff;
+  border: 1px solid #e8ecef;
+  border-radius: 16px;
+  padding: 24px;
+  min-height: 280px;
+}
+
+.loadingBox {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 220px;
+}
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.head h1 {
+  margin: 0 0 8px;
+  font-size: 24px;
+}
+
+.desc {
+  margin: 0;
+  color: var(--color-muted);
+  line-height: 1.6;
+  font-size: 14px;
+  max-width: 52ch;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sectionTitle {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.cardList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.card {
+  border: 1px solid #e8ecef;
+  border-radius: 12px;
+  padding: 16px;
+  display: grid;
+  gap: 10px;
+  background: #fafbfc;
+}
+
+.cardTop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cardTitle {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.cardDesc {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.cardActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.empty {
+  padding: 28px 16px;
+  text-align: center;
+  color: var(--color-muted);
+  border: 1px dashed #d5dadd;
+  border-radius: 12px;
+  font-size: 14px;
+}
+
+.detailLayout {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+
+.detailModal :global(.ant-modal-body) {
+  /* Tabs 内容区单独滚动，body 不再出第二条滚动条 */
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - 120px);
+}
+
+.detailTabs {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.detailTabs :global(.ant-tabs-nav) {
+  margin-bottom: 8px;
+}
+
+.detailTabs :global(.ant-tabs-content-holder) {
+  min-height: 0;
+}
+
+.detailPane {
+  margin: 0;
+  padding: 12px;
+  background: #f3f5f6;
+  border-radius: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13px;
+  line-height: 1.55;
+  /* 小窗口：一屏内可完整预览当前 Tab，只滚这一层 */
+  max-height: min(52dvh, 420px);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.detailInfo {
+  padding: 4px 2px 8px;
+  max-height: min(52dvh, 420px);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.detailInfoP {
+  margin-bottom: 12px !important;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-muted);
+  line-height: 1.5;
+}
+
+@media (max-height: 720px) {
+  .detailPane,
+  .detailInfo {
+    max-height: min(46dvh, 320px);
+  }
+}
+
+@media (max-height: 560px) {
+  .detailPane,
+  .detailInfo {
+    max-height: min(40dvh, 240px);
+  }
+
+  .detailModal :global(.ant-modal-body) {
+    max-height: calc(100dvh - 96px);
+  }
+}

@@ -3,6 +3,7 @@ import {
   ApiOutlined,
   CloudDownloadOutlined,
   DatabaseOutlined,
+  DeleteOutlined,
   DollarOutlined,
   FolderOpenOutlined,
   InfoCircleOutlined,
@@ -28,7 +29,7 @@ import {
   Tag,
   Typography,
 } from "antd";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, type LibraryOut, type ProviderOption } from "@/shared/api/client";
 import { getDesktopBridge } from "@/shared/desktop";
 import { formatError } from "@/shared/ui/feedback";
@@ -58,8 +59,9 @@ type TestResult = {
 };
 
 export function SettingsPage() {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const [providers, setProviders] = useState<ProviderOption[]>([]);
   const [providerId, setProviderId] = useState("deepseek");
   const [baseUrl, setBaseUrl] = useState("https://api.deepseek.com/v1");
@@ -566,6 +568,30 @@ export function SettingsPage() {
     } catch (err) {
       message.error(formatError(err, "打开文件夹失败"));
     }
+  }
+
+  async function onDeleteLibraryItem(sourceId: number, title: string) {
+    if (!sourceId) {
+      message.warning("无法删除：缺少来源编号，请先重建目录后再试");
+      return;
+    }
+    modal.confirm({
+      title: `删除「${title}」？`,
+      content:
+        "将永久删除喂养来源、已入库知识与资源目录。只在资源文件夹里删文件无效——点重建仍会回来。",
+      okText: "永久删除",
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          const out = await api.deleteLibraryItem(sourceId);
+          message.success(out.message || "已删除");
+          const data = await api.getLibrary();
+          setLibrary(data);
+        } catch (err) {
+          message.error(formatError(err, "删除失败"));
+        }
+      },
+    });
   }
 
   async function onSaveCtextKey() {
@@ -1760,19 +1786,45 @@ export function SettingsPage() {
                             key={`${cat.label}-${item.source_id}-${item.folder_name}`}
                             className={styles.libraryItem}
                           >
-                            <p className={styles.libraryItemTitle}>{item.title}</p>
-                            <ul className={styles.libraryFiles}>
-                              {item.files.length === 0 ? (
-                                <li>空文件夹</li>
-                              ) : (
-                                item.files.map((f) => (
-                                  <li key={f.name}>
-                                    {f.name}
-                                    {f.size > 0 ? ` · ${formatBytes(f.size)}` : ""}
-                                  </li>
-                                ))
-                              )}
-                            </ul>
+                            <div className={styles.libraryItemBody}>
+                              <p className={styles.libraryItemTitle}>{item.title}</p>
+                              <ul className={styles.libraryFiles}>
+                                {item.files.length === 0 ? (
+                                  <li>空文件夹</li>
+                                ) : (
+                                  item.files.map((f) => (
+                                    <li key={f.name}>
+                                      {f.name}
+                                      {f.size > 0 ? ` · ${formatBytes(f.size)}` : ""}
+                                    </li>
+                                  ))
+                                )}
+                              </ul>
+                              {cat.key === "vault" ? (
+                                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                                  路径：vault/{item.folder_name}
+                                </Typography.Text>
+                              ) : null}
+                            </div>
+                            {cat.key === "vault" && item.source_id ? (
+                              <Button
+                                size="small"
+                                type="link"
+                                onClick={() => navigate(`/notes?id=${item.source_id}`)}
+                              >
+                                打开编辑
+                              </Button>
+                            ) : null}
+                            <Button
+                              size="small"
+                              danger
+                              type="text"
+                              icon={<DeleteOutlined />}
+                              aria-label="删除资源"
+                              onClick={() =>
+                                void onDeleteLibraryItem(item.source_id, item.title)
+                              }
+                            />
                           </div>
                         ))}
                       </div>
@@ -1785,9 +1837,10 @@ export function SettingsPage() {
           <aside className={styles.tips}>
             <Card size="small" title={<><FolderOpenOutlined /> 目录说明</>}>
               <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
-                物理路径：data/library/分类/标题/
+                喂养镜像：data/library/分类/标题/；笔记库：data/vault/（可多级文件夹）
               </Typography.Paragraph>
               <ul className={styles.checklist}>
+                <li>笔记库 · Obsidian 式多级 .md，侧栏「笔记」编辑</li>
                 <li>正文.txt · 抽取或转写文案</li>
                 <li>音轨.* · 授权后下载的跟读音频</li>
                 <li>时间轴.json · 跟读高亮</li>
@@ -1796,7 +1849,7 @@ export function SettingsPage() {
             </Card>
             <Card size="small" title={<><InfoCircleOutlined /> 提示</>}>
               <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-                顶部切换分类，用「打开此分类」在访达查看该目录。单项无需单独打开。
+                「笔记库」在侧栏「笔记」中编辑，保存即入库。其它分类是喂养镜像；访达里删文件夹后点重建会再出现，永久删除请用列表右侧删除。
               </Typography.Paragraph>
             </Card>
           </aside>

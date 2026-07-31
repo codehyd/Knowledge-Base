@@ -8,6 +8,8 @@ from app.modules.sources.schemas import (
     IngestReadyOut,
     PasteIn,
     PreviewSearchOut,
+    SourceContentIn,
+    SourceContentOut,
     SourceCuesOut,
     SourceListOut,
     SourceOut,
@@ -116,6 +118,32 @@ async def url_source(
 async def get_source(source_id: int, db: AsyncSession = Depends(get_db)) -> SourceOut:
     row = await sources_service.get(db, source_id)
     return sources_service.to_out(row)
+
+
+@router.get(
+    "/{source_id}/content",
+    response_model=SourceContentOut,
+    summary="读取笔记 Markdown 正文",
+    description="仅笔记类型；优先 original 原件，回退 extracted.txt。",
+)
+async def get_source_content(
+    source_id: int, db: AsyncSession = Depends(get_db)
+) -> SourceContentOut:
+    return await sources_service.get_content(db, source_id)
+
+
+@router.put(
+    "/{source_id}/content",
+    response_model=SourceContentOut,
+    summary="保存笔记 Markdown 正文",
+    description="写回原件与 extracted.txt；已入库则重切片。",
+)
+async def put_source_content(
+    source_id: int,
+    payload: SourceContentIn,
+    db: AsyncSession = Depends(get_db),
+) -> SourceContentOut:
+    return await sources_service.update_content(db, source_id, payload)
 
 
 @router.get(

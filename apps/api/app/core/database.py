@@ -218,6 +218,9 @@ async def _ensure_chat_message_columns(conn) -> None:
     await _add_column_if_missing(
         conn, "chat_messages", "status", "VARCHAR(20) DEFAULT 'done'"
     )
+    await _add_column_if_missing(
+        conn, "chat_messages", "progress", "VARCHAR(40) DEFAULT ''"
+    )
     await conn.execute(
         text("CREATE INDEX IF NOT EXISTS ix_chat_messages_status ON chat_messages (status)")
     )
@@ -230,11 +233,17 @@ async def _ensure_source_book_columns(conn) -> None:
     await _add_column_if_missing(
         conn, "sources", "book_kind", "VARCHAR(20) DEFAULT ''"
     )
+    await _add_column_if_missing(
+        conn, "sources", "vault_path", "VARCHAR(1000) DEFAULT ''"
+    )
     await conn.execute(
         text("CREATE INDEX IF NOT EXISTS ix_sources_provenance ON sources (provenance)")
     )
     await conn.execute(
         text("CREATE INDEX IF NOT EXISTS ix_sources_book_kind ON sources (book_kind)")
+    )
+    await conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_sources_vault_path ON sources (vault_path)")
     )
     # 存量电子书按扩展名回填（无法还原公版书出处，统一按本地上传规则）
     await conn.execute(

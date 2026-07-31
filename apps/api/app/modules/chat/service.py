@@ -32,6 +32,7 @@ from app.modules.knowledge.models import Chunk, Entry, EntryCategory
 from app.modules.knowledge.index import read_entry_text
 from app.modules.knowledge.service import knowledge_service
 from app.modules.settings_ai.service import settings_ai_service
+from app.modules.skills.service import skills_service
 from app.modules.sources.models import Source
 from app.modules.sources.preview_search import (
     highlight_needle_from_text,
@@ -69,9 +70,11 @@ TRUST_MARKER_RE = re.compile(
 SYSTEM_PROMPT = """你是「空库」知识助手。请主要依据下方【资料片段】回答用户问题。
 规则：
 1. 优先用资料中的表述总结作答，可适当组织语言，但不要编造资料未提及的事实。
-2. 仅当资料与问题明显无关时，才回复一句：资料不足，无法有依据地回答。
+2. 拒答门槛要高：只有【全部】资料片段都与问题明显无关时，才回复一句：资料不足，无法有依据地回答。
+   - 只要任一片段相关（含同义、上下位、举例），就必须作答。
+   - 问题较笼统（如「是什么」「怎么理解」）时，从最相关片段归纳即可，不要因问法不精确而拒答。
 3. 回答简洁、用中文。
-4. 不要编造书名、页码或未出现的出处。
+4. 不要编造书名、页码或未出现的出处；能答时尽量提到《标题》。
 5. 答前轻量质检（仅用于发现库内材料问题，不是用通识补全当权威答案）：
    - 若片段内容可信、无明显硬伤 → 正常作答。
    - 若片段出现明显违背常识的硬事实错误（如基础算术、自相矛盾），或同批片段彼此冲突：
@@ -83,6 +86,52 @@ SYSTEM_PROMPT = """你是「空库」知识助手。请主要依据下方【资�
    或 <<<TRUST:conflict|简短原因>>>
    其中 ok=可正常采信；suspect=有疑点但不确定；conflict=明显错误或资料间冲突。
 """
+
+_RETRY_AFTER_FALSE_REFUSAL = """
+补充硬性要求：系统已检索到下方资料片段。只要片段与问题有关，你必须依据片段作答；
+禁止回复「资料不足」或同类拒答。问题若笼统，请归纳资料中最相关的说法，并标明《标题》。
+"""
+
+
+def _looks_like_refusal(answer: str) -> bool:
+    text = (answer or "").strip()
+    if not text:
+        return True
+    head = text[:100]
+    if head.startswith("资料不足"):
+        return True
+    if "无法有依据地回答" in head:
+        return True
+    if "根据当前知识库中的内容，我无法" in head:
+        return True
+    return False
+
+
+def _hits_seem_relevant(
+    message: str,
+    chunk_texts: list[str],
+    scores: list[float],
+    *,
+    mode: str,
+) -> bool:
+    """检索已命中时，粗判是否值得强制作答（防止模型误拒）。"""
+    if not chunk_texts:
+        return False
+    tokens = _tokenize_query(message)
+    # 问句很短/很笼统：有命中就倾向作答
+    if len(tokens) <= 3:
+        return True
+    for text in chunk_texts:
+        if _keyword_score(text or "", tokens) >= 1.0:
+            return True
+    if not scores:
+        return True
+    top = max(float(s) for s in scores)
+    if mode == "vector" and top >= VECTOR_MIN_SCORE:
+        return True
+    if mode == "keyword" and top >= KEYWORD_MIN_SCORE:
+        return True
+    return False
 
 
 def _parse_trust_trailer(raw: str) -> tuple[str, str, str]:
@@ -365,8 +414,13 @@ async def _align_citations_with_answer(
     citations: list[ChatCitation],
     chunk_texts: list[str],
     fulltext_cache: dict[int, str],
+    ai_refine: bool = True,
 ) -> list[ChatCitation]:
-    """用回答里的知识点回填出处标签与预高亮位置，避免落到切片开头残句。"""
+    """用回答里的知识点回填出处标签与预高亮位置，避免落到切片开头残句。
+
+    ai_refine=False 时跳过二次模型摘段（显著加速「核对出处」）；
+    启发式对齐 + 锚点落库仍会执行。
+    """
     concepts = _extract_answer_concepts(answer)
     used_concepts: set[str] = set()
     used_offsets: dict[int, list[tuple[int, int]]] = {}
@@ -542,7 +596,9 @@ async def _align_citations_with_answer(
         )
 
     # AI 摘段：从原文窗口中为每个知识点选出更完整、有头有尾的片段
-    if ai_candidates:
+    # 限制条数，避免一次摘段过慢；主路径可关 ai_refine 先出答案
+    if ai_refine and ai_candidates:
+        ai_candidates = ai_candidates[:4]
         ai_items = [
             {"i": k, "label": str(c["label"]), "text": str(c["text"])}
             for k, c in enumerate(ai_candidates)
@@ -797,6 +853,7 @@ class ChatService:
             trust=(getattr(row, "trust", None) or "ok"),
             trust_note=(getattr(row, "trust_note", None) or ""),
             status=(getattr(row, "status", None) or "done"),
+            progress=(getattr(row, "progress", None) or ""),
             citations=citations,
             created_at=row.created_at,
         )
@@ -907,6 +964,7 @@ class ChatService:
             trust="ok",
             trust_note="",
             status="pending",
+            progress="accepted",
             citations_json="",
         )
         db.add(assistant)
@@ -914,6 +972,22 @@ class ChatService:
         await db.refresh(session)
         await db.refresh(assistant)
         return assistant
+
+    async def _set_progress(
+        self, db: AsyncSession, assistant: ChatMessage, stage: str
+    ) -> None:
+        """写回 pending 阶段，供前端轮询展示动向。失败不阻断主流程。"""
+        if (assistant.status or "") != "pending":
+            return
+        try:
+            assistant.progress = (stage or "")[:40]
+            await db.commit()
+            await db.refresh(assistant)
+        except Exception:  # noqa: BLE001
+            try:
+                await db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
 
     async def _finish_assistant(
         self,
@@ -938,6 +1012,7 @@ class ChatService:
         assistant.trust = trust if trust in ("ok", "suspect", "conflict") else "ok"
         assistant.trust_note = (trust_note or "")[:500]
         assistant.status = status if status in ("done", "pending", "error") else "done"
+        assistant.progress = ""
         assistant.citations_json = cites_raw
 
         session = await db.get(ChatSession, assistant.session_id)
@@ -1038,6 +1113,7 @@ class ChatService:
         message = (user_msg.content or "").strip()
 
         try:
+            await self._set_progress(db, assistant, "retrieving")
             hits, mode = await self._retrieve(db, message, category_id=category_id)
             if not hits:
                 await self._finish_assistant(
@@ -1091,36 +1167,65 @@ class ChatService:
                 + "\n\n【用户问题】\n"
                 + message
             )
+            system_prompt = SYSTEM_PROMPT
+            try:
+                skill_addon = skills_service.build_system_addon()
+                if skill_addon:
+                    system_prompt = SYSTEM_PROMPT + skill_addon
+            except Exception:  # noqa: BLE001
+                pass
+            await self._set_progress(db, assistant, "generating")
             ai_row = await settings_ai_service._get_or_create(db)
+            max_tokens = int(getattr(ai_row, "chat_max_tokens", None) or 1200)
             raw_answer = await chat_completion(
                 db,
                 [
-                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_content},
                 ],
-                max_tokens=int(getattr(ai_row, "chat_max_tokens", None) or 1200),
+                max_tokens=max_tokens,
             )
             answer, trust, trust_note = _parse_trust_trailer(raw_answer or "")
-            refused = answer.strip().startswith("资料不足")
-            if refused or not answer:
+            hit_scores = [float(c.score) for c in citations]
+            # 有相关命中却被模型误拒：再生成一次，强制依据片段作答
+            if _looks_like_refusal(answer) and _hits_seem_relevant(
+                message, chunk_texts, hit_scores, mode=mode
+            ):
+                raw_retry = await chat_completion(
+                    db,
+                    [
+                        {
+                            "role": "system",
+                            "content": system_prompt + _RETRY_AFTER_FALSE_REFUSAL,
+                        },
+                        {"role": "user", "content": user_content},
+                    ],
+                    max_tokens=max_tokens,
+                    temperature=0.1,
+                )
+                answer, trust, trust_note = _parse_trust_trailer(raw_retry or "")
+
+            if _looks_like_refusal(answer):
                 await self._finish_assistant(
                     db,
                     assistant,
                     answer=REFUSAL_TEXT,
                     refused=True,
-                    citations=citations,
+                    citations=[],
                     retrieval=mode,
                     status="done",
                 )
                 return
 
-            # 用回答中的知识点回填出处标签/预高亮，避免「切片开头残句」当知识点
-            citations = await _align_citations_with_answer(
+            await self._set_progress(db, assistant, "citing")
+            # 先做本地启发式对齐并立刻返回答案，避免二次模型摘段卡住「核对出处」
+            citations_fast = await _align_citations_with_answer(
                 db,
                 answer=answer,
                 citations=citations,
                 chunk_texts=chunk_texts,
                 fulltext_cache=fulltext_cache,
+                ai_refine=False,
             )
 
             await self._finish_assistant(
@@ -1128,12 +1233,33 @@ class ChatService:
                 assistant,
                 answer=answer,
                 refused=False,
-                citations=citations,
+                citations=citations_fast,
                 trust=trust,
                 trust_note=trust_note,
                 retrieval=mode,
                 status="done",
             )
+
+            # 后台精修出处（失败不影响已返回的回答）
+            try:
+                citations_polished = await _align_citations_with_answer(
+                    db,
+                    answer=answer,
+                    citations=citations,
+                    chunk_texts=chunk_texts,
+                    fulltext_cache=fulltext_cache,
+                    ai_refine=True,
+                )
+                row = await db.get(ChatMessage, assistant.id)
+                if row is not None and (row.status or "") == "done" and not row.refused:
+                    row.citations_json = json.dumps(
+                        [c.model_dump() for c in citations_polished],
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    await db.commit()
+            except Exception:  # noqa: BLE001
+                pass
         except LlmNotConfigured as exc:
             await self._finish_assistant(
                 db,

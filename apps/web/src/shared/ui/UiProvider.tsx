@@ -19,7 +19,13 @@ type Props = { children: ReactNode };
 /** 全局 Ant Design：主题 + 中文 + message/modal 上下文 */
 export function UiProvider({ children }: Props) {
   return (
-    <ConfigProvider locale={zhCN} theme={theme}>
+    <ConfigProvider
+      locale={zhCN}
+      theme={theme}
+      modal={{
+        centered: true,
+      }}
+    >
       <App message={{ maxCount: 3, duration: 3 }}>{children}</App>
     </ConfigProvider>
   );

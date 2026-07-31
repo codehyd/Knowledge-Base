@@ -45,6 +45,8 @@ from app.modules.sources.schemas import (
     IngestOut,
     PasteIn,
     PreviewSearchOut,
+    SourceContentIn,
+    SourceContentOut,
     SourceCuesOut,
     SourceOut,
     SourcePreviewOut,
@@ -888,6 +890,116 @@ class SourcesService:
             await db.commit()
             await db.refresh(row)
             return row
+
+    def _assert_editable_note(self, row: Source) -> None:
+        if row.type != "note":
+            raise HTTPException(status_code=400, detail="仅笔记（Markdown/文本）可在应用内编辑")
+        name = (row.filename or row.storage_path or "").strip()
+        suffix = Path(name).suffix.lower()
+        if suffix and suffix not in {".md", ".markdown", ".txt"}:
+            raise HTTPException(status_code=400, detail="仅笔记（Markdown/文本）可在应用内编辑")
+
+    async def get_content(self, db: AsyncSession, source_id: int) -> SourceContentOut:
+        row = await self.get(db, source_id)
+        self._assert_editable_note(row)
+        content = ""
+        if row.storage_path:
+            path = _data_root() / row.storage_path
+            if path.is_file():
+                content = path.read_text(encoding="utf-8", errors="ignore")
+        if not content.strip() and row.text_path:
+            path = _data_root() / row.text_path
+            if path.is_file():
+                content = path.read_text(encoding="utf-8", errors="ignore")
+        return SourceContentOut(
+            source_id=row.id,
+            title=(row.title or row.filename or f"来源 #{row.id}"),
+            content=content,
+            format="markdown",
+            status=row.status or "",
+            editable=True,
+        )
+
+    async def update_content(
+        self,
+        db: AsyncSession,
+        source_id: int,
+        payload: SourceContentIn,
+    ) -> SourceContentOut:
+        row = await self.get(db, source_id)
+        self._assert_editable_note(row)
+        content = payload.content.replace("\r\n", "\n")
+        if not content.strip():
+            raise HTTPException(status_code=400, detail="内容不能为空")
+
+        title = (payload.title or "").strip()
+        if not title:
+            title = (
+                content.splitlines()[0][:80].lstrip("# ").strip()
+                or (row.title or "未命名笔记")
+            )
+        title = title[:500]
+
+        folder = _data_root() / "uploads" / str(row.id)
+        folder.mkdir(parents=True, exist_ok=True)
+
+        dest = folder / "original.md"
+        if row.storage_path:
+            existing = _data_root() / row.storage_path
+            if existing.is_file() and existing.suffix.lower() in {".txt", ".markdown"}:
+                dest = existing
+        dest.write_text(content, encoding="utf-8")
+
+        text_file = folder / "extracted.txt"
+        text_file.write_text(content, encoding="utf-8")
+
+        row.title = title
+        row.filename = row.filename or dest.name
+        if not str(row.filename).lower().endswith((".md", ".markdown", ".txt")):
+            row.filename = "paste.md"
+        row.storage_path = str(dest.relative_to(_data_root())).replace("\\", "/")
+        row.text_path = str(text_file.relative_to(_data_root())).replace("\\", "/")
+        row.char_count = len(content)
+        row.error_message = ""
+        if row.status != "committed":
+            row.status = "ready"
+            row.stage = "extracted"
+            row.progress = 100
+        else:
+            row.stage = "edited"
+            row.progress = 100
+
+        await db.commit()
+        await db.refresh(row)
+
+        if row.status == "committed":
+            result = await db.execute(select(Entry).where(Entry.source_id == row.id).limit(1))
+            entry = result.scalar_one_or_none()
+            if entry:
+                entry.title = title
+                entry.title_key = normalize_title_key(title)
+                entry.content_hash = content_fingerprint(content)
+                if not (entry.summary or "").strip():
+                    entry.summary = content[:SUMMARY_CHARS].strip()
+                await db.commit()
+                try:
+                    await index_entry(db, entry.id, with_embed=True)
+                except Exception:
+                    pass
+
+        try:
+            await library_service.sync_source(db, row.id)
+        except Exception:
+            pass
+
+        return SourceContentOut(
+            source_id=row.id,
+            title=row.title,
+            content=content,
+            format="markdown",
+            status=row.status or "",
+            editable=True,
+        )
 
 
 def urlparse_title(url: str) -> str:

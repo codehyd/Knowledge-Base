@@ -35,5 +35,7 @@ class ChatMessage(Base):
     trust_note = mapped_column(Text, default="")
     # done | pending | error —— pending 时 content 可为空，便于切页后轮询
     status = mapped_column(String(20), default="done", index=True)
+    # pending 时的处理阶段：accepted | retrieving | generating | citing
+    progress = mapped_column(String(40), default="")
     citations_json = mapped_column(Text, default="")
     created_at = mapped_column(DateTime(timezone=True), server_default=func.now())

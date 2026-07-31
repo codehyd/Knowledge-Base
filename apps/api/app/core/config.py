@@ -28,7 +28,10 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_chat_model: str = "deepseek-v4-flash"
     llm_embed_model: str = "deepseek-v4-flash"
-    api_cors_origins: str = "http://localhost:5173,http://localhost:8080"
+    api_cors_origins: str = (
+        "http://localhost:5173,http://localhost:8080,"
+        "http://127.0.0.1:41779,http://localhost:41779"
+    )
     # 本机开发默认仓库根下 data/；Compose 内通过 DATA_DIR=/data 覆盖
     data_dir: str = "data"
     # 可选：中国哲学书电子化计划（ctext.org）全文 API Key

@@ -26,6 +26,8 @@ class Source(Base):
     error_message = mapped_column(Text, default="")
     storage_path = mapped_column(String(1000), default="")  # 相对 data 的原件路径
     text_path = mapped_column(String(1000), default="")  # 抽取后的正文路径
+    # 笔记库（data/vault）内相对路径，如 folder/note.md；非 vault 笔记为空
+    vault_path = mapped_column(String(1000), default="", index=True)
     char_count = mapped_column(Integer, default=0)
     created_at = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at = mapped_column(
