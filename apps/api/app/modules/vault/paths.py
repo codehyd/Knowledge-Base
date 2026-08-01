@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import re
 import shutil
+import sys
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -17,8 +18,27 @@ from fastapi import HTTPException
 from app.core.config import get_settings
 
 _INVALID = re.compile(r'[<>:"|?*\x00-\x1f]')
-_REPO_ROOT = Path(__file__).resolve().parents[5]
 _LOG = logging.getLogger(__name__)
+
+
+def _resolve_repo_root() -> Path:
+    """源码布局：…/Knowledge-Base/apps/api/app/modules/vault/paths.py → parents[5]。
+
+    PyInstaller 解压路径可能很短（如 C:\\_MEIxxx\\…），parents[5] 会 IndexError，
+    打包态应以 DATA_DIR 绝对路径为准，这里只做相对 data_dir 的兜底。
+    """
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            return Path(meipass)
+    here = Path(__file__).resolve()
+    try:
+        return here.parents[5]
+    except IndexError:
+        return here.parents[len(here.parents) - 1]
+
+
+_REPO_ROOT = _resolve_repo_root()
 
 # 资源根下的笔记分类文件夹名（与 library list 的「笔记库」标签一致）
 VAULT_CATEGORY_DIR = "笔记库"

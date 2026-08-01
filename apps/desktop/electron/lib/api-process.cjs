@@ -5,6 +5,7 @@
 const { app } = require("electron");
 const path = require("path");
 const fs = require("fs");
+const http = require("http");
 const { spawn, execSync } = require("child_process");
 
 const state = require("./state.cjs");
@@ -25,6 +26,31 @@ const {
 function waitForHealth(timeoutMs = 90000) {
   return waitForHttp(`${API_ORIGIN}/health`, timeoutMs, "API", {
     okStatuses: [200],
+  });
+}
+
+/** GET JSON；超时/失败抛错。用于识别旧版孤儿 API。 */
+function httpGetJson(url, timeoutMs = 2500) {
+  return new Promise((resolve, reject) => {
+    const req = http.get(url, (res) => {
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => {
+        const raw = Buffer.concat(chunks).toString("utf8");
+        let data = null;
+        try {
+          data = raw ? JSON.parse(raw) : null;
+        } catch {
+          data = null;
+        }
+        resolve({ status: res.statusCode || 0, data, raw });
+      });
+    });
+    req.on("error", reject);
+    req.setTimeout(timeoutMs, () => {
+      req.destroy();
+      reject(new Error(`timeout ${url}`));
+    });
   });
 }
 
@@ -144,10 +170,46 @@ function stopApi() {
   state.apiSpawnedByUs = false;
 }
 
-async function isExternalApiStable() {
+/**
+ * 端口上已有 API 时，仅在「带笔记库/技能路由」时复用。
+ * 升级后常见：旧 kongku-api 孤儿仍占 18765，新前端点笔记 → Not Found / Method Not Allowed。
+ */
+async function canReuseExternalApi() {
+  if (process.env.KONGKU_FORCE_SIDECAR === "1") return false;
   try {
-    await waitForHealth(1500);
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    const health = await httpGetJson(`${API_ORIGIN}/health`, 1500);
+    if (health.status !== 200 || !health.data?.ok) return false;
+
+    const features = Array.isArray(health.data.features)
+      ? health.data.features
+      : [];
+    if (features.includes("vault") && features.includes("skills")) {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      await waitForHealth(1500);
+      return true;
+    }
+
+    // 旧版 health 无 features：直接探路由（有则 200，无则 404/405）
+    const skills = await httpGetJson(`${API_ORIGIN}/api/skills`, 2000);
+    if (skills.status !== 200) {
+      console.warn(
+        "[kongku] 端口上的 API 无 /api/skills（status=",
+        skills.status,
+        "），将替换为本版 sidecar",
+      );
+      return false;
+    }
+    const vault = await httpGetJson(`${API_ORIGIN}/api/vault/tree`, 2000);
+    // 鉴权/库错误也可能非 200，但 404/405 基本可断定路由未挂载
+    if (vault.status === 404 || vault.status === 405) {
+      console.warn(
+        "[kongku] 端口上的 API 无笔记库路由（status=",
+        vault.status,
+        "），将替换为本版 sidecar",
+      );
+      return false;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 400));
     await waitForHealth(1500);
     return true;
   } catch {
@@ -155,9 +217,44 @@ async function isExternalApiStable() {
   }
 }
 
-/** 开发态：清掉占用端口的孤儿 uvicorn */
+/** 清掉占用 18765 的监听进程（开发孤儿 uvicorn / 升级残留 sidecar） */
 function killStaleApiListeners() {
-  if (app.isPackaged) return;
+  const selfPid = process.pid;
+  const childPid = state.apiChild?.pid;
+
+  if (process.platform === "win32") {
+    try {
+      const out = execSync(`netstat -ano | findstr :${API_PORT}`, {
+        encoding: "utf8",
+        windowsHide: true,
+      });
+      const pids = new Set();
+      for (const line of out.split(/\r?\n/)) {
+        if (!/LISTENING/i.test(line)) continue;
+        const m = /(\d+)\s*$/.exec(line.trim());
+        if (!m) continue;
+        const pid = Number(m[1]);
+        if (!pid || pid === selfPid || pid === childPid) continue;
+        pids.add(pid);
+      }
+      for (const pid of pids) {
+        try {
+          execSync(`taskkill /PID ${pid} /F /T`, {
+            encoding: "utf8",
+            windowsHide: true,
+            stdio: "ignore",
+          });
+          console.warn("[kongku] 已结束占用端口的旧 API 进程 pid=", pid);
+        } catch {
+          /* ignore */
+        }
+      }
+    } catch {
+      /* 无监听或 netstat 失败 */
+    }
+    return;
+  }
+
   try {
     const out = execSync(
       `lsof -ti tcp:${API_PORT} -sTCP:LISTEN 2>/dev/null || true`,
@@ -166,7 +263,7 @@ function killStaleApiListeners() {
     if (!out) return;
     for (const pidText of out.split(/\s+/)) {
       const pid = Number(pidText);
-      if (!pid || pid === process.pid || pid === state.apiChild?.pid) continue;
+      if (!pid || pid === selfPid || pid === childPid) continue;
       try {
         process.kill(pid, "SIGTERM");
         console.warn("[kongku] 已结束占用端口的旧 API 进程 pid=", pid);
@@ -181,11 +278,18 @@ function killStaleApiListeners() {
 
 function buildApiEnv() {
   const dataDir = runtimeDataDir();
+  let appVersion = "";
+  try {
+    appVersion = String(app.getVersion() || "");
+  } catch {
+    appVersion = "";
+  }
   const env = loadDotEnvInto({
     ...process.env,
     KONGKU_API_PORT: String(API_PORT),
     KONGKU_API_HOST: API_HOST,
     KONGKU_DESKTOP: "1",
+    KONGKU_APP_VERSION: appVersion,
     DATA_DIR: dataDir,
     KONGKU_YTDLP_COOKIES: ytDlpCookiesPath(),
     // API 抖音抓取失败时，回调桌面端用已登录会话下媒体
@@ -312,16 +416,16 @@ async function startApiSynced() {
   state.apiStatus = "starting";
   state.apiLastError = "";
 
-  if (app.isPackaged && (await isExternalApiStable())) {
+  // 仅复用「带笔记库/技能」的已运行 API；否则杀掉占端口的旧进程再拉起本版
+  if (await canReuseExternalApi()) {
     state.apiSpawnedByUs = false;
     state.apiStatus = "ready";
+    console.log("[kongku] 复用已运行的本机 API:", API_ORIGIN);
     return { ready: true, spawnedByUs: false };
   }
 
-  if (!app.isPackaged) {
-    killStaleApiListeners();
-    await new Promise((resolve) => setTimeout(resolve, 300));
-  }
+  killStaleApiListeners();
+  await new Promise((resolve) => setTimeout(resolve, 400));
 
   const env = buildApiEnv();
   if (!app.isPackaged) {

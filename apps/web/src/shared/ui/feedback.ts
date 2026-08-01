@@ -20,5 +20,12 @@ function softenFetchError(msg: string): string {
   ) {
     return "下载更新时网络中断（GitHub 大文件在国内易断开）。请重试，或改用浏览器手动下载安装包。";
   }
+  // 升级后旧 sidecar 仍占端口时，笔记/技能请求会落到静态文件挂载 → 英文 404/405
+  if (/^not found$/i.test(msg)) {
+    return "接口不存在（可能还在用旧版后端）。请完全退出空库后重开，或结束占用 18765 端口的 kongku-api 再启动。";
+  }
+  if (/^method not allowed$/i.test(msg)) {
+    return "接口方法不被允许（多半是旧版后端）。请完全退出空库后重开，确认已更新到最新安装包。";
+  }
   return msg;
 }

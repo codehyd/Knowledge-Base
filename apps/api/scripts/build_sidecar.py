@@ -87,6 +87,16 @@ def main() -> int:
         "app.modules.chat.router",
         "--hidden-import",
         "app.modules.open_books.router",
+        "--hidden-import",
+        "app.modules.library.router",
+        "--hidden-import",
+        "app.modules.skills.router",
+        "--hidden-import",
+        "app.modules.vault.router",
+        "--hidden-import",
+        "app.modules.vault.paths",
+        "--hidden-import",
+        "app.modules.vault.service",
         str(ENTRY),
     ]
 

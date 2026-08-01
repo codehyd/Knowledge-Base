@@ -408,6 +408,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export type HealthStatus = {
   ok: boolean;
   service?: string;
+  version?: string;
+  features?: string[];
   database: boolean;
   database_message?: string;
 };

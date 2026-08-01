@@ -1,3 +1,5 @@
+import os
+
 from sqlalchemy import text
 
 from app.core.database import get_engine, schema_status
@@ -11,6 +13,9 @@ DB_UNAVAILABLE_MESSAGE = (
 DB_SCHEMA_MESSAGE = (
     "数据库已连接，但表结构未就绪。请到「设置 → 数据库」点击「初始化表结构」。"
 )
+
+# 与桌面端校验用：旧版孤儿 sidecar 没有这些字段/能力
+API_FEATURES = ["vault", "skills", "library", "web-cache-control"]
 
 
 class HealthService:
@@ -31,8 +36,15 @@ class HealthService:
             database_ok = False
             message = DB_UNAVAILABLE_MESSAGE
 
+        version = (
+            os.environ.get("KONGKU_APP_VERSION", "").strip()
+            or os.environ.get("npm_package_version", "").strip()
+            or "0.1.0"
+        )
         return HealthOut(
             ok=True,
+            version=version,
+            features=list(API_FEATURES),
             database=database_ok,
             database_message=message,
         )
