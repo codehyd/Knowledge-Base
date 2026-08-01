@@ -13,6 +13,14 @@ const OUT_DIR = __dirname;
 const BASE = process.env.KONGKU_WEB_URL || "http://127.0.0.1:41779";
 const VIEWPORT = { width: 1360, height: 860 };
 
+const BOOK_ENTRY_TITLE = "被讨厌的勇气";
+
+async function selectBookEntry(page) {
+  const item = page.locator("ul li button strong", { hasText: BOOK_ENTRY_TITLE }).first();
+  await item.waitFor({ state: "visible", timeout: 15000 });
+  await item.locator("xpath=ancestor::button[1]").click();
+}
+
 const CARDS = [
   {
     file: "xhs-01-cover-desktop.png",
@@ -58,9 +66,7 @@ const CARDS = [
     subtitle: "对话引用定位 · 确认后加入正式笔记",
     route: "/knowledge",
     afterNavigate: async (page) => {
-      const item = page.locator("ul li button strong").first();
-      await item.waitFor({ state: "visible", timeout: 15000 });
-      await item.locator("xpath=ancestor::button[1]").click();
+      await selectBookEntry(page);
       await page.waitForTimeout(800);
       const previewBtn = page.getByRole("button", { name: "预览正文" });
       if (await previewBtn.count()) {
@@ -91,17 +97,15 @@ const CARDS = [
   {
     file: "xhs-06-knowledge-desktop.png",
     title: "知识浏览：分类看条目",
-    subtitle: "个人知识库 · 分类清晰 · 跟读与预览",
+    subtitle: "个人知识库 · 分类清晰 · 书架与预览",
     route: "/knowledge",
     afterNavigate: async (page) => {
-      const item = page.locator("ul li button strong").first();
-      await item.waitFor({ state: "visible", timeout: 15000 });
-      await item.locator("xpath=ancestor::button[1]").click();
+      await selectBookEntry(page);
       await page.waitForTimeout(900);
     },
     features: [
-      { icon: "📚", title: "分类筛选", desc: "按标签快速定位" },
-      { icon: "▶", title: "视频跟读", desc: "文案 + 音轨同步" },
+      { icon: "📚", title: "书架", desc: "EPUB / PDF 确认书籍" },
+      { icon: "🏷", title: "分类筛选", desc: "按标签快速定位" },
       { icon: "🔍", title: "全文搜索", desc: "标题摘要一键搜" },
     ],
     footer: "你喂什么 · 它懂什么",
@@ -311,7 +315,15 @@ async function main() {
     process.exit(1);
   }
 
-  for (const card of CARDS) {
+  const only = (process.env.ONLY || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const cards = only.length
+    ? CARDS.filter((c) => only.some((o) => c.file.includes(o)))
+    : CARDS;
+
+  for (const card of cards) {
     console.log(`\n[${card.file}]`);
     const shot = await captureApp(page, card);
     await renderCard(browser, card, shot);

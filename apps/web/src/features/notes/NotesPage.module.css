@@ -60,11 +60,51 @@
   line-height: 1.5;
 }
 
+/* 根目录：路径标签样式，和文件夹树节点区分开 */
+.rootLabel {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  margin-bottom: 6px;
+  padding: 4px 8px 8px;
+  border: none;
+  border-bottom: 1px solid #eef1f4;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rootLabel:hover .rootLabelPath {
+  color: var(--color-accent, #2a6f6a);
+}
+
+.rootLabelActive .rootLabelPath {
+  color: var(--color-accent, #2a6f6a);
+}
+
+.rootLabelPath {
+  font-size: 12px;
+  font-weight: 500;
+  color: #64748b;
+  letter-spacing: 0.01em;
+  transition: color 0.15s ease;
+}
+
+.rootLabelHint {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: #94a3b8;
+}
+
 .treeNode {
   display: flex;
   align-items: center;
   gap: 6px;
   width: 100%;
+  min-width: 0;
   padding: 5px 8px;
   border: none;
   border-radius: 6px;
@@ -73,6 +113,20 @@
   font-size: 13px;
   text-align: left;
   cursor: pointer;
+  overflow: hidden;
+}
+
+.treeNode :global(.anticon) {
+  flex-shrink: 0;
+}
+
+.treeLabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.35;
 }
 
 .treeNode:hover {
@@ -89,6 +143,164 @@
   margin: 2px 0;
 }
 
+.ctxMenu {
+  position: fixed;
+  z-index: 1200;
+  min-width: 168px;
+  padding: 4px;
+  border: 1px solid #d7dde2;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 8px 24px rgba(31, 41, 51, 0.12), 0 1px 2px rgba(31, 41, 51, 0.06);
+  animation: ctxIn 0.12s ease-out;
+}
+
+@keyframes ctxIn {
+  from {
+    opacity: 0;
+    transform: scale(0.98) translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.ctxItem {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: #1f2933;
+  font-size: 13px;
+  line-height: 1.3;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ctxItem:hover:not(:disabled) {
+  background: #eef2f6;
+}
+
+.ctxItem:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ctxDanger {
+  color: #c53d3d;
+}
+
+.ctxDanger:hover:not(:disabled) {
+  background: #fdecec;
+}
+
+.ctxSep {
+  height: 1px;
+  margin: 4px 6px;
+  background: #e6eaee;
+}
+
+.resGroup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 8px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #94a3b8;
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
+.resGroupCount {
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #e8edf1;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+}
+
+.resItem {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 6px;
+}
+
+.resItem:hover {
+  background: #eef2f6;
+}
+
+.resMain {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #334155;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.resIcon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: #64748b;
+  font-size: 14px;
+}
+
+.resTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.35;
+}
+
+.resDelete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  margin-right: 4px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 12px;
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.resItem:hover .resDelete,
+.resItem:focus-within .resDelete {
+  opacity: 1;
+}
+
+.resDelete:hover {
+  background: #fff1f0;
+  color: #cf1322;
+}
+
 .treeChildren {
   margin-left: 12px;
   border-left: 1px solid #e2e8f0;
@@ -103,35 +315,463 @@
   background: #fff;
 }
 
-.editorHead {
+.tabBar {
+  display: flex;
+  flex-shrink: 0;
+  align-items: flex-end;
+  gap: 4px;
+  min-height: 40px;
+  padding: 6px 8px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid #e6eaee;
+  background: #f3f5f6;
+  scrollbar-width: thin;
+}
+
+.tab {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  border-bottom: 1px solid #eef1f4;
+  gap: 6px;
+  max-width: 200px;
+  min-width: 96px;
+  height: 30px;
+  margin-bottom: 0;
+  padding: 0 8px 0 12px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  color: #64748b;
+  font-size: 12.5px;
+  cursor: grab;
+  user-select: none;
+  transition:
+    background 0.16s ease,
+    color 0.16s ease,
+    border-color 0.16s ease,
+    box-shadow 0.16s ease,
+    opacity 0.16s ease;
+}
+
+.tab:active {
+  cursor: grabbing;
+}
+
+.tab:hover {
+  background: #e8ecef;
+  color: #334155;
+}
+
+.tabActive {
+  background: #fff;
+  border-color: #e6eaee;
+  color: #1f2933;
+  font-weight: 550;
+  box-shadow: 0 -1px 0 #fff;
+}
+
+.tabActive::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 0;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--color-accent, #2a6f6a);
+}
+
+.tabDragging {
+  opacity: 0.45;
+}
+
+.tabDropBefore::before {
+  content: "";
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: -3px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--color-accent, #2a6f6a);
+  box-shadow: 0 0 0 1px rgba(42, 111, 106, 0.2);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.tabDropAfter {
+  box-shadow: 2px 0 0 0 var(--color-accent, #2a6f6a);
+}
+
+.tabActive.tabDropAfter {
+  box-shadow: 2px 0 0 0 var(--color-accent, #2a6f6a), 0 -1px 0 #fff;
+}
+
+.tabIcon {
+  flex-shrink: 0;
+  font-size: 13px;
+  opacity: 0.75;
+}
+
+.tabLabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.tabDot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #64748b;
+  transition: background 0.16s ease;
+}
+
+.tabActive .tabDot {
+  background: var(--color-accent, #2a6f6a);
+}
+
+.tabClose {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-left: 2px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 10px;
+  opacity: 0;
+  cursor: pointer;
+  transition:
+    opacity 0.14s ease,
+    background 0.14s ease,
+    color 0.14s ease;
+}
+
+.tab:hover .tabClose,
+.tabActive .tabClose,
+.tabDirty .tabClose {
+  opacity: 1;
+}
+
+.tabClose:hover {
+  background: rgba(31, 41, 51, 0.08);
+  color: #1f2933;
+}
+
+.treeNodeOpen {
+  color: #475569;
+}
+
+.treeNodeOpen .treeLabel {
+  font-weight: 500;
+}
+
+.editorMain {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.lakeCover .tabBar {
+  background: #f3f5f6;
+}
+
+/*
+ * 语雀编辑期间铺满整个窗口：其自带的 antd v4 全局样式会拖垮应用界面，
+ * 全屏覆盖后用户只看到编辑器，界面风格统一，也避免半成品式的视觉冲突。
+ */
+.lakeCover {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  background: #fff;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.lakeCover .editorHead {
+  flex-shrink: 0;
+}
+
+.editorHead {
+  position: relative;
+  padding: 18px 120px 0 28px;
 }
 
 .titleInput {
-  flex: 1;
-  min-width: 0;
+  padding: 0 !important;
+  color: var(--color-ink, #0f172a);
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.35;
 }
 
-.titleInput :global(.ant-input) {
-  font-size: 18px;
-  font-weight: 650;
-  border: none;
-  box-shadow: none !important;
-  padding-left: 0;
+.titleInput::placeholder {
+  color: #cbd5e1;
 }
 
 .meta {
-  flex: 0 0 auto;
+  margin-top: 4px;
   font-size: 12px;
-  color: var(--color-muted, #64748b);
-  white-space: nowrap;
+  color: #94a3b8;
+}
+
+.headActions {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.editorPane:hover .headActions,
+.headActions:focus-within,
+.headActionsVisible {
+  opacity: 1;
+}
+
+/* 头部控件：纯手写、无 antd 类名，语雀 v4 全局样式碰不到 */
+.iconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #8c8c8c;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.iconBtn:hover {
+  background: #f0f0f0;
+  color: #262626;
+}
+
+.iconBtnDanger:hover {
+  background: #fff1f0;
+  color: #cf1322;
+}
+
+.primaryBtn {
+  height: 26px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 6px;
+  background: var(--color-accent, #2a6f6a);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.primaryBtn:hover:not(:disabled) {
+  background: #1f5450;
+}
+
+.primaryBtn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.ghostBtn {
+  height: 32px;
+  padding: 0 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #fff;
+  color: #595959;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.ghostBtn:hover {
+  background: #f5f5f5;
+  border-color: #d1d5db;
+  color: #262626;
+}
+
+.confirmMask {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.36);
+}
+
+.confirmCard {
+  width: min(400px, 100%);
+  padding: 22px 22px 18px;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.18);
+}
+
+.confirmTitle {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1f2933;
+  line-height: 1.4;
+}
+
+.confirmBody {
+  margin-top: 10px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #64748b;
+}
+
+.confirmLead {
+  margin: 0;
+}
+
+.confirmPoints {
+  margin: 10px 0 0;
+  padding-left: 1.2em;
+  color: #475569;
+}
+
+.confirmPoints li {
+  margin: 4px 0;
+}
+
+.confirmInput {
+  display: block;
+  width: 100%;
+  height: 36px;
+  margin-top: 4px;
+  padding: 0 12px;
+  border: 1px solid #d7dde2;
+  border-radius: 8px;
+  background: #fff;
+  color: #1f2933;
+  font: inherit;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.confirmInput:focus {
+  border-color: var(--color-accent, #2a6f6a);
+  box-shadow: 0 0 0 3px rgba(42, 111, 106, 0.14);
+}
+
+.confirmInput:disabled {
+  opacity: 0.65;
+  background: #f7f8fa;
+}
+
+.confirmActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 22px;
+}
+
+.confirmActions .primaryBtn {
+  height: 32px;
+  padding: 0 16px;
+}
+
+.dangerBtn {
+  height: 32px;
+  padding: 0 16px;
+  border: none;
+  border-radius: 6px;
+  background: #cf1322;
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.dangerBtn:hover:not(:disabled) {
+  background: #a8071a;
+}
+
+.dangerBtn:disabled,
+.ghostBtn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.lakeSwitch {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 6px;
+  border-radius: 6px;
+}
+
+.lakeSwitch:hover {
+  background: #f5f5f5;
+}
+
+.lakeSwitchLabel {
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.miniSwitch {
+  position: relative;
+  width: 30px;
+  height: 17px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: #d1d5db;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.miniSwitchOn {
+  background: var(--color-accent, #2a6f6a);
+}
+
+.miniSwitchThumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  transition: left 0.2s ease;
+}
+
+.miniSwitchOn .miniSwitchThumb {
+  left: 15px;
 }
 
 .editorBody {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -139,11 +779,49 @@
   padding: 0;
 }
 
+/* 切回 Markdown 的短加载层：盖住重挂载瞬间的布局跳动 */
+.bootLoading {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+}
+
+.bootSpinner {
+  width: 26px;
+  height: 26px;
+  border: 2.5px solid var(--color-accent-soft, #e7f2f1);
+  border-top-color: var(--color-accent, #2a6f6a);
+  border-radius: 50%;
+  animation: bootSpin 0.8s linear infinite;
+}
+
+@keyframes bootSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .editorBody > * {
   flex: 1;
   min-height: 0;
   border: none !important;
   border-radius: 0 !important;
+  animation: editorFadeIn 0.28s ease;
+}
+
+@keyframes editorFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .emptyEditor {
@@ -156,17 +834,6 @@
   color: var(--color-muted, #64748b);
   padding: 40px;
   text-align: center;
-}
-
-.hintBar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 16px;
-  padding: 8px 16px;
-  border-top: 1px solid #eef1f4;
-  background: #fafbfc;
-  color: #94a3b8;
-  font-size: 11px;
 }
 
 @media (max-width: 900px) {

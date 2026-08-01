@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 import shutil
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -34,13 +36,22 @@ from app.modules.vault.schemas import (
 SUMMARY_CHARS = 800
 
 
+def _lake_source_path(md_path: Path) -> Path:
+    """与 .md 同目录同名的 Lake 源文件（实验：语雀编辑器双份存储）。"""
+    return md_path.with_name(f"{md_path.stem}.lake")
+
+
 class VaultService:
     def ensure_root(self) -> Path:
         return vault_root()
 
     async def _path_map(self, db: AsyncSession) -> dict[str, Source]:
         result = await db.execute(
-            select(Source).where(Source.vault_path != "", Source.vault_path.is_not(None))
+            select(Source).where(
+                Source.type == "note",
+                Source.vault_path != "",
+                Source.vault_path.is_not(None),
+            )
         )
         out: dict[str, Source] = {}
         for row in result.scalars().all():
@@ -86,13 +97,38 @@ class VaultService:
         return nodes
 
     async def tree(self, db: AsyncSession) -> VaultTreeOut:
+        from app.modules.vault.paths import vault_rel_prefix
+
         root = self.ensure_root()
+        await self._rewrite_legacy_storage_paths(db)
         path_map = await self._path_map(db)
         return VaultTreeOut(
-            root="vault",
+            root=vault_rel_prefix(),
             absolute_root=str(root),
             nodes=self._build_tree(root, path_map),
         )
+
+    async def _rewrite_legacy_storage_paths(self, db: AsyncSession) -> None:
+        """旧 storage_path 形如 vault/x.md → library/笔记库/x.md。"""
+        from app.modules.vault.paths import vault_rel_prefix
+
+        prefix = vault_rel_prefix()
+        result = await db.execute(
+            select(Source).where(Source.vault_path.is_not(None))
+        )
+        changed = False
+        for row in result.scalars().all():
+            rel = (row.vault_path or "").replace("\\", "/").strip()
+            if not rel:
+                continue
+            expected = f"{prefix}/{rel}"
+            old = (row.storage_path or "").replace("\\", "/")
+            if old.startswith("vault/") or (old and old != expected):
+                if old.startswith("vault/") or not old.startswith("library/"):
+                    row.storage_path = expected
+                    changed = True
+        if changed:
+            await db.commit()
 
     async def create_folder(self, db: AsyncSession, payload: VaultFolderIn) -> VaultNodeOut:
         from app.modules.vault.paths import safe_segment
@@ -110,24 +146,44 @@ class VaultService:
         rel = to_vault_rel(dest)
         return VaultNodeOut(id=rel, name=name, kind="folder", path=rel, children=[])
 
+    @staticmethod
+    def _note_timestamp() -> str:
+        return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    @staticmethod
+    def _strip_note_timestamp(title: str) -> str:
+        """去掉末尾 _YYYYMMDD_HHMMSS / _ms，避免重复叠加时间戳。"""
+        raw = (title or "").strip()
+        cleaned = re.sub(r"_\d{8}_\d{6}(_\d{3})?$", "", raw).strip()
+        return cleaned or "未命名笔记"
+
+    def _allocate_note_path(self, parent: Path, base_title: str) -> tuple[Path, str]:
+        """生成带单个时间戳的唯一笔记路径，返回 (path, title_stem)。"""
+        base = self._strip_note_timestamp(base_title)[:180]
+        for _ in range(50):
+            ts = self._note_timestamp()
+            for name in (f"{base}_{ts}", f"{base}_{ts}_{datetime.now().strftime('%f')[:3]}"):
+                dest = parent / note_filename(name)
+                if not dest.exists():
+                    return dest, Path(note_filename(name)).stem
+        raise HTTPException(status_code=409, detail="无法生成唯一文件名")
+
     def _unique_note_path(self, parent: Path, title: str) -> Path:
+        """重名时用新时间戳替换末尾时间戳，不叠加。"""
         filename = note_filename(title)
         dest = parent / filename
         if not dest.exists():
             return dest
-        stem = Path(filename).stem
-        for i in range(2, 200):
-            candidate = parent / f"{stem}-{i}.md"
-            if not candidate.exists():
-                return candidate
-        raise HTTPException(status_code=409, detail="无法生成唯一文件名")
+        path, _ = self._allocate_note_path(parent, title)
+        return path
 
     async def create_note(self, db: AsyncSession, payload: VaultNoteCreateIn) -> VaultNoteOut:
         parent = resolve_in_vault(payload.parent)
         if not parent.exists() or not parent.is_dir():
             raise HTTPException(status_code=404, detail="父目录不存在")
-        title = (payload.title or "未命名笔记").strip()[:200] or "未命名笔记"
-        dest = self._unique_note_path(parent, title)
+        dest, title = self._allocate_note_path(
+            parent, (payload.title or "未命名笔记").strip()[:180] or "未命名笔记"
+        )
         content = f"# {title}\n\n"
         dest.write_text(content, encoding="utf-8")
         rel = to_vault_rel(dest)
@@ -180,6 +236,12 @@ class VaultService:
         if not path.is_file():
             raise HTTPException(status_code=404, detail="笔记文件缺失")
         content = path.read_text(encoding="utf-8", errors="ignore")
+        lake_path = _lake_source_path(path)
+        source_lake = (
+            lake_path.read_text(encoding="utf-8", errors="ignore")
+            if lake_path.is_file()
+            else None
+        )
         return VaultNoteOut(
             source_id=row.id,
             title=row.title or path.stem,
@@ -188,6 +250,7 @@ class VaultService:
             status=row.status or "",
             committed=row.status == "committed",
             char_count=len(content),
+            source_lake=source_lake,
         )
 
     async def _ensure_category(self, db: AsyncSession, name: str) -> Category:
@@ -220,14 +283,29 @@ class VaultService:
             )
             db.add(entry)
             await db.flush()
-            cat = await self._ensure_category(db, "笔记库")
-            db.add(EntryCategory(entry_id=entry.id, category_id=cat.id))
         else:
             entry.title = title
             entry.title_key = normalize_title_key(title)
             entry.content_hash = digest
             if len((entry.summary or "").strip()) < 8:
                 entry.summary = text[:SUMMARY_CHARS].strip()
+
+        # 手写笔记固定只挂「笔记库」分类，避免误挂书籍等标签造成知识页错乱
+        cat = await self._ensure_category(db, "笔记库")
+        existing_links = await db.execute(
+            select(EntryCategory).where(EntryCategory.entry_id == entry.id)
+        )
+        for link in existing_links.scalars().all():
+            if int(link.category_id) != int(cat.id):
+                await db.delete(link)
+        has_note_cat = await db.execute(
+            select(EntryCategory).where(
+                EntryCategory.entry_id == entry.id,
+                EntryCategory.category_id == cat.id,
+            )
+        )
+        if has_note_cat.scalar_one_or_none() is None:
+            db.add(EntryCategory(entry_id=entry.id, category_id=cat.id))
 
         row.status = "committed"
         row.stage = "vault_synced"
@@ -256,6 +334,14 @@ class VaultService:
         title = title[:500]
 
         path.write_text(content, encoding="utf-8")
+
+        if payload.source_lake is not None:
+            lake_path = _lake_source_path(path)
+            if payload.source_lake.strip():
+                lake_path.write_text(payload.source_lake, encoding="utf-8")
+            else:
+                lake_path.unlink(missing_ok=True)
+
         folder = data_root() / "uploads" / str(row.id)
         folder.mkdir(parents=True, exist_ok=True)
         text_file = folder / "extracted.txt"
@@ -273,6 +359,7 @@ class VaultService:
             await self._auto_commit(db, row, content)
             await db.refresh(row)
 
+        lake_path = _lake_source_path(path)
         return VaultNoteOut(
             source_id=row.id,
             title=row.title,
@@ -281,6 +368,11 @@ class VaultService:
             status=row.status or "",
             committed=row.status == "committed",
             char_count=len(content),
+            source_lake=(
+                lake_path.read_text(encoding="utf-8", errors="ignore")
+                if lake_path.is_file()
+                else None
+            ),
         )
 
     async def patch_node(self, db: AsyncSession, payload: VaultNodePatchIn) -> VaultNodeOut:
@@ -322,6 +414,11 @@ class VaultService:
         src.rename(dest)
         new_rel = to_vault_rel(dest)
 
+        if not is_dir:
+            old_lake = _lake_source_path(src)
+            if old_lake.is_file():
+                old_lake.rename(_lake_source_path(dest))
+
         path_map = await self._path_map(db)
         touched: Source | None = path_map.get(old_rel)
         for key, row in list(path_map.items()):
@@ -351,6 +448,12 @@ class VaultService:
 
     async def delete_note(self, db: AsyncSession, source_id: int) -> dict:
         row = await self._get_vault_source(db, source_id)
+        # 双保险：绝不删除非笔记来源（书籍/视频等）
+        if (row.type or "") != "note":
+            raise HTTPException(status_code=400, detail="只能删除笔记库中的笔记")
+        if not (row.vault_path or "").strip():
+            raise HTTPException(status_code=400, detail="该来源不在笔记库中")
+
         path = resolve_in_vault(row.vault_path)
         sid = int(row.id)
 
@@ -371,11 +474,90 @@ class VaultService:
 
         if path.is_file():
             path.unlink(missing_ok=True)
+        _lake_source_path(path).unlink(missing_ok=True)
+        # 仅清理该笔记自己的 uploads/{id}（抽取副本），不碰 library/书籍 等镜像目录。
+        # 曾调用 remove_source_from_library：在 SQLite 复用 source id 时，可能误删
+        # 同 id 残留的书籍资源文件夹。
         upload = data_root() / "uploads" / str(sid)
         if upload.exists():
             shutil.rmtree(upload, ignore_errors=True)
 
         return {"ok": True, "source_id": sid}
+
+    async def register_path(self, db: AsyncSession, rel: str) -> VaultNoteOut:
+        """把笔记库中未登记的 .md 重新登记为来源（修复误清队列留下的 orphan）。"""
+        path = resolve_in_vault(rel)
+        if not path.is_file() or path.suffix.lower() != ".md":
+            raise HTTPException(status_code=404, detail="笔记文件不存在")
+        key = to_vault_rel(path)
+        path_map = await self._path_map(db)
+        existing = path_map.get(key)
+        if existing:
+            return await self.get_note(db, int(existing.id))
+
+        content = path.read_text(encoding="utf-8", errors="ignore")
+        title = path.stem[:500] or "未命名笔记"
+        row = Source(
+            type="note",
+            title=title,
+            filename=path.name,
+            status="ready",
+            stage="vault",
+            progress=100,
+            storage_path=str(path.relative_to(data_root())).replace("\\", "/"),
+            vault_path=key,
+            char_count=len(content),
+        )
+        db.add(row)
+        await db.commit()
+        await db.refresh(row)
+
+        folder = data_root() / "uploads" / str(row.id)
+        folder.mkdir(parents=True, exist_ok=True)
+        text_file = folder / "extracted.txt"
+        text_file.write_text(content, encoding="utf-8")
+        row.text_path = str(text_file.relative_to(data_root())).replace("\\", "/")
+        await db.commit()
+        await db.refresh(row)
+
+        if content.strip():
+            await self._auto_commit(db, row, content)
+            await db.refresh(row)
+
+        lake_path = _lake_source_path(path)
+        return VaultNoteOut(
+            source_id=row.id,
+            title=row.title,
+            path=key,
+            content=content,
+            status=row.status or "",
+            committed=row.status == "committed",
+            char_count=len(content),
+            source_lake=(
+                lake_path.read_text(encoding="utf-8", errors="ignore")
+                if lake_path.is_file()
+                else None
+            ),
+        )
+
+    async def delete_path(self, db: AsyncSession, rel: str) -> dict:
+        """按相对路径删除：已登记走 delete_note；未登记 orphan 只删磁盘文件。"""
+        path = resolve_in_vault(rel)
+        key = to_vault_rel(path) if path.exists() else (rel or "").replace("\\", "/").strip()
+        path_map = await self._path_map(db)
+        row = path_map.get(key)
+        if row:
+            return await self.delete_note(db, int(row.id))
+
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="文件或文件夹不存在")
+        if path.is_dir():
+            return await self.delete_folder(db, key)
+        if path.suffix.lower() != ".md":
+            raise HTTPException(status_code=400, detail="只能删除笔记文件")
+        path.unlink(missing_ok=True)
+        _lake_source_path(path).unlink(missing_ok=True)
+        return {"ok": True, "path": key, "orphan": True}
 
     async def delete_folder(self, db: AsyncSession, rel: str) -> dict:
         folder = resolve_in_vault(rel)
@@ -402,8 +584,10 @@ class VaultService:
     async def import_source(self, db: AsyncSession, payload: VaultImportIn) -> VaultNoteOut:
         """把非 vault 笔记导入笔记库根/指定目录，便于独立编辑器打开。"""
         row = await db.get(Source, payload.source_id)
-        if not row or row.type != "note":
-            raise HTTPException(status_code=404, detail="仅笔记可导入笔记库")
+        if not row:
+            raise HTTPException(status_code=404, detail="来源不存在")
+        if row.type != "note":
+            raise HTTPException(status_code=400, detail="仅笔记可导入笔记库")
         if (row.vault_path or "").strip():
             return await self.get_note(db, row.id)
 

@@ -23,21 +23,77 @@ if (-not (Test-Path ".env")) {
 
 New-Item -ItemType Directory -Force -Path "data\uploads", "data\exports", "data\tmp" | Out-Null
 
-function Find-Python {
-    $candidates = @("py -3.12", "python3.12", "python")
-    foreach ($cmd in $candidates) {
-        try {
-            $ver = & cmd /c "$cmd -c `"import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')`"" 2>$null
-            if ($LASTEXITCODE -ne 0) { continue }
-            $parts = $ver.Trim().Split(".")
-            $major = [int]$parts[0]
-            $minor = [int]$parts[1]
-            if ($major -eq 3 -and $minor -ge 12 -and $minor -le 13) {
-                return $cmd
-            }
-        } catch { }
+function Test-PythonVersion {
+    param([string]$Exe)
+    try {
+        $ver = & $Exe -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null
+        if ($LASTEXITCODE -ne 0) { return $false }
+        $parts = $ver.Trim().Split(".")
+        $major = [int]$parts[0]
+        $minor = [int]$parts[1]
+        return ($major -eq 3 -and $minor -ge 12)
+    } catch {
+        return $false
     }
-    throw "需要 Python 3.12+。可从 https://www.python.org/downloads/ 安装，并勾选 Add to PATH"
+}
+
+function Find-Python {
+    $seen = @{}
+
+    function Add-Candidate {
+        param([string]$Cmd, [string]$Exe = "")
+        if ($seen.ContainsKey($Cmd)) { return }
+        if ($Exe -and -not (Test-Path $Exe)) { return }
+        $seen[$Cmd] = $true
+        $script:candidateList += ,@($Cmd, $Exe)
+    }
+
+    $candidateList = @()
+    try {
+        $pyList = & py -0p 2>$null
+        foreach ($line in $pyList) {
+            if ($line -match '-V:(\d+\.\d+)\s+(.+\.exe)\s*$') {
+                $ver = $matches[1]
+                $exe = $matches[2].Trim()
+                $parts = $ver.Split(".")
+                $major = [int]$parts[0]
+                $minor = [int]$parts[1]
+                if ($major -eq 3 -and $minor -ge 12) {
+                    Add-Candidate "py -$ver" $exe
+                }
+            }
+        }
+    } catch { }
+
+    foreach ($name in @("python3.12", "python3.13", "python3.14", "python3", "python")) {
+        $cmd = Get-Command $name -ErrorAction SilentlyContinue
+        if ($cmd) {
+            Add-Candidate $cmd.Source $cmd.Source
+        }
+    }
+
+    foreach ($item in $candidateList) {
+        $cmd = $item[0]
+        $exe = $item[1]
+        if ($exe -and (Test-PythonVersion $exe)) {
+            return $cmd
+        }
+        if (-not $exe) {
+            try {
+                $ver = & cmd /c "$cmd -c `"import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')`"" 2>$null
+                if ($LASTEXITCODE -eq 0) {
+                    $parts = $ver.Trim().Split(".")
+                    $major = [int]$parts[0]
+                    $minor = [int]$parts[1]
+                    if ($major -eq 3 -and $minor -ge 12) {
+                        return $cmd
+                    }
+                }
+            } catch { }
+        }
+    }
+
+    throw "需要 Python 3.12 或更高版本。可从 https://www.python.org/downloads/ 安装，并勾选 Add to PATH"
 }
 
 $pyCmd = Find-Python

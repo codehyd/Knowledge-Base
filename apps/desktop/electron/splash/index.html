@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>空库</title>
+    <style>
+      :root {
+        --ink: #1f2933;
+        --muted: #6b7280;
+        --accent: #2a6f6a;
+        --accent-soft: #e7f2f1;
+        --bg: #f4f6f7;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: var(--bg);
+        color: var(--ink);
+        font-family: "IBM Plex Sans", "PingFang SC", "Noto Sans SC", sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      .stage {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        min-height: 100vh;
+        isolation: isolate;
+      }
+
+      .glow {
+        position: absolute;
+        inset: -20%;
+        z-index: 0;
+        background:
+          radial-gradient(ellipse 55% 42% at 50% 38%, rgba(42, 111, 106, 0.14), transparent 70%),
+          radial-gradient(ellipse 40% 32% at 72% 68%, rgba(42, 111, 106, 0.07), transparent 65%),
+          radial-gradient(ellipse 36% 28% at 22% 72%, rgba(31, 41, 51, 0.04), transparent 60%),
+          var(--bg);
+        animation: drift 10s ease-in-out infinite alternate;
+        pointer-events: none;
+      }
+
+      @keyframes drift {
+        from {
+          transform: translate3d(-1.2%, -0.8%, 0) scale(1);
+        }
+        to {
+          transform: translate3d(1.4%, 1%, 0) scale(1.03);
+        }
+      }
+
+      .card {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 22px;
+        padding: 24px;
+        text-align: center;
+        animation: riseIn 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+      }
+
+      @keyframes riseIn {
+        from {
+          opacity: 0;
+          transform: translateY(14px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      .logo-wrap {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        animation: logoIn 0.85s cubic-bezier(0.22, 1, 0.36, 1) 0.08s both;
+      }
+
+      .logo-wrap::before {
+        content: "";
+        position: absolute;
+        width: 180px;
+        height: 180px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(42, 111, 106, 0.16), transparent 68%);
+        animation: breathe 2.8s ease-in-out infinite;
+        pointer-events: none;
+      }
+
+      @keyframes logoIn {
+        from {
+          opacity: 0;
+          transform: translateY(10px) scale(0.96);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0) scale(1);
+        }
+      }
+
+      @keyframes breathe {
+        0%,
+        100% {
+          transform: scale(0.92);
+          opacity: 0.55;
+        }
+        50% {
+          transform: scale(1.08);
+          opacity: 1;
+        }
+      }
+
+      .logo {
+        position: relative;
+        height: 52px;
+        width: auto;
+        max-width: min(280px, 70vw);
+        object-fit: contain;
+        display: block;
+      }
+
+      .logo.is-fallback {
+        display: none;
+        width: 64px;
+        height: 64px;
+        border-radius: 16px;
+        box-shadow: 0 10px 28px rgba(42, 111, 106, 0.18);
+      }
+
+      .brand-fallback {
+        display: none;
+        font-size: 36px;
+        font-weight: 650;
+        letter-spacing: 0.08em;
+        color: var(--accent);
+      }
+
+      .meta {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 14px;
+        min-width: min(280px, 72vw);
+        animation: riseIn 0.7s cubic-bezier(0.22, 1, 0.36, 1) 0.18s both;
+      }
+
+      .status {
+        margin: 0;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.5;
+        letter-spacing: 0.02em;
+        max-width: 36em;
+      }
+
+      .track {
+        width: 148px;
+        height: 3px;
+        border-radius: 999px;
+        background: rgba(42, 111, 106, 0.12);
+        overflow: hidden;
+      }
+
+      .bar {
+        width: 42%;
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, transparent, var(--accent), transparent);
+        animation: shimmer 1.35s ease-in-out infinite;
+      }
+
+      @keyframes shimmer {
+        0% {
+          transform: translateX(-160%);
+        }
+        100% {
+          transform: translateX(320%);
+        }
+      }
+
+      .dots {
+        display: flex;
+        gap: 6px;
+        margin-top: -2px;
+      }
+
+      .dots span {
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--accent);
+        opacity: 0.35;
+        animation: pulseDot 1.2s ease-in-out infinite;
+      }
+
+      .dots span:nth-child(2) {
+        animation-delay: 0.15s;
+      }
+
+      .dots span:nth-child(3) {
+        animation-delay: 0.3s;
+      }
+
+      @keyframes pulseDot {
+        0%,
+        100% {
+          opacity: 0.28;
+          transform: translateY(0);
+        }
+        50% {
+          opacity: 1;
+          transform: translateY(-2px);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="stage">
+      <div class="glow" aria-hidden="true"></div>
+      <div class="card">
+        <div class="logo-wrap">
+          <img id="logo" class="logo" alt="空库" />
+          <div id="brandFallback" class="brand-fallback">空库</div>
+        </div>
+        <div class="meta">
+          <p id="status" class="status">正在启动…</p>
+          <div class="track" aria-hidden="true"><div class="bar"></div></div>
+          <div class="dots" aria-hidden="true"><span></span><span></span><span></span></div>
+        </div>
+      </div>
+    </div>
+    <script>
+      (function () {
+        var params = new URLSearchParams(location.search);
+        var msg = params.get("msg") || "正在启动…";
+        var logo = params.get("logo") || "";
+        var statusEl = document.getElementById("status");
+        var logoEl = document.getElementById("logo");
+        var fallbackEl = document.getElementById("brandFallback");
+        statusEl.textContent = msg;
+
+        function showFallback() {
+          logoEl.style.display = "none";
+          fallbackEl.style.display = "block";
+        }
+
+        if (logo) {
+          logoEl.src = logo;
+          logoEl.onerror = showFallback;
+        } else {
+          showFallback();
+        }
+
+        window.__kongkuSetSplashStatus = function (text) {
+          if (typeof text === "string" && text.trim()) {
+            statusEl.textContent = text;
+          }
+        };
+      })();
+    </script>
+  </body>
+</html>

@@ -25,6 +25,7 @@ class EntryListItem(BaseModel):
     source_id: Optional[int] = None
     source_type: str = ""
     source_uri: str = ""
+    in_vault: bool = False
     categories: list[str] = Field(default_factory=list)
     created_at: Optional[datetime] = None
 
@@ -51,6 +52,7 @@ class EntryDetailOut(BaseModel):
     source_filename: str = ""
     source_type: str = ""
     source_uri: str = ""
+    in_vault: bool = False
     has_follow_along: bool = False
 
     model_config = {"from_attributes": True}

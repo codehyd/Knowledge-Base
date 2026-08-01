@@ -37,30 +37,82 @@ fi
 
 mkdir -p data/uploads data/exports data/tmp
 
-pick_python() {
-  local candidates=()
-  if command -v python3.12 >/dev/null 2>&1; then candidates+=("python3.12"); fi
-  if [[ -x "$HOME/.local/bin/python3.12" ]]; then candidates+=("$HOME/.local/bin/python3.12"); fi
-  if command -v python3 >/dev/null 2>&1; then candidates+=("python3"); fi
+python_version_ok() {
+  local py="$1"
+  local major minor
+  major="$("$py" -c 'import sys; print(sys.version_info.major)' 2>/dev/null || echo 0)"
+  minor="$("$py" -c 'import sys; print(sys.version_info.minor)' 2>/dev/null || echo 0)"
+  [[ "$major" -eq 3 && "$minor" -ge 12 ]]
+}
 
+collect_python_candidates() {
+  candidates=()
+  local seen="|"
+  local name py
+
+  add_candidate() {
+    local py="$1"
+    [[ -n "$py" && -x "$py" ]] || return 0
+    case "$seen" in
+      *"|$py|"*) return 0 ;;
+    esac
+    seen="${seen}|$py|"
+    candidates+=("$py")
+  }
+
+  for name in python3.12 python3.13 python3.14 python3 python; do
+    if command -v "$name" >/dev/null 2>&1; then
+      add_candidate "$(command -v "$name")"
+    fi
+  done
+
+  if command -v which >/dev/null 2>&1; then
+    while IFS= read -r py; do
+      add_candidate "$py"
+    done < <(which -a python3.12 python3.13 python3.14 python3 python 2>/dev/null || true)
+  fi
+
+  for py in \
+    "$HOME/.local/bin/python3.12" \
+    "$HOME/.local/bin/python3.13" \
+    "$HOME/.local/bin/python3.14" \
+    "/opt/homebrew/bin/python3.12" \
+    "/opt/homebrew/bin/python3.13" \
+    "/opt/homebrew/bin/python3.14" \
+    "/usr/local/bin/python3.12" \
+    "/usr/local/bin/python3.13" \
+    "/usr/local/bin/python3.14"; do
+    add_candidate "$py"
+  done
+}
+
+pick_python() {
+  local py uv_py
+
+  collect_python_candidates
   for py in "${candidates[@]}"; do
-    local major minor
-    major="$("$py" -c 'import sys; print(sys.version_info.major)' 2>/dev/null || echo 0)"
-    minor="$("$py" -c 'import sys; print(sys.version_info.minor)' 2>/dev/null || echo 0)"
-    if [[ "$major" -eq 3 && "$minor" -ge 12 && "$minor" -le 13 ]]; then
+    if python_version_ok "$py"; then
       echo "$py"
       return 0
     fi
   done
 
   if command -v uv >/dev/null 2>&1; then
-    echo "未找到 Python 3.12，尝试用 uv 安装…" >&2
+    for uv_py in $(uv python find 3.12 2>/dev/null) $(uv python find 3.13 2>/dev/null) $(uv python find 3.14 2>/dev/null); do
+      if [[ -n "$uv_py" && -x "$uv_py" ]] && python_version_ok "$uv_py"; then
+        echo "$uv_py"
+        return 0
+      fi
+    done
+
+    echo "未找到 Python 3.12+，尝试用 uv 安装 3.12…" >&2
     uv python install 3.12
-    echo "$HOME/.local/bin/python3.12"
+    uv_py="$(uv python find 3.12 2>/dev/null || echo "$HOME/.local/bin/python3.12")"
+    echo "$uv_py"
     return 0
   fi
 
-  echo "需要 Python 3.12（或 3.13）。可安装：brew install python@3.12 或 curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
+  echo "需要 Python 3.12 或更高版本。可安装：brew install python@3.12 或 curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
   return 1
 }
 

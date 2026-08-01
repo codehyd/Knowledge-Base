@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { ReadOutlined } from "@ant-design/icons";
 import { App, Button, Empty, Modal, Spin, Tag } from "antd";
@@ -40,9 +40,18 @@ function formatLabel(item: BookshelfItem) {
 type Props = {
   open: boolean;
   onClose: () => void;
+  /** 打开后自动定位并预览该 source */
+  focusSourceId?: number | null;
+  /** 书架中找不到该 source 时回调（例如未确认书籍） */
+  onFocusMiss?: (sourceId: number) => void;
 };
 
-export function BookshelfModal({ open, onClose }: Props) {
+export function BookshelfModal({
+  open,
+  onClose,
+  focusSourceId = null,
+  onFocusMiss,
+}: Props) {
   const { message } = App.useApp();
   const [loading, setLoading] = useState(false);
   const [items, setItems] = useState<BookshelfItem[]>([]);
@@ -50,6 +59,7 @@ export function BookshelfModal({ open, onClose }: Props) {
   const [previewTitle, setPreviewTitle] = useState("");
   const [previewEntryId, setPreviewEntryId] = useState<number | null>(null);
   const [previewSourceId, setPreviewSourceId] = useState<number | null>(null);
+  const focusedRef = useRef<number | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -64,9 +74,31 @@ export function BookshelfModal({ open, onClose }: Props) {
   }, [message]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      focusedRef.current = null;
+      return;
+    }
     void load();
   }, [open, load]);
+
+  function openBook(item: BookshelfItem) {
+    setPreviewTitle(item.title);
+    setPreviewEntryId(item.entry_id ?? null);
+    setPreviewSourceId(item.source_id);
+    setPreviewOpen(true);
+  }
+
+  useEffect(() => {
+    if (!open || loading || !focusSourceId) return;
+    if (focusedRef.current === focusSourceId) return;
+    const hit = items.find((i) => i.source_id === focusSourceId);
+    focusedRef.current = focusSourceId;
+    if (hit) {
+      openBook(hit);
+      return;
+    }
+    onFocusMiss?.(focusSourceId);
+  }, [open, loading, focusSourceId, items, onFocusMiss]);
 
   const rows = useMemo(() => {
     const chunk = 6;
@@ -76,13 +108,6 @@ export function BookshelfModal({ open, onClose }: Props) {
     }
     return out;
   }, [items]);
-
-  function openBook(item: BookshelfItem) {
-    setPreviewTitle(item.title);
-    setPreviewEntryId(item.entry_id ?? null);
-    setPreviewSourceId(item.source_id);
-    setPreviewOpen(true);
-  }
 
   return (
     <>

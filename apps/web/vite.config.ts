@@ -1,9 +1,10 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { yuqueAssets } from "yuque-editor-core/vite-assets";
 import { fileURLToPath, URL } from "node:url";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), yuqueAssets()],
   // Electron loadFile 需要相对资源路径
   base: process.env.ELECTRON === "1" ? "./" : "/",
   resolve: {

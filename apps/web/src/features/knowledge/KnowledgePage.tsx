@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   BookOutlined,
   DeleteOutlined,
@@ -44,6 +44,32 @@ function sourceTypeLabel(type?: string) {
 
 const LIST_TAG_LIMIT = 4;
 
+function DeleteConfirmBody({ inVault }: { inVault?: boolean }) {
+  return (
+    <div className={styles.deleteConfirmBody}>
+      <p className={styles.deleteConfirmLead}>
+        {inVault
+          ? "将永久删除，不可恢复。具体包括："
+          : "将从知识库移除，不可恢复。具体包括："}
+      </p>
+      <ul className={styles.deleteConfirmPoints}>
+        {inVault ? (
+          <>
+            <li>知识库中的条目与检索切片</li>
+            <li>笔记库中的文件（.md / .lake），侧栏会同步消失</li>
+            <li>喂养来源记录与本地 uploads 缓存</li>
+          </>
+        ) : (
+          <>
+            <li>知识库中的这条条目与检索切片</li>
+            <li>喂养来源恢复为「可重新入库」（不删原文件）</li>
+          </>
+        )}
+      </ul>
+    </div>
+  );
+}
+
 function visibleTags(names: string[], limit = LIST_TAG_LIMIT) {
   const cleaned = (names || []).map((n) => n.trim()).filter(Boolean);
   return {
@@ -66,6 +92,7 @@ function formatDate(value?: string | null) {
 export function KnowledgePage() {
   const { message } = App.useApp();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [categories, setCategories] = useState<CategoryItem[]>([]);
   const [totalEntries, setTotalEntries] = useState(0);
   const [items, setItems] = useState<EntryListItem[]>([]);
@@ -84,7 +111,64 @@ export function KnowledgePage() {
   const [previewTitle, setPreviewTitle] = useState("");
   const [bookshelfOpen, setBookshelfOpen] = useState(false);
   const [mediaOpen, setMediaOpen] = useState(false);
+  const [focusSourceId, setFocusSourceId] = useState<number | null>(null);
   const [kind, setKind] = useState("");
+
+  // 笔记侧栏「资源」跳转：?source=ID&open=bookshelf|media|entry
+  const selectEntryBySource = useCallback(
+    async (sourceId: number) => {
+      try {
+        let page = 1;
+        const pageSize = 100;
+        for (;;) {
+          const res = await api.listEntries({ page, page_size: pageSize });
+          const hit = res.items.find((i) => i.source_id === sourceId);
+          if (hit) {
+            setSelectedId(hit.id);
+            setKind("");
+            setCategory("");
+            setSearch("");
+            setQ("");
+            return true;
+          }
+          if (page * pageSize >= res.total || res.items.length === 0) break;
+          page += 1;
+        }
+        message.warning("未找到对应知识条目，可能尚未入库");
+        return false;
+      } catch (err) {
+        message.error(formatError(err));
+        return false;
+      }
+    },
+    [message],
+  );
+
+  useEffect(() => {
+    const raw = searchParams.get("source");
+    const open = searchParams.get("open") || "entry";
+    const sourceId = raw ? Number(raw) : NaN;
+    if (!Number.isFinite(sourceId) || sourceId <= 0) return;
+
+    setFocusSourceId(sourceId);
+    if (open === "bookshelf") {
+      setBookshelfOpen(true);
+      setMediaOpen(false);
+    } else if (open === "media") {
+      setMediaOpen(true);
+      setBookshelfOpen(false);
+    } else {
+      setBookshelfOpen(false);
+      setMediaOpen(false);
+      void selectEntryBySource(sourceId);
+    }
+
+    // 消费掉参数，避免返回页面反复弹出
+    const next = new URLSearchParams(searchParams);
+    next.delete("source");
+    next.delete("open");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams, selectEntryBySource]);
 
   const refreshCategories = useCallback(async () => {
     const res = await api.listCategories();
@@ -166,8 +250,13 @@ export function KnowledgePage() {
 
   async function onDelete(id: number) {
     try {
+      const item = detail?.id === id ? detail : items.find((i) => i.id === id);
       await api.deleteEntry(id);
-      message.success("已删除，可在喂养页重新入库");
+      message.success(
+        item?.in_vault
+          ? "已删除知识条目，笔记库文件已同步清理"
+          : "已删除知识条目；来源可在喂养页重新入库",
+      );
       setSelectedId((prev) => (prev === id ? null : prev));
       setDetail(null);
       setPreviewOpen(false);
@@ -231,8 +320,32 @@ export function KnowledgePage() {
             </div>
           </Empty>
         </div>
-        <BookshelfModal open={bookshelfOpen} onClose={() => setBookshelfOpen(false)} />
-        <MediaShelfModal open={mediaOpen} onClose={() => setMediaOpen(false)} />
+        <BookshelfModal
+          open={bookshelfOpen}
+          focusSourceId={focusSourceId}
+          onFocusMiss={(sourceId) => {
+            setBookshelfOpen(false);
+            setFocusSourceId(null);
+            void selectEntryBySource(sourceId);
+          }}
+          onClose={() => {
+            setBookshelfOpen(false);
+            setFocusSourceId(null);
+          }}
+        />
+        <MediaShelfModal
+          open={mediaOpen}
+          focusSourceId={focusSourceId}
+          onFocusMiss={(sourceId) => {
+            setMediaOpen(false);
+            setFocusSourceId(null);
+            void selectEntryBySource(sourceId);
+          }}
+          onClose={() => {
+            setMediaOpen(false);
+            setFocusSourceId(null);
+          }}
+        />
       </section>
     );
   }
@@ -376,7 +489,7 @@ export function KnowledgePage() {
                   </button>
                   <Popconfirm
                     title="确定删除这条知识？"
-                    description="删除后可在喂养页重新入库。"
+                    description={<DeleteConfirmBody inVault={item.in_vault} />}
                     okText="删除"
                     cancelText="取消"
                     okButtonProps={{ danger: true }}
@@ -484,7 +597,7 @@ export function KnowledgePage() {
               <div className={styles.detailActions}>
                 <Popconfirm
                   title="确定删除这条知识？"
-                  description="将从知识库移除；对应喂养来源会恢复为可入库状态。"
+                  description={<DeleteConfirmBody inVault={detail.in_vault} />}
                   okText="删除"
                   cancelText="取消"
                   okButtonProps={{ danger: true }}
@@ -498,7 +611,7 @@ export function KnowledgePage() {
                   <Button
                     icon={<EditOutlined />}
                     onClick={() =>
-                      navigate(`/notes?import=${detail.source_id}`)
+                      navigate(`/notes?id=${detail.source_id}`)
                     }
                   >
                     在笔记库编辑
@@ -567,8 +680,32 @@ export function KnowledgePage() {
           }
         }}
       />
-      <BookshelfModal open={bookshelfOpen} onClose={() => setBookshelfOpen(false)} />
-      <MediaShelfModal open={mediaOpen} onClose={() => setMediaOpen(false)} />
+      <BookshelfModal
+        open={bookshelfOpen}
+        focusSourceId={focusSourceId}
+        onFocusMiss={(sourceId) => {
+          setBookshelfOpen(false);
+          setFocusSourceId(null);
+          void selectEntryBySource(sourceId);
+        }}
+        onClose={() => {
+          setBookshelfOpen(false);
+          setFocusSourceId(null);
+        }}
+      />
+      <MediaShelfModal
+        open={mediaOpen}
+        focusSourceId={focusSourceId}
+        onFocusMiss={(sourceId) => {
+          setMediaOpen(false);
+          setFocusSourceId(null);
+          void selectEntryBySource(sourceId);
+        }}
+        onClose={() => {
+          setMediaOpen(false);
+          setFocusSourceId(null);
+        }}
+      />
     </section>
   );
 }

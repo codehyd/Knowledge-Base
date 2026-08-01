@@ -110,6 +110,7 @@ export type VaultNote = {
   status: string;
   committed: boolean;
   char_count: number;
+  source_lake?: string | null;
 };
 
 export type LibraryFile = {
@@ -169,6 +170,7 @@ export type EntryListItem = {
   source_id?: number | null;
   source_type?: string;
   source_uri?: string;
+  in_vault?: boolean;
   categories: string[];
   created_at?: string | null;
 };
@@ -180,6 +182,7 @@ export type EntryDetail = EntryListItem & {
   source_filename: string;
   source_type: string;
   source_uri?: string;
+  in_vault?: boolean;
   has_follow_along?: boolean;
 };
 
@@ -649,7 +652,7 @@ export const api = {
     }),
   getVaultNote: (sourceId: number) =>
     request<VaultNote>(`/api/vault/notes/${sourceId}`),
-  saveVaultNote: (sourceId: number, body: { title?: string; content: string }) =>
+  saveVaultNote: (sourceId: number, body: { title?: string; content: string; source_lake?: string | null }) =>
     request<VaultNote>(`/api/vault/notes/${sourceId}`, {
       method: "PUT",
       body: JSON.stringify(body),
@@ -672,6 +675,15 @@ export const api = {
       `/api/vault/folders?path=${encodeURIComponent(path)}`,
       { method: "DELETE" },
     ),
+  deleteVaultPath: (path: string) =>
+    request<{ ok: boolean; path?: string; source_id?: number; orphan?: boolean }>(
+      `/api/vault/paths?path=${encodeURIComponent(path)}`,
+      { method: "DELETE" },
+    ),
+  registerVaultPath: (path: string) =>
+    request<VaultNote>(`/api/vault/register?path=${encodeURIComponent(path)}`, {
+      method: "POST",
+    }),
   importVaultNote: (body: { source_id: number; parent?: string }) =>
     request<VaultNote>("/api/vault/import", {
       method: "POST",

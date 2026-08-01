@@ -21,8 +21,18 @@ function deleteSlashQuery(editor: Editor) {
 
 export const SLASH_COMMANDS: SlashCommandItem[] = [
   {
+    id: "paragraph",
+    title: "正文",
+    description: "普通段落",
+    keywords: ["p", "正文", "paragraph", "text"],
+    run: (editor) => {
+      deleteSlashQuery(editor);
+      editor.chain().focus().setParagraph().run();
+    },
+  },
+  {
     id: "h1",
-    title: "标题 1",
+    title: "一级标题",
     description: "一级标题",
     keywords: ["h1", "title", "标题", "heading"],
     run: (editor) => {
@@ -32,7 +42,7 @@ export const SLASH_COMMANDS: SlashCommandItem[] = [
   },
   {
     id: "h2",
-    title: "标题 2",
+    title: "二级标题",
     description: "二级标题",
     keywords: ["h2", "标题", "heading"],
     run: (editor) => {
@@ -42,7 +52,7 @@ export const SLASH_COMMANDS: SlashCommandItem[] = [
   },
   {
     id: "h3",
-    title: "标题 3",
+    title: "三级标题",
     description: "三级标题",
     keywords: ["h3", "标题", "heading"],
     run: (editor) => {
@@ -51,13 +61,13 @@ export const SLASH_COMMANDS: SlashCommandItem[] = [
     },
   },
   {
-    id: "paragraph",
-    title: "正文",
-    description: "普通段落",
-    keywords: ["p", "正文", "paragraph", "text"],
+    id: "h4",
+    title: "四级标题",
+    description: "四级标题",
+    keywords: ["h4", "标题", "heading"],
     run: (editor) => {
       deleteSlashQuery(editor);
-      editor.chain().focus().setParagraph().run();
+      editor.chain().focus().toggleHeading({ level: 4 }).run();
     },
   },
   {

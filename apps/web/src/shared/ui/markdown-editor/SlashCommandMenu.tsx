@@ -1,7 +1,30 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import type { Editor } from "@tiptap/react";
+import {
+  CheckSquareOutlined,
+  CodeOutlined,
+  LinkOutlined,
+  MinusOutlined,
+  OrderedListOutlined,
+  UnorderedListOutlined,
+} from "@ant-design/icons";
 import { filterSlashCommands, type SlashCommandItem } from "./slashCommands";
 import styles from "./MarkdownEditor.module.css";
+
+const ITEM_ICONS: Record<string, ReactNode> = {
+  h1: <span className={styles.slashGlyph}>H1</span>,
+  h2: <span className={styles.slashGlyph}>H2</span>,
+  h3: <span className={styles.slashGlyph}>H3</span>,
+  h4: <span className={styles.slashGlyph}>H4</span>,
+  paragraph: <span className={styles.slashGlyph}>Aa</span>,
+  bullet: <UnorderedListOutlined />,
+  ordered: <OrderedListOutlined />,
+  task: <CheckSquareOutlined />,
+  quote: <span className={styles.slashGlyph}>❝</span>,
+  code: <CodeOutlined />,
+  hr: <MinusOutlined />,
+  link: <LinkOutlined />,
+};
 
 type Props = {
   editor: Editor;
@@ -32,9 +55,28 @@ export function SlashCommandMenu({
   }, [items.length, onSelectedIndexChange, selectedIndex]);
 
   useEffect(() => {
-    const el = listRef.current?.querySelector<HTMLElement>(`[data-index="${selectedIndex}"]`);
-    el?.scrollIntoView({ block: "nearest" });
+    const menu = listRef.current;
+    const el = menu?.querySelector<HTMLElement>(`[data-index="${selectedIndex}"]`);
+    if (!menu || !el) return;
+    const elTop = el.offsetTop;
+    const elBottom = elTop + el.offsetHeight;
+    if (elTop < menu.scrollTop) {
+      menu.scrollTop = elTop;
+    } else if (elBottom > menu.scrollTop + menu.clientHeight) {
+      menu.scrollTop = elBottom - menu.clientHeight;
+    }
   }, [selectedIndex]);
+
+  // 键盘滚动菜单时，浏览器会对静止的鼠标补发 mousemove，坐标没变则忽略，
+  // 否则鼠标压住哪一项，选中项就被抢回哪一项
+  const lastMousePos = useRef<{ x: number; y: number } | null>(null);
+
+  const hoverSelect = (index: number) => (e: ReactMouseEvent) => {
+    const last = lastMousePos.current;
+    if (last && last.x === e.clientX && last.y === e.clientY) return;
+    lastMousePos.current = { x: e.clientX, y: e.clientY };
+    onSelectedIndexChange(index);
+  };
 
   if (!items.length) {
     return (
@@ -57,20 +99,21 @@ export function SlashCommandMenu({
       role="listbox"
       aria-label="插入命令"
     >
+      <div className={styles.slashGroup}>常用</div>
       {items.map((item, index) => (
         <button
           key={item.id}
           type="button"
           data-index={index}
           className={`${styles.slashItem} ${index === selectedIndex ? styles.slashItemActive : ""}`}
-          onMouseEnter={() => onSelectedIndexChange(index)}
+          onMouseMove={hoverSelect(index)}
           onMouseDown={(e) => {
             e.preventDefault();
             run(item);
           }}
         >
+          <span className={styles.slashIcon}>{ITEM_ICONS[item.id]}</span>
           <span className={styles.slashTitle}>{item.title}</span>
-          <span className={styles.slashDesc}>{item.description}</span>
         </button>
       ))}
     </div>

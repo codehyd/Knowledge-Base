@@ -124,9 +124,20 @@ class SourcesService:
         return SourceOut.model_validate(row)
 
     async def list_sources(self, db: AsyncSession, limit: int = 50) -> tuple[list[Source], int]:
-        total = int((await db.execute(select(func.count()).select_from(Source))).scalar_one())
+        # 笔记库手写笔记不进喂养队列：它们由「笔记」页管理，清队列不应波及
+        vault_note = (Source.vault_path.is_not(None)) & (Source.vault_path != "")
+        total = int(
+            (
+                await db.execute(
+                    select(func.count()).select_from(Source).where(~vault_note)
+                )
+            ).scalar_one()
+        )
         result = await db.execute(
-            select(Source).order_by(desc(Source.created_at)).limit(min(limit, 100))
+            select(Source)
+            .where(~vault_note)
+            .order_by(desc(Source.created_at))
+            .limit(min(limit, 100))
         )
         return list(result.scalars().all()), total
 
@@ -366,10 +377,13 @@ class SourcesService:
         return row
 
     async def clear_finished(self, db: AsyncSession) -> int:
+        # 只移出「待入库 / 失败」；已入库(committed)保留来源，供知识库/书架使用
         result = await db.execute(
-            select(Source).where(Source.status.in_(["ready", "failed", "committed"]))
+            select(Source).where(Source.status.in_(["ready", "failed"]))
         )
         rows = list(result.scalars().all())
+        # 跳过笔记库手写笔记
+        rows = [row for row in rows if not (getattr(row, "vault_path", None) or "").strip()]
         ids = [row.id for row in rows]
         for row in rows:
             await db.delete(row)
@@ -383,6 +397,11 @@ class SourcesService:
 
     async def delete_source(self, db: AsyncSession, source_id: int) -> None:
         row = await self.get(db, source_id)
+        if (getattr(row, "vault_path", None) or "").strip():
+            raise HTTPException(
+                status_code=400,
+                detail="该条目属于笔记库手写笔记，不会出现在喂养队列操作中；请到「笔记」页管理",
+            )
         sid = row.id
         await db.delete(row)
         await db.commit()

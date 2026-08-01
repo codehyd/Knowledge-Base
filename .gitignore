@@ -23,6 +23,7 @@ apps/desktop/build/*
 !apps/desktop/build/icon.ico
 !apps/desktop/build/.gitkeep
 **/.vite/
+apps/web/public/yuque-assets/
 **/.turbo/
 **/.next/
 **/coverage/

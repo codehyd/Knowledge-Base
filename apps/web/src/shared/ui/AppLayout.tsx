@@ -170,7 +170,8 @@ export function AppLayout() {
           location.pathname.startsWith("/chat") ? ` ${styles.mainChat}` : ""
         }${
           location.pathname.startsWith("/knowledge") ||
-          location.pathname.startsWith("/notes")
+          location.pathname.startsWith("/notes") ||
+          location.pathname.startsWith("/settings")
             ? ` ${styles.mainFill}`
             : ""
         }`}

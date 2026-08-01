@@ -358,9 +358,10 @@ export function FeedPage() {
   }
 
   const readyCount = items.filter((i) => i.status === "ready").length;
+  // 已入库的不再留在队列；历史页只看待入库 / 失败
   const queueItems =
     tab === "history"
-      ? items.filter((i) => i.status === "ready" || i.status === "failed" || i.status === "committed")
+      ? items.filter((i) => i.status === "ready" || i.status === "failed")
       : items.filter((i) => i.status !== "committed");
 
   async function openPreview(id: number) {
@@ -389,10 +390,10 @@ export function FeedPage() {
   function removeOne(item: SourceItem) {
     const name = item.title || item.filename || `#${item.id}`;
     modal.confirm({
-      title: "从队列中删除？",
-      content: `将移除「${name}」。若已入库，知识库中的条目会保留。`,
-      okText: "删除",
-      okType: "danger",
+      title: "移出喂养队列？",
+      content: `将「${name}」移出队列。这只是清理队列展示，不会影响笔记库里的手写笔记；若已入库，知识条目也会保留。`,
+      okText: "移出队列",
+      okType: "default",
       cancelText: "取消",
       onOk: async () => {
         setBusy(true);
@@ -403,9 +404,9 @@ export function FeedPage() {
             setPreviewSourceId(null);
           }
           await refresh();
-          message.success("已从队列删除");
+          message.success("已移出队列");
         } catch (err) {
-          message.error(formatError(err, "删除失败"));
+          message.error(formatError(err, "移出失败"));
           throw err;
         } finally {
           setBusy(false);
@@ -758,7 +759,7 @@ export function FeedPage() {
               type="info"
               showIcon
               message="历史记录"
-              description="展示已完成或失败的投递。"
+              description="展示待入库或失败的投递。已成功入库的会离开队列，请到知识页查看。"
             />
           )}
         </div>
@@ -888,12 +889,11 @@ export function FeedPage() {
                     )}
                     <Button
                       size="small"
-                      danger
                       icon={<DeleteOutlined />}
                       disabled={busy}
                       onClick={() => removeOne(item)}
                     >
-                      删除
+                      移出队列
                     </Button>
                   </Space>
                 </li>
@@ -911,16 +911,20 @@ export function FeedPage() {
                   try {
                     const res = await api.clearFinishedSources();
                     await refresh();
-                    message.success(`已清空 ${res.removed} 条`);
+                    message.success(
+                      res.removed > 0
+                        ? `已移出 ${res.removed} 条（待入库/失败项；已入库内容仍在知识库）`
+                        : "没有可移出的队列项",
+                    );
                   } catch (err) {
-                    message.error(formatError(err, "清空失败"));
+                    message.error(formatError(err, "移出失败"));
                   } finally {
                     setBusy(false);
                   }
                 })()
               }
             >
-              清空队列
+              移出已完成
             </Button>
             <Button
               type="primary"
@@ -933,7 +937,7 @@ export function FeedPage() {
             </Button>
           </div>
           <p className={styles.queueFoot}>
-            正文抽取完成后点「入库」，即可在知识页浏览
+            抽取完成后点「入库」；成功后会离开队列，可在知识页浏览
           </p>
         </aside>
       </div>

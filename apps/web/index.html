@@ -5,8 +5,113 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/png" href="./logo-wordmark.png" />
     <title>空库</title>
+    <style>
+      #boot-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 99999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #f4f6f7;
+        font-family: "IBM Plex Sans", "PingFang SC", "Noto Sans SC", sans-serif;
+        color: #1f2933;
+        transition: opacity 0.42s ease, visibility 0.42s ease;
+      }
+      #boot-splash.is-leave {
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+      }
+      #boot-splash .glow {
+        position: absolute;
+        inset: -20%;
+        background:
+          radial-gradient(ellipse 55% 42% at 50% 38%, rgba(42, 111, 106, 0.14), transparent 70%),
+          radial-gradient(ellipse 40% 32% at 72% 68%, rgba(42, 111, 106, 0.07), transparent 65%),
+          #f4f6f7;
+        animation: boot-drift 10s ease-in-out infinite alternate;
+        pointer-events: none;
+      }
+      #boot-splash .card {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 20px;
+        animation: boot-rise 0.65s cubic-bezier(0.22, 1, 0.36, 1) both;
+      }
+      #boot-splash .logo-wrap {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #boot-splash .logo-wrap::before {
+        content: "";
+        position: absolute;
+        width: 160px;
+        height: 160px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(42, 111, 106, 0.16), transparent 68%);
+        animation: boot-breathe 2.8s ease-in-out infinite;
+      }
+      #boot-splash img {
+        position: relative;
+        height: 48px;
+        width: auto;
+        max-width: min(260px, 70vw);
+        object-fit: contain;
+      }
+      #boot-splash .status {
+        margin: 0;
+        color: #6b7280;
+        font-size: 13px;
+        letter-spacing: 0.02em;
+      }
+      #boot-splash .track {
+        width: 132px;
+        height: 3px;
+        border-radius: 999px;
+        background: rgba(42, 111, 106, 0.12);
+        overflow: hidden;
+      }
+      #boot-splash .bar {
+        width: 42%;
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, transparent, #2a6f6a, transparent);
+        animation: boot-shimmer 1.35s ease-in-out infinite;
+      }
+      @keyframes boot-drift {
+        from { transform: translate3d(-1%, -0.6%, 0) scale(1); }
+        to { transform: translate3d(1.2%, 0.8%, 0) scale(1.03); }
+      }
+      @keyframes boot-rise {
+        from { opacity: 0; transform: translateY(12px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      @keyframes boot-breathe {
+        0%, 100% { transform: scale(0.92); opacity: 0.55; }
+        50% { transform: scale(1.08); opacity: 1; }
+      }
+      @keyframes boot-shimmer {
+        0% { transform: translateX(-160%); }
+        100% { transform: translateX(320%); }
+      }
+    </style>
   </head>
   <body>
+    <div id="boot-splash" aria-busy="true" aria-live="polite">
+      <div class="glow" aria-hidden="true"></div>
+      <div class="card">
+        <div class="logo-wrap">
+          <img src="./logo-wordmark.png" alt="空库" width="200" height="48" />
+        </div>
+        <p class="status">正在进入空库…</p>
+        <div class="track" aria-hidden="true"><div class="bar"></div></div>
+      </div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

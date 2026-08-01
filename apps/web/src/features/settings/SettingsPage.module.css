@@ -2,9 +2,14 @@
   display: grid;
   grid-template-columns: 180px minmax(0, 1fr) 280px;
   gap: 20px;
-  align-items: start;
+  align-items: stretch;
   width: 100%;
   max-width: none;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
   background: #fff;
   border: 1px solid #e8ecef;
   border-radius: 16px;
@@ -12,14 +17,19 @@
 }
 
 .subNav {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 4px;
+  min-height: 0;
+  overflow: auto;
   padding-top: 4px;
+  padding-right: 4px;
 }
 
 .subNav h2 {
   margin: 0 0 12px;
   font-size: 18px;
+  flex-shrink: 0;
 }
 
 .subItem,
@@ -27,6 +37,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
   text-align: left;
   border: none;
   background: transparent;
@@ -53,7 +64,10 @@
 }
 
 .content {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -62,12 +76,32 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 20px;
+  flex-shrink: 0;
+  margin-bottom: 16px;
 }
 
 .contentHead h1 {
   margin: 0 0 8px;
   font-size: 24px;
+}
+
+.contentBody {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.contentFooter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  margin-top: 12px;
+  padding-top: 14px;
+  border-top: 1px solid #e8ecef;
+  background: #fff;
 }
 
 .desc {
@@ -105,10 +139,13 @@
 }
 
 .tips {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
   min-width: 0;
-  align-self: start;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
 }
 
 .checklist {
@@ -216,29 +253,41 @@
   }
 
   .tips {
-    grid-column: 1 / -1;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    display: none;
   }
 }
 
 @media (max-width: 760px) {
   .page {
     grid-template-columns: 1fr;
-  }
-
-  .tips {
-    grid-template-columns: 1fr;
+    height: auto;
+    max-height: none;
+    overflow: visible;
   }
 
   .subNav {
-    display: flex;
+    flex-direction: row;
     flex-wrap: wrap;
     gap: 6px;
     align-items: center;
+    overflow: visible;
   }
 
   .subNav h2 {
     width: 100%;
     margin-bottom: 4px;
+  }
+
+  .content {
+    overflow: visible;
+  }
+
+  .contentBody {
+    overflow: visible;
+  }
+
+  .tips {
+    display: flex;
+    overflow: visible;
   }
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { LinkOutlined, PlayCircleOutlined, VideoCameraOutlined } from "@ant-design/icons";
 import { App, Button, Empty, Modal, Spin, Tag } from "antd";
@@ -18,9 +18,17 @@ function mediaLabel(item: MediaItem) {
 type Props = {
   open: boolean;
   onClose: () => void;
+  /** 打开后自动定位该 source */
+  focusSourceId?: number | null;
+  onFocusMiss?: (sourceId: number) => void;
 };
 
-export function MediaShelfModal({ open, onClose }: Props) {
+export function MediaShelfModal({
+  open,
+  onClose,
+  focusSourceId = null,
+  onFocusMiss,
+}: Props) {
   const { message } = App.useApp();
   const [loading, setLoading] = useState(false);
   const [items, setItems] = useState<MediaItem[]>([]);
@@ -30,6 +38,7 @@ export function MediaShelfModal({ open, onClose }: Props) {
   const [previewTitle, setPreviewTitle] = useState("");
   const [previewEntryId, setPreviewEntryId] = useState<number | null>(null);
   const [previewSourceId, setPreviewSourceId] = useState<number | null>(null);
+  const focusedRef = useRef<number | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -44,7 +53,10 @@ export function MediaShelfModal({ open, onClose }: Props) {
   }, [message]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      focusedRef.current = null;
+      return;
+    }
     void load();
   }, [open, load]);
 
@@ -59,6 +71,18 @@ export function MediaShelfModal({ open, onClose }: Props) {
     setPreviewSourceId(item.source_id);
     setPreviewOpen(true);
   }
+
+  useEffect(() => {
+    if (!open || loading || !focusSourceId) return;
+    if (focusedRef.current === focusSourceId) return;
+    const hit = items.find((i) => i.source_id === focusSourceId);
+    focusedRef.current = focusSourceId;
+    if (hit) {
+      openItem(hit);
+      return;
+    }
+    onFocusMiss?.(focusSourceId);
+  }, [open, loading, focusSourceId, items, onFocusMiss]);
 
   function openTranscript(item: MediaItem) {
     setPreviewTitle(item.title);

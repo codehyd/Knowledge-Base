@@ -62,6 +62,18 @@ async def delete_note(source_id: int, db: AsyncSession = Depends(get_db)) -> dic
     return await vault_service.delete_note(db, source_id)
 
 
+@router.post("/register", response_model=VaultNoteOut, summary="重新登记未关联的笔记文件")
+async def register_path(
+    path: str, db: AsyncSession = Depends(get_db)
+) -> VaultNoteOut:
+    return await vault_service.register_path(db, path)
+
+
+@router.delete("/paths", summary="按路径删除笔记或文件夹（含未登记 orphan）")
+async def delete_path(path: str, db: AsyncSession = Depends(get_db)) -> dict:
+    return await vault_service.delete_path(db, path)
+
+
 @router.delete("/folders", summary="删除文件夹（含其下笔记）")
 async def delete_folder(path: str, db: AsyncSession = Depends(get_db)) -> dict:
     return await vault_service.delete_folder(db, path)

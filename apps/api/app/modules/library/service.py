@@ -12,7 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from fastapi import HTTPException
 
-from app.core.config import get_settings
 from app.modules.knowledge.models import Entry
 from app.modules.library.schemas import (
     LibraryCategoryOut,
@@ -46,13 +45,16 @@ _WS = re.compile(r"\s+")
 
 
 def _data_root() -> Path:
-    return Path(get_settings().data_dir).resolve()
+    # 与 vault.paths.data_root 对齐：相对 data_dir 相对仓库根解析，不依赖进程 cwd
+    from app.modules.vault.paths import data_root
+
+    return data_root()
 
 
 def library_root() -> Path:
     root = _data_root() / "library"
     root.mkdir(parents=True, exist_ok=True)
-    return root
+    return root.resolve()
 
 
 def category_for_type(source_type: str) -> tuple[str, str]:
@@ -112,10 +114,18 @@ def _write_meta(folder: Path, source_id: int, title: str, source_type: str) -> N
 
 
 def _find_existing_folder(source_id: int) -> Path | None:
+    from app.modules.vault.paths import VAULT_CATEGORY_DIR
+
     root = library_root()
     if not root.is_dir():
         return None
     for meta in root.rglob(META_NAME):
+        # 跳过手写笔记树，避免与喂养镜像混淆
+        try:
+            meta.relative_to(root / VAULT_CATEGORY_DIR)
+            continue
+        except ValueError:
+            pass
         try:
             data = json.loads(meta.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -287,14 +297,18 @@ class LibraryService:
         if upload.exists():
             shutil.rmtree(upload, ignore_errors=True)
         if vault_rel:
-            try:
-                from app.modules.vault.paths import resolve_in_vault
+            # 仅当该来源本身是笔记库笔记时才删 vault 文件，避免误解析书籍路径
+            if (row.type or "") == "note":
+                try:
+                    from app.modules.vault.paths import resolve_in_vault
+                    from app.modules.vault.service import _lake_source_path
 
-                vpath = resolve_in_vault(vault_rel)
-                if vpath.is_file():
-                    vpath.unlink(missing_ok=True)
-            except Exception:
-                pass
+                    vpath = resolve_in_vault(vault_rel)
+                    if vpath.is_file():
+                        vpath.unlink(missing_ok=True)
+                    _lake_source_path(vpath).unlink(missing_ok=True)
+                except Exception:
+                    pass
         remove_source_from_library(sid)
 
         return LibraryDeleteOut(
@@ -304,10 +318,15 @@ class LibraryService:
         )
 
     async def rebuild(self, db: AsyncSession) -> LibraryRebuildOut:
+        from app.modules.vault.paths import VAULT_CATEGORY_DIR
+
         root = library_root()
         removed = 0
         if root.exists():
             for child in list(root.iterdir()):
+                # 手写笔记树与资源根同处，重建时绝不能清空
+                if child.name == VAULT_CATEGORY_DIR:
+                    continue
                 if child.is_dir():
                     shutil.rmtree(child, ignore_errors=True)
                     removed += 1
@@ -335,6 +354,7 @@ class LibraryService:
             removed=removed,
             message=(
                 f"已同步 {synced} 项资源到「我的资源」。"
+                f"「{VAULT_CATEGORY_DIR}」未改动。"
                 "说明：重建按喂养来源重新生成目录；只删文件夹会被还原，请在列表中点删除。"
             ),
         )
@@ -363,24 +383,29 @@ class LibraryService:
         categories: list[LibraryCategoryOut] = []
         total = 0
 
-        # 固定顺序展示；笔记库来自 data/vault 树
+        # 固定顺序展示；笔记库来自 data/library/笔记库 树
         ordered_labels = ["笔记库", "书籍", "视频", "网页", "笔记", "其它"]
         seen: set[str] = set()
 
         def build_vault_category() -> LibraryCategoryOut:
             nonlocal total
-            from app.modules.vault.paths import vault_root
+            from app.modules.vault.paths import vault_rel_prefix, vault_root
 
             vroot = vault_root()
+            prefix = vault_rel_prefix()
             items: list[LibraryItemOut] = []
 
-            def walk(folder: Path, prefix: str = "") -> None:
+            def walk(folder: Path, rel_in_vault: str = "") -> None:
                 if not folder.is_dir():
                     return
                 for child in sorted(folder.iterdir(), key=lambda p: p.name.lower()):
                     if child.name.startswith("."):
                         continue
-                    rel = f"{prefix}/{child.name}".strip("/") if prefix else child.name
+                    rel = (
+                        f"{rel_in_vault}/{child.name}".strip("/")
+                        if rel_in_vault
+                        else child.name
+                    )
                     if child.is_dir():
                         walk(child, rel)
                         continue
@@ -427,7 +452,7 @@ class LibraryService:
             return LibraryCategoryOut(
                 key="vault",
                 label="笔记库",
-                path="vault",
+                path=prefix,
                 absolute_path=str(vroot.resolve()),
                 item_count=len(items),
                 items=items,

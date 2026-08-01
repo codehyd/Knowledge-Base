@@ -78,6 +78,7 @@ class KnowledgeService:
             source_id=row.source_id,
             source_type=(src.type if src else "") or "",
             source_uri=(src.source_uri if src else "") or "",
+            in_vault=bool(src and (getattr(src, "vault_path", None) or "").strip()),
             categories=cats.get(row.id, []),
             created_at=row.created_at,
         )
@@ -294,6 +295,7 @@ class KnowledgeService:
         source_filename = ""
         source_type = ""
         source_uri = ""
+        in_vault = False
         has_follow_along = False
         if row.source_id:
             source = await db.get(Source, row.source_id)
@@ -301,6 +303,7 @@ class KnowledgeService:
                 source_filename = source.filename or ""
                 source_type = source.type or ""
                 source_uri = source.source_uri or ""
+                in_vault = bool((getattr(source, "vault_path", None) or "").strip())
                 if source.type in {"video_url", "video_file"}:
                     has_follow_along = sources_service.follow_along_ready(int(row.source_id))
                 if source.text_path:
@@ -326,6 +329,7 @@ class KnowledgeService:
             source_filename=source_filename,
             source_type=source_type,
             source_uri=source_uri,
+            in_vault=in_vault,
             has_follow_along=has_follow_along,
         )
 
@@ -440,6 +444,21 @@ class KnowledgeService:
             raise HTTPException(status_code=404, detail="条目不存在")
 
         source_id = row.source_id
+        source = await db.get(Source, source_id) if source_id else None
+
+        # 笔记库中的手写笔记：与笔记页删除统一（来源 + 条目 + .md/.lake + uploads）
+        # 必须同时满足 type=note 且有 vault_path，避免误伤书籍/视频等
+        if (
+            source
+            and (source.type or "") == "note"
+            and (getattr(source, "vault_path", None) or "").strip()
+        ):
+            from app.modules.vault.service import vault_service
+
+            await vault_service.delete_note(db, int(source.id))
+            await self._prune_empty_categories(db)
+            return
+
         links = await db.execute(
             select(EntryCategory).where(EntryCategory.entry_id == entry_id)
         )
@@ -448,13 +467,11 @@ class KnowledgeService:
         await db.delete(row)
 
         # 入库错了时：删条目后将来源恢复为 ready，便于重新入库
-        if source_id:
-            source = await db.get(Source, source_id)
-            if source and source.status == "committed":
-                source.status = "ready"
-                source.stage = "extracted"
-                source.progress = 100
-                source.error_message = ""
+        if source and source.status == "committed":
+            source.status = "ready"
+            source.stage = "extracted"
+            source.progress = 100
+            source.error_message = ""
 
         await db.commit()
         await self._prune_empty_categories(db)
