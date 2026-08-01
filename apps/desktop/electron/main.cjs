@@ -22,6 +22,7 @@ const {
   startDouyinBridge,
   stopDouyinBridge,
 } = require("./lib/douyin-bridge.cjs");
+const { clearUiCacheIfVersionChanged } = require("./lib/ui-cache.cjs");
 
 // 关闭 Fluent/Overlay 滚动条，避免忽略页面 ::-webkit-scrollbar 自定义样式
 app.commandLine.appendSwitch(
@@ -30,6 +31,7 @@ app.commandLine.appendSwitch(
 );
 
 app.whenReady().then(async () => {
+  await clearUiCacheIfVersionChanged();
   registerIpcHandlers();
   startDouyinBridge();
 

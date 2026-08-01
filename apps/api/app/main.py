@@ -122,10 +122,44 @@ def create_app() -> FastAPI:
     if web_dir:
         from pathlib import Path
 
+        from fastapi import Request
         from fastapi.staticfiles import StaticFiles
+        from starlette.middleware.base import BaseHTTPMiddleware
 
         web_path = Path(web_dir)
         if web_path.is_dir():
+
+            class WebCacheControlMiddleware(BaseHTTPMiddleware):
+                """避免 Electron 对固定 localhost 前端强缓存导致升级后仍是旧界面。
+
+                - HTML / 入口：no-store（每次拿最新 index）
+                - /assets/* 带 hash：可长期缓存
+                - 其余静态：短缓存且必须再验证
+                """
+
+                async def dispatch(self, request: Request, call_next):
+                    response = await call_next(request)
+                    path = request.url.path or "/"
+                    # 只处理静态页，别动 /api
+                    if path.startswith("/api") or path.startswith("/health"):
+                        return response
+                    if path == "/" or path.endswith(".html"):
+                        response.headers["Cache-Control"] = (
+                            "no-store, no-cache, must-revalidate, max-age=0"
+                        )
+                        response.headers["Pragma"] = "no-cache"
+                    elif "/assets/" in path:
+                        response.headers["Cache-Control"] = (
+                            "public, max-age=31536000, immutable"
+                        )
+                    else:
+                        response.headers["Cache-Control"] = (
+                            "no-cache, must-revalidate, max-age=0"
+                        )
+                    return response
+
+            # 中间件后注册也会包住后续 mount；这里先加中间件再 mount
+            app.add_middleware(WebCacheControlMiddleware)
             app.mount(
                 "/",
                 StaticFiles(directory=str(web_path), html=True),
