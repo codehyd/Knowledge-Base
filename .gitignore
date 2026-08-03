@@ -44,6 +44,9 @@ data/exports/*
 !data/exports/.gitkeep
 data/tmp/*
 !data/tmp/.gitkeep
+apps/api/data/
+*.db
+!**/fixtures/**/*.db
 
 # —— 日志与系统垃圾 ——
 *.log
