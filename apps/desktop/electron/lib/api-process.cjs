@@ -177,20 +177,19 @@ function stopApi() {
 async function canReuseExternalApi() {
   if (process.env.KONGKU_FORCE_SIDECAR === "1") return false;
   try {
-    const health = await httpGetJson(`${API_ORIGIN}/health`, 1500);
+    // 端口无人监听时尽快失败（勿用长 timeout 空等）
+    const health = await httpGetJson(`${API_ORIGIN}/health`, 600);
     if (health.status !== 200 || !health.data?.ok) return false;
 
     const features = Array.isArray(health.data.features)
       ? health.data.features
       : [];
     if (features.includes("vault") && features.includes("skills")) {
-      await new Promise((resolve) => setTimeout(resolve, 400));
-      await waitForHealth(1500);
       return true;
     }
 
-    // 旧版 health 无 features：直接探路由（有则 200，无则 404/405）
-    const skills = await httpGetJson(`${API_ORIGIN}/api/skills`, 2000);
+    // 旧版 health 无 features：轻量探路由（勿扫整棵 vault tree）
+    const skills = await httpGetJson(`${API_ORIGIN}/api/skills`, 800);
     if (skills.status !== 200) {
       console.warn(
         "[kongku] 端口上的 API 无 /api/skills（status=",
@@ -199,18 +198,6 @@ async function canReuseExternalApi() {
       );
       return false;
     }
-    const vault = await httpGetJson(`${API_ORIGIN}/api/vault/tree`, 2000);
-    // 鉴权/库错误也可能非 200，但 404/405 基本可断定路由未挂载
-    if (vault.status === 404 || vault.status === 405) {
-      console.warn(
-        "[kongku] 端口上的 API 无笔记库路由（status=",
-        vault.status,
-        "），将替换为本版 sidecar",
-      );
-      return false;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    await waitForHealth(1500);
     return true;
   } catch {
     return false;
@@ -425,7 +412,7 @@ async function startApiSynced() {
   }
 
   killStaleApiListeners();
-  await new Promise((resolve) => setTimeout(resolve, 400));
+  await new Promise((resolve) => setTimeout(resolve, 200));
 
   const env = buildApiEnv();
   if (!app.isPackaged) {

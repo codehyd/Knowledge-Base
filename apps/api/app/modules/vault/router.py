@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.modules.vault.schemas import (
     VaultFolderIn,
+    VaultGraphOut,
     VaultImportIn,
     VaultNodeOut,
     VaultNodePatchIn,
@@ -20,6 +21,19 @@ router = APIRouter(prefix="/vault", tags=["笔记库"])
 @router.get("/tree", response_model=VaultTreeOut, summary="笔记库文件树")
 async def get_tree(db: AsyncSession = Depends(get_db)) -> VaultTreeOut:
     return await vault_service.tree(db)
+
+
+@router.get(
+    "/graph",
+    response_model=VaultGraphOut,
+    summary="知识库关系图",
+    description=(
+        "笔记双链 [[wikilink]] + 已入库条目（书籍/视频/网页）+ 分类枢纽。"
+        "视频/书籍会扫描转写与抽取正文中的双链。"
+    ),
+)
+async def get_graph(db: AsyncSession = Depends(get_db)) -> VaultGraphOut:
+    return await vault_service.graph(db)
 
 
 @router.post("/folders", response_model=VaultNodeOut, summary="新建文件夹")

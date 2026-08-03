@@ -113,6 +113,36 @@ export type VaultNote = {
   source_lake?: string | null;
 };
 
+export type VaultGraphNode = {
+  id: string;
+  title: string;
+  path: string;
+  source_id?: number | null;
+  entry_id?: number | null;
+  kind?: string;
+  degree: number;
+};
+
+export type VaultGraphEdge = {
+  source: string;
+  target: string;
+  kind: string;
+  resolved: boolean;
+  label?: string;
+};
+
+export type VaultBrokenLink = {
+  source: string;
+  target: string;
+  label?: string;
+};
+
+export type VaultGraph = {
+  nodes: VaultGraphNode[];
+  edges: VaultGraphEdge[];
+  broken_links: VaultBrokenLink[];
+};
+
 export type LibraryFile = {
   name: string;
   kind: string;
@@ -642,6 +672,7 @@ export const api = {
       absolute_root: string;
       nodes: VaultNode[];
     }>("/api/vault/tree"),
+  getVaultGraph: () => request<VaultGraph>("/api/vault/graph"),
   createVaultFolder: (body: { parent?: string; name: string }) =>
     request<VaultNode>("/api/vault/folders", {
       method: "POST",

@@ -1,6 +1,7 @@
 """空库 API 入口：只负责组装各功能模块路由，不含业务逻辑。"""
 
 from contextlib import asynccontextmanager
+import asyncio
 import os
 
 from fastapi import FastAPI
@@ -42,21 +43,32 @@ async def lifespan(_: FastAPI):
     except Exception as exc:
         print(f"[kongku] init_db skipped (database unavailable or failed): {exc}")
 
-    # 启动时为尚无切片的已入库条目自动回填（失败不阻塞服务）
-    try:
-        from app.core import database as db_mod
-        from app.modules.knowledge.index import reindex_missing
+    # 先对外可服务，再后台补索引（with_embed 会打模型，同步跑会拖死启动 /health）
+    async def _reindex_missing_bg() -> None:
+        try:
+            from app.core import database as db_mod
+            from app.modules.knowledge.index import reindex_missing
 
-        status = await db_mod.schema_status()
-        if status.get("schema_ready"):
+            status = await db_mod.schema_status()
+            if not status.get("schema_ready"):
+                return
             if db_mod.SessionLocal is None:
                 db_mod.init_engine_from_config()
             assert db_mod.SessionLocal is not None
             async with db_mod.SessionLocal() as db:
-                await reindex_missing(db, with_embed=True)
-    except Exception:
-        pass
+                stats = await reindex_missing(db, with_embed=True)
+            print(f"[kongku] background reindex_missing: {stats}")
+        except Exception as exc:
+            print(f"[kongku] background reindex_missing skipped: {exc}")
+
+    task = asyncio.create_task(_reindex_missing_bg())
     yield
+    if not task.done():
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 def create_app() -> FastAPI:

@@ -23,7 +23,11 @@ from app.modules.vault.paths import (
     vault_root,
 )
 from app.modules.vault.schemas import (
+    VaultBrokenLinkOut,
     VaultFolderIn,
+    VaultGraphEdgeOut,
+    VaultGraphNodeOut,
+    VaultGraphOut,
     VaultImportIn,
     VaultNodeOut,
     VaultNodePatchIn,
@@ -636,6 +640,293 @@ class VaultService:
             committed=row.status == "committed",
             char_count=len(content),
         )
+
+    def _iter_md_notes(self, folder: Path) -> list[Path]:
+        notes: list[Path] = []
+        if not folder.is_dir():
+            return notes
+        for child in sorted(folder.rglob("*.md")):
+            if any(part.startswith(".") for part in child.relative_to(folder).parts):
+                continue
+            if child.is_file():
+                notes.append(child)
+        return notes
+
+    @staticmethod
+    def _read_source_text(row: Source) -> str:
+        """读取来源正文（视频转写 / 书籍抽取 / 笔记等），供双链扫描。"""
+        from app.modules.vault.paths import data_root as _data_root
+
+        root = _data_root()
+        for rel in (row.text_path, row.storage_path):
+            rel = (rel or "").strip()
+            if not rel:
+                continue
+            path = root / rel
+            if path.is_file() and path.suffix.lower() in {".txt", ".md", ".html", ".htm"}:
+                try:
+                    return path.read_text(encoding="utf-8", errors="ignore")
+                except OSError:
+                    continue
+        if row.id:
+            orphan = root / "uploads" / str(row.id) / "extracted.txt"
+            if orphan.is_file():
+                try:
+                    return orphan.read_text(encoding="utf-8", errors="ignore")
+                except OSError:
+                    pass
+        return ""
+
+    async def graph(self, db: AsyncSession) -> VaultGraphOut:
+        """知识库关系图：笔记双链 + 全部已入库条目 + 分类枢纽。"""
+        from app.modules.knowledge.models import Category, Entry, EntryCategory
+        from app.modules.vault.wikilink import (
+            extract_wikilinks,
+            resolve_wikilink,
+            source_type_to_kind,
+        )
+
+        root = self.ensure_root()
+        path_map = await self._path_map(db)
+        md_files = self._iter_md_notes(root)
+
+        nodes: dict[str, VaultGraphNodeOut] = {}
+        by_path: dict[str, str] = {}
+        by_stem: dict[str, list[str]] = {}
+        by_title: dict[str, list[str]] = {}
+        # vault_path → note node id，避免笔记与 entry 双节点
+        note_id_by_vault: dict[str, str] = {}
+
+        def remember_title(title: str, node_id: str) -> None:
+            key = (title or "").strip().lower()
+            if key:
+                by_title.setdefault(key, []).append(node_id)
+
+        def remember_stem(stem: str, node_id: str) -> None:
+            key = (stem or "").strip().lower()
+            if key:
+                by_stem.setdefault(key, []).append(node_id)
+
+        # 1) 笔记库 .md
+        for md in md_files:
+            rel = to_vault_rel(md)
+            row = path_map.get(rel)
+            title = (row.title if row else md.stem) or md.stem
+            node_id = f"note:{rel}"
+            note_id_by_vault[rel] = node_id
+            nodes[node_id] = VaultGraphNodeOut(
+                id=node_id,
+                title=title,
+                path=rel,
+                source_id=row.id if row else None,
+                entry_id=None,
+                kind="note",
+                degree=0,
+            )
+            by_path[rel.lower()] = node_id
+            by_path[rel[:-3].lower() if rel.lower().endswith(".md") else rel.lower()] = node_id
+            remember_stem(md.stem, node_id)
+            remember_title(title, node_id)
+
+        # 2) 全部知识条目（书籍 / 视频 / 网页 / 已入库笔记）
+        entry_rows = (await db.execute(select(Entry))).scalars().all()
+        source_ids = [int(e.source_id) for e in entry_rows if e.source_id]
+        sources: dict[int, Source] = {}
+        if source_ids:
+            src_result = await db.execute(select(Source).where(Source.id.in_(source_ids)))
+            sources = {int(s.id): s for s in src_result.scalars().all()}
+
+        entry_id_by_source: dict[int, int] = {}
+        for entry in entry_rows:
+            if entry.source_id:
+                entry_id_by_source[int(entry.source_id)] = int(entry.id)
+
+        # 回填笔记 entry_id
+        for rel, src in path_map.items():
+            nid = note_id_by_vault.get(rel)
+            if not nid or nid not in nodes:
+                continue
+            eid = entry_id_by_source.get(int(src.id))
+            if eid:
+                nodes[nid] = VaultGraphNodeOut(
+                    **{**nodes[nid].model_dump(), "entry_id": eid}
+                )
+
+        texts_to_scan: list[tuple[str, str]] = []  # (node_id, text)
+        scanned_ids: set[str] = set()
+
+        for entry in entry_rows:
+            src = sources.get(int(entry.source_id)) if entry.source_id else None
+            vault_rel = ((src.vault_path if src else "") or "").replace("\\", "/").strip()
+            # 已有笔记节点：不重复建 entry 节点，只扫正文
+            if vault_rel and vault_rel in note_id_by_vault:
+                nid = note_id_by_vault[vault_rel]
+                if src and nid not in scanned_ids:
+                    text = self._read_source_text(src)
+                    if not text:
+                        try:
+                            text = (root / vault_rel).read_text(encoding="utf-8", errors="ignore")
+                        except OSError:
+                            text = ""
+                    if text:
+                        texts_to_scan.append((nid, text))
+                        scanned_ids.add(nid)
+                continue
+
+            kind = source_type_to_kind(src.type if src else None)
+            node_id = f"entry:{entry.id}"
+            title = (entry.title or (src.title if src else "") or f"条目 {entry.id}").strip()
+            nodes[node_id] = VaultGraphNodeOut(
+                id=node_id,
+                title=title,
+                path=vault_rel,
+                source_id=int(src.id) if src else None,
+                entry_id=int(entry.id),
+                kind=kind,
+                degree=0,
+            )
+            remember_title(title, node_id)
+            if src and src.filename:
+                remember_stem(Path(src.filename).stem, node_id)
+            if src:
+                text = self._read_source_text(src)
+                if text:
+                    texts_to_scan.append((node_id, text))
+                    scanned_ids.add(node_id)
+
+        # 孤儿笔记正文
+        for md in md_files:
+            rel = to_vault_rel(md)
+            nid = note_id_by_vault[rel]
+            if nid in scanned_ids:
+                continue
+            try:
+                texts_to_scan.append((nid, md.read_text(encoding="utf-8", errors="ignore")))
+                scanned_ids.add(nid)
+            except OSError:
+                pass
+
+        # 3) 分类枢纽
+        cat_rows = (await db.execute(select(Category))).scalars().all()
+        cats = {int(c.id): c for c in cat_rows}
+        entries_by_id = {int(e.id): e for e in entry_rows}
+        ec_rows = (await db.execute(select(EntryCategory))).scalars().all()
+        for cat in cat_rows:
+            cid = f"cat:{(cat.name or '').strip()}"
+            if cid == "cat:":
+                continue
+            nodes[cid] = VaultGraphNodeOut(
+                id=cid,
+                title=cat.name or "",
+                path="",
+                source_id=None,
+                entry_id=None,
+                kind="category",
+                degree=0,
+            )
+
+        def unique_index(d: dict[str, list[str]]) -> dict[str, str]:
+            return {k: v[0] for k, v in d.items() if len(v) == 1}
+
+        stem_index = unique_index(by_stem)
+        title_index = unique_index(by_title)
+
+        edges: list[VaultGraphEdgeOut] = []
+        broken: list[VaultBrokenLinkOut] = []
+        edge_keys: set[tuple[str, str, str]] = set()
+        degrees: dict[str, int] = {k: 0 for k in nodes}
+
+        def add_edge(
+            source: str,
+            target: str,
+            *,
+            kind: str,
+            resolved: bool,
+            label: str,
+        ) -> None:
+            key = (source, target, kind)
+            if key in edge_keys or source not in nodes:
+                return
+            if resolved and target not in nodes:
+                return
+            edge_keys.add(key)
+            edges.append(
+                VaultGraphEdgeOut(
+                    source=source,
+                    target=target,
+                    kind=kind,
+                    resolved=resolved,
+                    label=label,
+                )
+            )
+            degrees[source] = degrees.get(source, 0) + 1
+            if resolved and target in degrees:
+                degrees[target] = degrees.get(target, 0) + 1
+
+        # 4) 双链（笔记 + 视频转写/书籍正文里的 [[…]]）
+        for node_id, text in texts_to_scan:
+            for link in extract_wikilinks(text):
+                resolved = resolve_wikilink(
+                    link.target,
+                    by_path=by_path,
+                    by_stem=stem_index,
+                    by_title=title_index,
+                )
+                label = link.alias or link.target
+                if resolved and resolved in nodes and resolved != node_id:
+                    add_edge(node_id, resolved, kind="wikilink", resolved=True, label=label)
+                else:
+                    key = (node_id, link.target, "wikilink")
+                    if key in edge_keys:
+                        continue
+                    edge_keys.add(key)
+                    broken.append(
+                        VaultBrokenLinkOut(source=node_id, target=link.target, label=label)
+                    )
+                    edges.append(
+                        VaultGraphEdgeOut(
+                            source=node_id,
+                            target=link.target,
+                            kind="wikilink",
+                            resolved=False,
+                            label=label,
+                        )
+                    )
+                    degrees[node_id] = degrees.get(node_id, 0) + 1
+
+        # 5) 条目 → 分类
+        for ec in ec_rows:
+            cat = cats.get(int(ec.category_id))
+            if not cat or not (cat.name or "").strip():
+                continue
+            cat_id = f"cat:{cat.name.strip()}"
+            entry = entries_by_id.get(int(ec.entry_id))
+            if not entry:
+                continue
+            src = sources.get(int(entry.source_id)) if entry.source_id else None
+            vault_rel = ((src.vault_path if src else "") or "").replace("\\", "/").strip()
+            if vault_rel and vault_rel in note_id_by_vault:
+                node_id = note_id_by_vault[vault_rel]
+            else:
+                node_id = f"entry:{entry.id}"
+            if node_id not in nodes or cat_id not in nodes:
+                continue
+            add_edge(node_id, cat_id, kind="in_category", resolved=True, label=cat.name)
+
+        out_nodes = [
+            VaultGraphNodeOut(
+                id=n.id,
+                title=n.title,
+                path=n.path,
+                source_id=n.source_id,
+                entry_id=n.entry_id,
+                kind=n.kind,
+                degree=degrees.get(n.id, 0),
+            )
+            for n in nodes.values()
+        ]
+        out_nodes.sort(key=lambda n: (-n.degree, n.kind != "category", n.title.lower()))
+        return VaultGraphOut(nodes=out_nodes, edges=edges, broken_links=broken)
 
 
 vault_service = VaultService()

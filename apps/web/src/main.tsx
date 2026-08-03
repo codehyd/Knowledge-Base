@@ -13,7 +13,8 @@ const Router = isElectron ? HashRouter : BrowserRouter;
 
 function dismissBootSplash() {
   const splash = document.getElementById("boot-splash");
-  if (!splash) return;
+  if (!splash || splash.dataset.dismissed === "1") return;
+  splash.dataset.dismissed = "1";
 
   const remove = () => {
     splash.remove();
@@ -34,15 +35,22 @@ function dismissBootSplash() {
 }
 
 void (async () => {
-  await initApiBase();
-  createRoot(document.getElementById("root")!).render(
-    <StrictMode>
-      <UiProvider>
-        <Router>
-          <App />
-        </Router>
-      </UiProvider>
-    </StrictMode>,
-  );
-  dismissBootSplash();
+  // 最多等 1.5s 拿 apiBase，避免 IPC/探测拖住启动页
+  await Promise.race([
+    initApiBase(),
+    new Promise<void>((resolve) => window.setTimeout(resolve, 1500)),
+  ]);
+  try {
+    createRoot(document.getElementById("root")!).render(
+      <StrictMode>
+        <UiProvider>
+          <Router>
+            <App />
+          </Router>
+        </UiProvider>
+      </StrictMode>,
+    );
+  } finally {
+    dismissBootSplash();
+  }
 })();

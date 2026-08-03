@@ -36,6 +36,7 @@ import {
 import { Button, Dropdown, Tooltip } from "antd";
 import { getFilteredSlashItems, SlashCommandMenu } from "./SlashCommandMenu";
 import { readSlashQuery } from "./slashCommands";
+import { restoreWikilinkMarkers } from "./wikilinks";
 import styles from "./MarkdownEditor.module.css";
 
 export type MarkdownEditorHandle = {
@@ -124,8 +125,6 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
         }
         if ((event.ctrlKey || event.metaKey) && event.altKey && ["1", "2", "3"].includes(event.key)) {
           event.preventDefault();
-          const level = Number(event.key) as 1 | 2 | 3;
-          // handled below via editor — need editor in closure; use chain after mount
           return false;
         }
         return false;
@@ -153,7 +152,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
     () => ({
       getMarkdown: () => {
         if (!editor) return "";
-        return (editor.storage.markdown.getMarkdown() as string) || "";
+        const raw = (editor.storage as { markdown?: { getMarkdown: () => string } }).markdown
+          ?.getMarkdown?.();
+        return restoreWikilinkMarkers(raw || "");
       },
       focus: () => {
         editor?.commands.focus();

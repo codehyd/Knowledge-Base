@@ -7,7 +7,6 @@ const fs = require("fs");
 const path = require("path");
 
 const state = require("./state.cjs");
-const { waitForHealth } = require("./api-process.cjs");
 const {
   exportMediaCookiesFile,
   openMediaLoginWindow,
@@ -17,13 +16,7 @@ const { API_ORIGIN, runtimeDataDir, ytDlpCookiesPath } = require("./paths.cjs");
 
 function registerIpcHandlers() {
   ipcMain.handle("kongku:getConfig", async () => {
-    try {
-      await waitForHealth(1200);
-      state.apiStatus = "ready";
-      state.apiLastError = "";
-    } catch {
-      /* 保持 failed / starting 状态 */
-    }
+    // 勿在 getConfig 里等 /health：渲染进程 initApiBase 会卡住 boot-splash
     const cookiesPath = ytDlpCookiesPath();
     let cookiesReady = false;
     try {

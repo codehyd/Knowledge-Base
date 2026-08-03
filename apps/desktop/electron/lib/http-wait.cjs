@@ -31,7 +31,7 @@ function waitForHttp(url, timeoutMs = 60000, label = "服务", { okStatuses } = 
         reject(new Error(`${label}未在 ${timeoutMs}ms 内就绪：${url}`));
         return;
       }
-      setTimeout(tick, 500);
+      setTimeout(tick, 250);
     };
     tick();
   });

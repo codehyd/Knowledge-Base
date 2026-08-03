@@ -14,7 +14,6 @@ const { startApiSynced, stopApi } = require("./lib/api-process.cjs");
 const {
   createWindow,
   loadAppUi,
-  loadDevUiAfterApi,
 } = require("./lib/window.cjs");
 const { setupAutoUpdater } = require("./lib/updater.cjs");
 const { registerIpcHandlers } = require("./lib/ipc.cjs");
@@ -35,7 +34,7 @@ app.whenReady().then(async () => {
   registerIpcHandlers();
   startDouyinBridge();
 
-  // 开发态：先开窗口显示「启动中」，等 API 就绪后再加载 Vite
+  // API 与窗口并行：开发态先出 Vite UI，不再卡在「等后端」启动页上
   const apiPromise = startApiSynced().catch((err) => {
     state.apiStatus = "failed";
     state.apiLastError = String(err);
@@ -43,26 +42,34 @@ app.whenReady().then(async () => {
   });
 
   try {
-    await createWindow({ deferDevLoad: !app.isPackaged });
+    // deferDevLoad=false：Vite 就绪即加载前端；AppLayout 会自行探测 API
+    await createWindow({ deferDevLoad: false });
   } catch (err) {
     console.error("[kongku] createWindow:", err);
   }
 
-  await apiPromise;
-  await loadDevUiAfterApi();
-
-  try {
-    await loadAppUi();
-  } catch (err) {
-    console.error("[kongku] loadAppUi:", err);
+  // 打包态仍需等 API 托管静态页；开发态 UI 已加载，这里只等 API 落状态
+  if (app.isPackaged) {
+    await apiPromise;
+    try {
+      await loadAppUi();
+    } catch (err) {
+      console.error("[kongku] loadAppUi:", err);
+    }
+  } else {
+    void apiPromise.then(() => {
+      console.log("[kongku] API 后台就绪:", state.apiStatus);
+    });
   }
   setupAutoUpdater();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       void (async () => {
-        await createWindow();
-        await loadAppUi();
+        await createWindow({ deferDevLoad: false });
+        if (app.isPackaged) {
+          await loadAppUi();
+        }
       })();
     }
   });

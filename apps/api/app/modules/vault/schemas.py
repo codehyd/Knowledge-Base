@@ -59,4 +59,40 @@ class VaultImportIn(BaseModel):
     parent: str = Field(default="", description="导入到 vault 的父目录")
 
 
+class VaultGraphNodeOut(BaseModel):
+    id: str = Field(description="稳定节点 id：note:path / entry:id / cat:name")
+    title: str
+    path: str = ""
+    source_id: int | None = None
+    entry_id: int | None = None
+    kind: str = Field(
+        default="note",
+        description="note|book|video|url|web|category|other",
+    )
+    degree: int = 0
+
+
+class VaultGraphEdgeOut(BaseModel):
+    source: str
+    target: str
+    kind: str = Field(
+        default="wikilink",
+        description="wikilink|in_category",
+    )
+    resolved: bool = True
+    label: str = ""
+
+
+class VaultBrokenLinkOut(BaseModel):
+    source: str
+    target: str
+    label: str = ""
+
+
+class VaultGraphOut(BaseModel):
+    nodes: list[VaultGraphNodeOut] = Field(default_factory=list)
+    edges: list[VaultGraphEdgeOut] = Field(default_factory=list)
+    broken_links: list[VaultBrokenLinkOut] = Field(default_factory=list)
+
+
 VaultNodeOut.model_rebuild()

@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
+  ApartmentOutlined,
   BookOutlined,
   DeleteOutlined,
   EditOutlined,
@@ -9,6 +10,7 @@ import {
   PlayCircleOutlined,
   ReadOutlined,
   SearchOutlined,
+  UnorderedListOutlined,
   VideoCameraOutlined,
 } from "@ant-design/icons";
 import { App, Button, Empty, Input, Popconfirm, Tag, Typography } from "antd";
@@ -25,6 +27,10 @@ import { FollowAlongPlayer } from "@/shared/ui/FollowAlongPlayer";
 import { BookshelfModal } from "./BookshelfModal";
 import { MediaShelfModal } from "./MediaShelfModal";
 import styles from "./KnowledgePage.module.css";
+
+const GraphView = lazy(() =>
+  import("./GraphView").then((m) => ({ default: m.GraphView })),
+);
 
 function sourceTypeLabel(type?: string) {
   switch (type) {
@@ -113,6 +119,7 @@ export function KnowledgePage() {
   const [mediaOpen, setMediaOpen] = useState(false);
   const [focusSourceId, setFocusSourceId] = useState<number | null>(null);
   const [kind, setKind] = useState("");
+  const [viewMode, setViewMode] = useState<"list" | "graph">("list");
 
   // 笔记侧栏「资源」跳转：?source=ID&open=bookshelf|media|entry
   const selectEntryBySource = useCallback(
@@ -284,6 +291,75 @@ export function KnowledgePage() {
     setPreviewLoading(false);
   }
 
+  if (viewMode === "graph") {
+    return (
+      <section className={styles.page}>
+        <header className={styles.header}>
+          <div>
+            <h1>
+              <BookOutlined /> 知识浏览
+            </h1>
+            <Typography.Paragraph type="secondary" className={styles.subtitle}>
+              知识关系图：笔记双链、书籍 / 视频 / 网页，以及分类标签都会出现在这里。
+            </Typography.Paragraph>
+          </div>
+          <div className={styles.headerActions}>
+            <div className={styles.kindTabs} role="tablist" aria-label="视图">
+              <button
+                type="button"
+                className={`${styles.kindTab} ${styles.kindTabActive}`}
+                onClick={() => setViewMode("graph")}
+              >
+                <ApartmentOutlined /> 图谱
+              </button>
+              <button type="button" className={styles.kindTab} onClick={() => setViewMode("list")}>
+                <UnorderedListOutlined /> 列表
+              </button>
+            </div>
+            <Button type="primary" icon={<FormOutlined />} onClick={() => navigate("/notes?new=1")}>
+              写笔记
+            </Button>
+          </div>
+        </header>
+        <Suspense
+          fallback={
+            <div className={styles.page} style={{ padding: 48, color: "#64748b", fontSize: 14 }}>
+              正在加载图谱…
+            </div>
+          }
+        >
+          <GraphView
+            onOpenNode={(node) => {
+              if (node.kind === "category") {
+                setViewMode("list");
+                setCategory(node.title);
+                return;
+              }
+              if (node.kind === "note" && node.source_id) {
+                navigate(`/notes?id=${node.source_id}`);
+                return;
+              }
+              if (node.entry_id) {
+                setViewMode("list");
+                setKind("");
+                setCategory("");
+                setSelectedId(node.entry_id);
+                return;
+              }
+              if (node.source_id) {
+                setKind("");
+                setCategory("");
+                void selectEntryBySource(node.source_id);
+                setViewMode("list");
+              }
+            }}
+            onError={(msg) => message.error(msg)}
+          />
+        </Suspense>
+      </section>
+    );
+  }
+
   if (totalEntries === 0 && !loading && !search && !category) {
     return (
       <section className={styles.page}>
@@ -297,6 +373,18 @@ export function KnowledgePage() {
             </Typography.Paragraph>
           </div>
           <div className={styles.headerActions}>
+            <div className={styles.kindTabs} role="tablist" aria-label="视图">
+              <button type="button" className={styles.kindTab} onClick={() => setViewMode("graph")}>
+                <ApartmentOutlined /> 图谱
+              </button>
+              <button
+                type="button"
+                className={`${styles.kindTab} ${styles.kindTabActive}`}
+                onClick={() => setViewMode("list")}
+              >
+                <UnorderedListOutlined /> 列表
+              </button>
+            </div>
             <Button type="primary" icon={<FormOutlined />} onClick={() => navigate("/notes?new=1")}>
               写笔记
             </Button>
@@ -360,6 +448,18 @@ export function KnowledgePage() {
           <p className={styles.subtitle}>共 {totalEntries} 条知识 · 当前列表 {total} 条</p>
         </div>
         <div className={styles.headerActions}>
+          <div className={styles.kindTabs} role="tablist" aria-label="视图">
+            <button type="button" className={styles.kindTab} onClick={() => setViewMode("graph")}>
+              <ApartmentOutlined /> 图谱
+            </button>
+            <button
+              type="button"
+              className={`${styles.kindTab} ${styles.kindTabActive}`}
+              onClick={() => setViewMode("list")}
+            >
+              <UnorderedListOutlined /> 列表
+            </button>
+          </div>
           <div className={styles.kindTabs}>
             {[
               { value: "", label: "全部" },

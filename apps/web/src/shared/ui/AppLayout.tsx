@@ -30,14 +30,15 @@ const DEFAULT_DB_HINT =
 
 async function waitForHealthReady(retries = 20, intervalMs = 500) {
   const desktop = getDesktopBridge();
-  const maxRetries = desktop ? 60 : retries; // 桌面端 sidecar 冷启动更慢
+  // 开发态 API 与 UI 并行启动，缩短空等；打包 sidecar 仍多给几次
+  const maxRetries = desktop ? 24 : retries;
   let lastErr: unknown;
   for (let i = 0; i < maxRetries; i += 1) {
     try {
       return await api.health();
     } catch (err) {
       lastErr = err;
-      await new Promise((r) => setTimeout(r, intervalMs));
+      await new Promise((r) => setTimeout(r, i < 4 ? 200 : intervalMs));
     }
   }
   throw lastErr;

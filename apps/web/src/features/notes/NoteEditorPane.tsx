@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   CompressOutlined,
@@ -6,13 +7,16 @@ import {
   FileAddOutlined,
   FileTextOutlined,
 } from "@ant-design/icons";
-import { Button, Input } from "antd";
+import { Button } from "antd";
 import type { VaultNode, VaultNote } from "@/shared/api/client";
 import { MarkdownEditor, type MarkdownEditorHandle } from "@/shared/ui/markdown-editor";
-import { LakeEditor, type LakeEditorHandle } from "@/shared/ui/lake-editor";
+import type { LakeEditorHandle } from "@/shared/ui/lake-editor";
 import type { NoteTab } from "./types";
 import styles from "./NotesPage.module.css";
 
+const LakeEditor = lazy(() =>
+  import("@/shared/ui/lake-editor").then((m) => ({ default: m.LakeEditor })),
+);
 export type NoteEditorPaneProps = {
   tabs: NoteTab[];
   activeId: number | null;
@@ -85,83 +89,87 @@ export function NoteEditorPane({
         <div className={`${styles.editorMain}${lakeMode && lakeFocus ? ` ${styles.lakeCover}` : ""}`}>
           {lakeMode && lakeFocus && tabs.length > 0 ? renderTabBar("cover-") : null}
           <div className={styles.editorHead}>
-            <Input
-              className={styles.titleInput}
-              variant="borderless"
-              value={title}
-              onChange={(e) => onSetTitle(e.target.value)}
-              placeholder="无标题"
-            />
+            <div className={styles.editorHeadRow}>
+              <input
+                className={styles.titleInput}
+                value={title}
+                onChange={(e) => onSetTitle(e.target.value)}
+                placeholder="无标题"
+                aria-label="笔记标题"
+              />
+              <div className={`${styles.headActions}${dirty ? ` ${styles.headActionsVisible}` : ""}`}>
+                {lakeMode && lakeFocus && (
+                  <button
+                    type="button"
+                    className={styles.iconBtn}
+                    title="退回应用界面（Esc）"
+                    onClick={() => onSetLakeFocus(false)}
+                  >
+                    <CompressOutlined />
+                  </button>
+                )}
+                {lakeMode && !lakeFocus && (
+                  <button
+                    type="button"
+                    className={styles.iconBtn}
+                    title="全屏编辑"
+                    onClick={() => onSetLakeFocus(true)}
+                  >
+                    <ExpandOutlined />
+                  </button>
+                )}
+                <span
+                  className={styles.lakeSwitch}
+                  title="语雀编辑器（实验）：保存时同时写 .md 和 .lake 源文件"
+                >
+                  <span className={styles.lakeSwitchLabel}>语雀</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={lakeMode}
+                    className={`${styles.miniSwitch}${lakeMode ? ` ${styles.miniSwitchOn}` : ""}`}
+                    onClick={() => onToggleLakeMode(!lakeMode)}
+                  >
+                    <span className={styles.miniSwitchThumb} />
+                  </button>
+                </span>
+                <button
+                  type="button"
+                  className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
+                  title="删除笔记"
+                  onClick={() => onDeleteNote(activeId, title || "笔记")}
+                >
+                  <DeleteOutlined />
+                </button>
+                <button
+                  type="button"
+                  className={styles.primaryBtn}
+                  disabled={saving || loadingNote}
+                  onClick={() => void onSave()}
+                >
+                  {saving || loadingNote ? "保存中…" : "保存"}
+                </button>
+              </div>
+            </div>
             <div className={styles.meta}>
               {note.committed ? "已入库" : "未入库"}
               {activeInTree?.path || activeTab.path
                 ? ` · ${activeInTree?.path || activeTab.path}`
                 : ""}
             </div>
-            <div className={`${styles.headActions}${dirty ? ` ${styles.headActionsVisible}` : ""}`}>
-              {lakeMode && lakeFocus && (
-                <button
-                  type="button"
-                  className={styles.iconBtn}
-                  title="退回应用界面（Esc）"
-                  onClick={() => onSetLakeFocus(false)}
-                >
-                  <CompressOutlined />
-                </button>
-              )}
-              {lakeMode && !lakeFocus && (
-                <button
-                  type="button"
-                  className={styles.iconBtn}
-                  title="全屏编辑"
-                  onClick={() => onSetLakeFocus(true)}
-                >
-                  <ExpandOutlined />
-                </button>
-              )}
-              <span
-                className={styles.lakeSwitch}
-                title="语雀编辑器（实验）：保存时同时写 .md 和 .lake 源文件"
-              >
-                <span className={styles.lakeSwitchLabel}>语雀</span>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={lakeMode}
-                  className={`${styles.miniSwitch}${lakeMode ? ` ${styles.miniSwitchOn}` : ""}`}
-                  onClick={() => onToggleLakeMode(!lakeMode)}
-                >
-                  <span className={styles.miniSwitchThumb} />
-                </button>
-              </span>
-              <button
-                type="button"
-                className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
-                title="删除笔记"
-                onClick={() => onDeleteNote(activeId, title || "笔记")}
-              >
-                <DeleteOutlined />
-              </button>
-              <button
-                type="button"
-                className={styles.primaryBtn}
-                disabled={saving || loadingNote}
-                onClick={() => void onSave()}
-              >
-                {saving || loadingNote ? "保存中…" : "保存"}
-              </button>
-            </div>
           </div>
           <div className={styles.editorBody}>
             {lakeMode ? (
-              <LakeEditor
-                key={`lake-${activeId}-${contentKey}`}
-                ref={lakeRef}
-                initialContent={activeTab.draftLake ?? activeTab.draftContent}
-                initialScheme={activeTab.draftLake ? "text/lake" : "text/markdown"}
-                onDirtyChange={onDirtyChange}
-                onSave={onSave}
-              />
+              <Suspense fallback={<div className={styles.bootLoading}><span className={styles.bootSpinner} /></div>}>
+                <LakeEditor
+                  key={`lake-${activeId}-${contentKey}`}
+                  ref={lakeRef}
+                  initialContent={activeTab.draftLake ?? activeTab.draftContent}
+                  initialScheme={activeTab.draftLake ? "text/lake" : "text/markdown"}
+                  onDirtyChange={onDirtyChange}
+                  onSave={onSave}
+                />
+              </Suspense>
             ) : (
               <MarkdownEditor
                 key={`md-${activeId}-${contentKey}`}

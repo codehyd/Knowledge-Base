@@ -114,5 +114,26 @@
     </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <script>
+      // JS 包过大或 Vite 编译慢时，避免永久卡在「正在进入空库…」
+      (function () {
+        var splash = document.getElementById("boot-splash");
+        if (!splash) return;
+        var status = splash.querySelector(".status");
+        window.setTimeout(function () {
+          if (!document.getElementById("boot-splash")) return;
+          if (status) status.textContent = "仍在加载前端模块，请稍候…";
+        }, 4000);
+        window.setTimeout(function () {
+          var el = document.getElementById("boot-splash");
+          if (!el || el.dataset.dismissed === "1") return;
+          el.dataset.dismissed = "1";
+          el.classList.add("is-leave");
+          window.setTimeout(function () {
+            if (el.parentNode) el.parentNode.removeChild(el);
+          }, 500);
+        }, 12000);
+      })();
+    </script>
   </body>
 </html>

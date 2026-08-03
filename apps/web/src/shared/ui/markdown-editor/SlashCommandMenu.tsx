@@ -24,6 +24,7 @@ const ITEM_ICONS: Record<string, ReactNode> = {
   code: <CodeOutlined />,
   hr: <MinusOutlined />,
   link: <LinkOutlined />,
+  wikilink: <span className={styles.slashGlyph}>[[</span>,
 };
 
 type Props = {
