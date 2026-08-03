@@ -3,6 +3,7 @@ import type { MessageInstance } from "antd/es/message/interface";
 import { api } from "@/shared/api/client";
 import { formatError } from "@/shared/ui/feedback";
 import type { MarkdownEditorHandle } from "@/shared/ui/markdown-editor";
+import { extractWikilinkTargets } from "@/shared/ui/markdown-editor/wikilinks";
 import type { LakeEditorHandle } from "@/shared/ui/lake-editor";
 import type { NoteTab } from "../types";
 import type { UnsavedConfirm } from "./useNoteTabs";
@@ -99,7 +100,12 @@ export function useNoteEditor({
             : t,
         ),
       );
-      message.success(res.committed ? "已保存并入库" : "已保存");
+      const linkCount = extractWikilinkTargets(content).length;
+      message.success(
+        `${res.committed ? "已保存并入库" : "已保存"}${
+          linkCount ? ` · 检测到 ${linkCount} 条双链` : ""
+        }`,
+      );
       void refreshTree();
     } catch (err) {
       message.error(formatError(err));

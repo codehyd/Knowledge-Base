@@ -150,14 +150,12 @@ export const SLASH_COMMANDS: SlashCommandItem[] = [
   {
     id: "wikilink",
     title: "双链笔记",
-    description: "插入 [[笔记名]]，用于关系图谱",
+    description: "输入 [[ 选择笔记，写入关系图谱",
     keywords: ["wiki", "wikilink", "双链", "笔记", "obsidian", "[[", "]]"],
     run: (editor) => {
       deleteSlashQuery(editor);
-      const name = window.prompt("笔记名称（写入 [[笔记名]]）", "");
-      if (name === null) return;
-      const target = name.trim() || "笔记名";
-      editor.chain().focus().insertContent(`[[${target}]]`).run();
+      // 插入未闭合 [[，由编辑器弹出笔记选择菜单
+      editor.chain().focus().insertContent("[[").run();
     },
   },
 ];

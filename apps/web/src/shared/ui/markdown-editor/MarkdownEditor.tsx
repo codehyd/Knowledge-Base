@@ -34,9 +34,18 @@ import {
   UnorderedListOutlined,
 } from "@ant-design/icons";
 import { Button, Dropdown, Tooltip } from "antd";
+import { api } from "@/shared/api/client";
 import { getFilteredSlashItems, SlashCommandMenu } from "./SlashCommandMenu";
+import { getFilteredWikiItems, WikiLinkMenu } from "./WikiLinkMenu";
 import { readSlashQuery } from "./slashCommands";
-import { restoreWikilinkMarkers } from "./wikilinks";
+import {
+  flattenVaultNotes,
+  insertWikilink,
+  readWikilinkQuery,
+  restoreWikilinkMarkers,
+  WikilinkHighlight,
+  type WikiNoteOption,
+} from "./wikilinks";
 import styles from "./MarkdownEditor.module.css";
 
 export type MarkdownEditorHandle = {
@@ -67,7 +76,7 @@ const QuoteIcon = () => (
 export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function MarkdownEditor(
   {
     initialMarkdown = "",
-    placeholder = "输入正文，或按 / 插入块…",
+    placeholder = "输入正文，按 / 插入块，或输入 [[ 添加双链…",
     dirty = false,
     onDirtyChange,
     onSave,
@@ -81,10 +90,35 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
     top: number;
   } | null>(null);
   const [slashIndex, setSlashIndex] = useState(0);
+  const [wiki, setWiki] = useState<{
+    query: string;
+    from: number;
+    to: number;
+    left: number;
+    top: number;
+  } | null>(null);
+  const [wikiIndex, setWikiIndex] = useState(0);
+  const [wikiNotes, setWikiNotes] = useState<WikiNoteOption[]>([]);
   const [toolbarOpen, setToolbarOpen] = useState(false);
   const mod = useMemo(() => (isMac() ? "⌘" : "Ctrl"), []);
   const onSaveRef = useCallback(() => onSave?.(), [onSave]);
 
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .getVaultTree()
+      .then((res) => {
+        if (!cancelled) setWikiNotes(flattenVaultNotes(res.nodes || []));
+      })
+      .catch(() => {
+        if (!cancelled) setWikiNotes([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // menu coords are computed inside onUpdate from the live editor
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -101,6 +135,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
         defaultProtocol: "https",
       }),
       Placeholder.configure({ placeholder }),
+      WikilinkHighlight,
       Markdown.configure({
         html: false,
         tightLists: true,
@@ -132,16 +167,32 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
     },
     onUpdate: ({ editor: ed }) => {
       onDirtyChange?.(true);
+      const coords = ed.view.coordsAtPos(ed.state.selection.from);
+      const pos = {
+        left: Math.min(coords.left, window.innerWidth - 300),
+        top: Math.min(coords.bottom + 6, window.innerHeight - 300),
+      };
+      const wikiHit = readWikilinkQuery(ed);
+      if (wikiHit) {
+        setWiki({
+          query: wikiHit.query,
+          from: wikiHit.from,
+          to: wikiHit.to,
+          ...pos,
+        });
+        setWikiIndex(0);
+        setSlash(null);
+        return;
+      }
+      setWiki(null);
       const hit = readSlashQuery(ed);
       if (!hit) {
         setSlash(null);
         return;
       }
-      const coords = ed.view.coordsAtPos(ed.state.selection.from);
       setSlash({
         query: hit.query,
-        left: Math.min(coords.left, window.innerWidth - 300),
-        top: Math.min(coords.bottom + 6, window.innerHeight - 300),
+        ...pos,
       });
       setSlashIndex(0);
     },
@@ -172,6 +223,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
   }, [editor, initialMarkdown]);
 
   const closeSlash = useCallback(() => setSlash(null), []);
+  const closeWiki = useCallback(() => setWiki(null), []);
 
   useEffect(() => {
     if (!editor) return;
@@ -236,9 +288,33 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
         editor.chain().focus().extendMarkRange("link").setLink({ href: url }).run();
         return;
       }
-      if (event.key === "Escape" && slash) {
+      if (event.key === "Escape" && (wiki || slash)) {
         event.preventDefault();
+        closeWiki();
         closeSlash();
+        return;
+      }
+      if (wiki) {
+        const items = getFilteredWikiItems(wikiNotes, wiki.query);
+        if (event.key === "ArrowDown") {
+          event.preventDefault();
+          setWikiIndex((i) => (items.length ? (i + 1) % items.length : 0));
+          return;
+        }
+        if (event.key === "ArrowUp") {
+          event.preventDefault();
+          setWikiIndex((i) => (items.length ? (i - 1 + items.length) % items.length : 0));
+          return;
+        }
+        if (event.key === "Enter" && items.length) {
+          event.preventDefault();
+          event.stopPropagation();
+          insertWikilink(editor, items[wikiIndex]?.title || wiki.query, {
+            from: wiki.from,
+            to: wiki.to,
+          });
+          closeWiki();
+        }
         return;
       }
       if (!slash) return;
@@ -262,7 +338,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [closeSlash, editor, slash, slashIndex]);
+  }, [closeSlash, closeWiki, editor, slash, slashIndex, wiki, wikiIndex, wikiNotes]);
 
   if (!editor) return null;
 
@@ -356,6 +432,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
         {btn("引用", editor.isActive("blockquote"), () => editor.chain().focus().toggleBlockquote().run(), <QuoteIcon />)}
         {btn("代码块", editor.isActive("codeBlock"), () => editor.chain().focus().toggleCodeBlock().run(), <CodeOutlined />)}
         {btn(`${mod}+K 链接`, editor.isActive("link"), promptLink, <LinkOutlined />)}
+        {btn("双链 [[", false, () => editor.chain().focus().insertContent("[[").run(), <span className={styles.slashGlyph}>[[</span>)}
         {btn("分割线", false, () => editor.chain().focus().setHorizontalRule().run(), <MinusOutlined />)}
       </div>
 
@@ -385,7 +462,20 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
         <div className={styles.editor}>
           <EditorContent editor={editor} />
         </div>
-        {slash ? (
+        {wiki ? (
+          <WikiLinkMenu
+            editor={editor}
+            query={wiki.query}
+            range={{ from: wiki.from, to: wiki.to }}
+            notes={wikiNotes}
+            left={wiki.left}
+            top={wiki.top}
+            selectedIndex={wikiIndex}
+            onSelectedIndexChange={setWikiIndex}
+            onClose={closeWiki}
+          />
+        ) : null}
+        {slash && !wiki ? (
           <SlashCommandMenu
             editor={editor}
             query={slash.query}
@@ -402,7 +492,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
         <span className={dirty ? styles.saveStateDirty : undefined}>
           {dirty ? (saving ? "保存中…" : "未保存") : "已保存"}
         </span>
-        <span className={styles.footerHint}>{mod}+S 保存 · `/` 插入块</span>
+        <span className={styles.footerHint}>{mod}+S 保存 · `/` 插入块 · `[[` 双链</span>
       </div>
     </div>
   );

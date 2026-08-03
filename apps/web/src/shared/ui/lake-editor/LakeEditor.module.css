@@ -1,6 +1,5 @@
 /*
- * 语雀编辑器保持官方原始外观，不做任何样式覆盖——
- * 之前的自定义（主题变量/工具栏高度与对齐）会破坏其原生观感，已全部撤除。
+ * 语雀编辑器主体保持官方外观；仅在外壳增加双链工具条与选择面板。
  */
 .root {
   position: relative;
@@ -11,6 +10,185 @@
   height: 100%;
   background: #fff;
   overflow: auto;
+}
+
+.wikiBar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  padding: 6px 12px;
+  border-bottom: 1px solid #f0f1f3;
+  background: #fafbfc;
+}
+
+.wikiBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid #d9dee7;
+  border-radius: 6px;
+  background: #fff;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.wikiBtn:hover:not(:disabled) {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.wikiBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.wikiBtnGlyph {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+}
+
+.wikiBarHint {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: #8c8c8c;
+}
+
+.wikiBarHintFlash {
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+.wikiBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2200;
+  border: none;
+  padding: 0;
+  background: transparent;
+  cursor: default;
+}
+
+.wikiPicker {
+  position: fixed;
+  z-index: 2201;
+  width: 300px;
+  max-height: 360px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #e6eaee;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.14);
+  overflow: hidden;
+}
+
+.wikiPickerCenter {
+  left: 50%;
+  top: 22%;
+  transform: translateX(-50%);
+}
+
+.wikiPickerHead {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px 6px;
+}
+
+.wikiPickerTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: #262626;
+}
+
+.wikiPickerHint {
+  font-size: 11px;
+  color: #8c8c8c;
+}
+
+.wikiSearch {
+  margin: 0 10px 8px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  font-size: 13px;
+  outline: none;
+}
+
+.wikiSearch:focus {
+  border-color: #93c5fd;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.wikiList {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 6px 8px;
+}
+
+.wikiItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wikiItemActive,
+.wikiItem:hover {
+  background: #f3f6fb;
+}
+
+.wikiGlyph {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  background: #f8fafc;
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.wikiItemText {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.wikiItemTitle {
+  font-size: 13px;
+  color: #262626;
+}
+
+.wikiItemPath {
+  font-size: 11px;
+  color: #8c8c8c;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .editorHolder {

@@ -156,6 +156,9 @@ export function NoteEditorPane({
               {activeInTree?.path || activeTab.path
                 ? ` · ${activeInTree?.path || activeTab.path}`
                 : ""}
+              {lakeMode
+                ? " · 语雀：顶部「插入双链」或正文末尾输入 [["
+                : ""}
             </div>
           </div>
           <div className={styles.editorBody}>

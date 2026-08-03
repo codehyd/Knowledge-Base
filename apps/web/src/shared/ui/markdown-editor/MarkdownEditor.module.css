@@ -324,10 +324,38 @@
   color: #262626;
 }
 
+.slashTitleCol {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.slashDesc {
+  font-size: 11px;
+  color: #8c8c8c;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .slashEmpty {
   padding: 12px;
   color: #8c8c8c;
   font-size: 13px;
+}
+
+/* 已完成的 [[双链]] 高亮，便于确认写入成功 */
+:global(.tiptap .wikilink) {
+  color: #1d4ed8;
+  background: rgba(37, 99, 235, 0.1);
+  border-radius: 3px;
+  padding: 0 2px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
 
 .modalBody {
