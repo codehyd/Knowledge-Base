@@ -34,6 +34,7 @@ from app.modules.knowledge.schemas import (
 )
 from app.modules.knowledge.index import read_entry_text
 from app.modules.knowledge.passage import ranges_same_passage, step_expand, step_shrink
+from app.modules.sources.classify import is_good_tag
 from app.modules.sources.models import Source
 from app.modules.sources.preview_search import search_text_hits
 from app.modules.sources.schemas import PreviewSearchOut
@@ -103,7 +104,8 @@ class KnowledgeService:
         total_entries = int(
             (await db.execute(select(func.count()).select_from(Entry))).scalar_one()
         )
-        # 顺手清掉无条目的空分类（如旧版「电子书」残留）
+        # 清掉英文书名碎片（The/and/Forest）与空分类
+        await self._prune_low_quality_categories(db)
         await self._prune_empty_categories(db)
 
         counts = (
@@ -118,6 +120,24 @@ class KnowledgeService:
             CategoryOut(id=row[0], name=row[1], count=int(row[2] or 0)) for row in counts
         ]
         return CategoryListOut(items=items, total_entries=total_entries)
+
+    async def _prune_low_quality_categories(self, db: AsyncSession) -> None:
+        """拆除低质量标签挂靠并删除分类（书名英文切片、口号标题等）。"""
+        result = await db.execute(select(Category))
+        cats = list(result.scalars().all())
+        removed = False
+        for cat in cats:
+            if is_good_tag(cat.name or ""):
+                continue
+            links = await db.execute(
+                select(EntryCategory).where(EntryCategory.category_id == cat.id)
+            )
+            for link in links.scalars().all():
+                await db.delete(link)
+            await db.delete(cat)
+            removed = True
+        if removed:
+            await db.commit()
 
     async def _prune_empty_categories(self, db: AsyncSession) -> None:
         used = select(EntryCategory.category_id).distinct()

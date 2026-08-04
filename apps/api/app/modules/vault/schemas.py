@@ -95,4 +95,17 @@ class VaultGraphOut(BaseModel):
     broken_links: list[VaultBrokenLinkOut] = Field(default_factory=list)
 
 
+class VaultLinkTargetOut(BaseModel):
+    id: str = Field(description="相对 vault 的 .md 路径")
+    title: str
+    path: str
+    source_id: int | None = None
+    stem: str = ""
+
+
+class VaultLinkTargetsOut(BaseModel):
+    items: list[VaultLinkTargetOut] = Field(default_factory=list)
+    total: int = 0
+
+
 VaultNodeOut.model_rebuild()

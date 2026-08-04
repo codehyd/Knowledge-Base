@@ -1,4 +1,6 @@
 import type { Editor } from "@tiptap/react";
+import { getContributedSlashItems } from "@/shared/editor-extensions";
+import { startWikilinkSuggest } from "./wikilink/WikilinkSuggest";
 
 export type SlashCommandItem = {
   id: string;
@@ -8,7 +10,7 @@ export type SlashCommandItem = {
   run: (editor: Editor) => void;
 };
 
-function deleteSlashQuery(editor: Editor) {
+export function deleteSlashQuery(editor: Editor) {
   const { state } = editor;
   const { from } = state.selection;
   const $from = state.doc.resolve(from);
@@ -19,7 +21,7 @@ function deleteSlashQuery(editor: Editor) {
   editor.chain().focus().deleteRange({ from: deleteFrom, to: from }).run();
 }
 
-export const SLASH_COMMANDS: SlashCommandItem[] = [
+const CORE_SLASH_COMMANDS: SlashCommandItem[] = [
   {
     id: "paragraph",
     title: "正文",
@@ -147,23 +149,43 @@ export const SLASH_COMMANDS: SlashCommandItem[] = [
       editor.chain().focus().extendMarkRange("link").setLink({ href: url }).run();
     },
   },
-  {
-    id: "wikilink",
-    title: "双链笔记",
-    description: "输入 [[ 选择笔记，写入关系图谱",
-    keywords: ["wiki", "wikilink", "双链", "笔记", "obsidian", "[[", "]]"],
-    run: (editor) => {
-      deleteSlashQuery(editor);
-      // 插入未闭合 [[，由编辑器弹出笔记选择菜单
-      editor.chain().focus().insertContent("[[").run();
-    },
-  },
 ];
 
+function contributedSlashCommands(): SlashCommandItem[] {
+  return getContributedSlashItems().map((item) => ({
+    id: item.id,
+    title: item.title,
+    description: item.description,
+    keywords: item.keywords,
+    run: (editor) => {
+      deleteSlashQuery(editor);
+      if (item.action === "wikilink-suggest") {
+        startWikilinkSuggest(editor);
+        return;
+      }
+      if (item.insertMarkdown) {
+        editor.chain().focus().insertContent(item.insertMarkdown).run();
+      }
+    },
+  }));
+}
+
+/** 核心命令 + 编辑扩展贡献的 slash（同 id 时扩展覆盖） */
+export function getSlashCommands(): SlashCommandItem[] {
+  const map = new Map<string, SlashCommandItem>();
+  for (const item of CORE_SLASH_COMMANDS) map.set(item.id, item);
+  for (const item of contributedSlashCommands()) map.set(item.id, item);
+  return Array.from(map.values());
+}
+
+/** @deprecated 使用 getSlashCommands()；保留兼容导出 */
+export const SLASH_COMMANDS = getSlashCommands();
+
 export function filterSlashCommands(query: string): SlashCommandItem[] {
+  const all = getSlashCommands();
   const q = query.trim().toLowerCase();
-  if (!q) return SLASH_COMMANDS;
-  return SLASH_COMMANDS.filter(
+  if (!q) return all;
+  return all.filter(
     (item) =>
       item.title.toLowerCase().includes(q) ||
       item.description.toLowerCase().includes(q) ||

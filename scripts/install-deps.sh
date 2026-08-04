@@ -48,11 +48,13 @@ python_version_ok() {
 collect_python_candidates() {
   candidates=()
   local seen="|"
-  local name py
+  local name py win_local win_roaming
 
   add_candidate() {
     local py="$1"
-    [[ -n "$py" && -x "$py" ]] || return 0
+    [[ -n "$py" ]] || return 0
+    # Git Bash 下 Windows 路径可能无 -x，改用 -f
+    [[ -x "$py" || -f "$py" ]] || return 0
     case "$seen" in
       *"|$py|"*) return 0 ;;
     esac
@@ -66,12 +68,31 @@ collect_python_candidates() {
     fi
   done
 
+  # Windows：py 启动器（Git Bash / cmd）
+  if command -v py >/dev/null 2>&1; then
+    for name in -3.14 -3.13 -3.12 -3; do
+      py_path="$(py "$name" -c "import sys; print(sys.executable)" 2>/dev/null || true)"
+      # 转成 Git Bash 可读路径（C:\... → /c/...）
+      if [[ -n "$py_path" ]]; then
+        if command -v cygpath >/dev/null 2>&1; then
+          py_path="$(cygpath -u "$py_path" 2>/dev/null || echo "$py_path")"
+        else
+          py_path="$(echo "$py_path" | sed -E 's#^([A-Za-z]):[\\/]#/\L\1/#; s#\\#/#g')"
+        fi
+        add_candidate "$py_path"
+      fi
+    done
+  fi
+
   if command -v which >/dev/null 2>&1; then
     while IFS= read -r py; do
       add_candidate "$py"
     done < <(which -a python3.12 python3.13 python3.14 python3 python 2>/dev/null || true)
   fi
 
+  win_local="${LOCALAPPDATA:-}"
+  win_roaming="${APPDATA:-}"
+  # Git Bash 常带这些环境变量
   for py in \
     "$HOME/.local/bin/python3.12" \
     "$HOME/.local/bin/python3.13" \
@@ -81,9 +102,34 @@ collect_python_candidates() {
     "/opt/homebrew/bin/python3.14" \
     "/usr/local/bin/python3.12" \
     "/usr/local/bin/python3.13" \
-    "/usr/local/bin/python3.14"; do
+    "/usr/local/bin/python3.14" \
+    "/c/Users/${USERNAME:-}/AppData/Local/Programs/Python/Python313/python.exe" \
+    "/c/Users/${USERNAME:-}/AppData/Local/Programs/Python/Python312/python.exe" \
+    "/c/Users/${USER:-}/AppData/Local/Programs/Python/Python313/python.exe" \
+    "/c/Users/${USER:-}/AppData/Local/Programs/Python/Python312/python.exe"; do
     add_candidate "$py"
   done
+
+  if [[ -n "$win_local" ]]; then
+    if command -v cygpath >/dev/null 2>&1; then
+      win_local="$(cygpath -u "$win_local" 2>/dev/null || echo "$win_local")"
+    fi
+    for py in \
+      "$win_local/Programs/Python/Python314/python.exe" \
+      "$win_local/Programs/Python/Python313/python.exe" \
+      "$win_local/Programs/Python/Python312/python.exe"; do
+      add_candidate "$py"
+    done
+  fi
+  if [[ -n "$win_roaming" ]]; then
+    if command -v cygpath >/dev/null 2>&1; then
+      win_roaming="$(cygpath -u "$win_roaming" 2>/dev/null || echo "$win_roaming")"
+    fi
+    # uv 安装的解释器
+    while IFS= read -r py; do
+      add_candidate "$py"
+    done < <(find "$win_roaming/uv/python" -name 'python.exe' 2>/dev/null | head -n 8 || true)
+  fi
 }
 
 pick_python() {
@@ -112,7 +158,10 @@ pick_python() {
     return 0
   fi
 
-  echo "需要 Python 3.12 或更高版本。可安装：brew install python@3.12 或 curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
+  echo "需要 Python 3.12 或更高版本。" >&2
+  echo "  Windows 请用 PowerShell：  .\\scripts\\install-deps.ps1" >&2
+  echo "  或安装 uv：curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
+  echo "  macOS：brew install python@3.12" >&2
   return 1
 }
 
@@ -130,8 +179,17 @@ if [[ ! -d "$VENV" ]]; then
   "$PY" -m venv "$VENV"
 fi
 
-# shellcheck disable=SC1091
-source "$VENV/bin/activate"
+# Windows venv 在 Scripts/，Unix 在 bin/
+if [[ -f "$VENV/Scripts/activate" ]]; then
+  # shellcheck disable=SC1091
+  source "$VENV/Scripts/activate"
+elif [[ -f "$VENV/bin/activate" ]]; then
+  # shellcheck disable=SC1091
+  source "$VENV/bin/activate"
+else
+  echo "虚拟环境激活脚本不存在：$VENV" >&2
+  exit 1
+fi
 python -m pip install -U pip
 pip install -r apps/api/requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 

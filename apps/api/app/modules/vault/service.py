@@ -928,5 +928,95 @@ class VaultService:
         out_nodes.sort(key=lambda n: (-n.degree, n.kind != "category", n.title.lower()))
         return VaultGraphOut(nodes=out_nodes, edges=edges, broken_links=broken)
 
+    async def link_targets(
+        self, db: AsyncSession, *, q: str = "", limit: int = 20
+    ) -> "VaultLinkTargetsOut":
+        """双链补全：以数据库笔记为主，合并 vault 磁盘文件；支持中文前缀/包含。"""
+        from pathlib import Path as _Path
+
+        from app.modules.vault.schemas import VaultLinkTargetOut, VaultLinkTargetsOut
+        from app.modules.vault.wikilink import normalize_link_target
+
+        by_key: dict[str, VaultLinkTargetOut] = {}
+
+        # 1) 所有 type=note 的 Source（不依赖磁盘是否已扫到）
+        result = await db.execute(select(Source).where(Source.type == "note"))
+        for row in result.scalars().all():
+            rel = (row.vault_path or "").replace("\\", "/").strip()
+            title = (row.title or "").strip()
+            if rel:
+                stem = _Path(rel).stem
+                key = rel
+            else:
+                stem = title or f"note-{row.id}"
+                key = f"source:{row.id}"
+            if not title:
+                title = stem or f"笔记 {row.id}"
+            by_key[key] = VaultLinkTargetOut(
+                id=key,
+                title=title,
+                path=rel or key,
+                source_id=row.id,
+                stem=stem,
+            )
+
+        # 2) 磁盘 orphan（有文件未登记）
+        root = self.ensure_root()
+        if root.is_dir():
+            for md in root.rglob("*.md"):
+                if any(part.startswith(".") for part in md.relative_to(root).parts):
+                    continue
+                try:
+                    rel = to_vault_rel(md)
+                except Exception:
+                    continue
+                if rel in by_key:
+                    continue
+                by_key[rel] = VaultLinkTargetOut(
+                    id=rel,
+                    title=md.stem,
+                    path=rel,
+                    source_id=None,
+                    stem=md.stem,
+                )
+
+        items = list(by_key.values())
+        query = normalize_link_target(q).casefold().strip()
+        if query:
+            scored: list[tuple[int, VaultLinkTargetOut]] = []
+            for it in items:
+                title_l = (it.title or "").casefold()
+                path_l = (it.path or "").casefold()
+                stem_l = (it.stem or "").casefold()
+                path_norm = path_l[: -3] if path_l.endswith(".md") else path_l
+                # 去空白后再比一次，兼容「未 命名」类输入
+                compact_title = title_l.replace(" ", "")
+                compact_q = query.replace(" ", "")
+                if query in {stem_l, title_l, path_l, path_norm} or compact_q == compact_title:
+                    score = 0
+                elif (
+                    title_l.startswith(query)
+                    or stem_l.startswith(query)
+                    or compact_title.startswith(compact_q)
+                ):
+                    score = 1
+                elif (
+                    query in title_l
+                    or query in path_l
+                    or query in stem_l
+                    or compact_q in compact_title
+                ):
+                    score = 2
+                else:
+                    continue
+                scored.append((score, it))
+            scored.sort(key=lambda x: (x[0], x[1].title.casefold()))
+            items = [it for _, it in scored]
+        else:
+            items.sort(key=lambda it: (it.title or "").casefold())
+
+        lim = max(1, min(int(limit or 20), 50))
+        return VaultLinkTargetsOut(items=items[:lim], total=len(items))
+
 
 vault_service = VaultService()

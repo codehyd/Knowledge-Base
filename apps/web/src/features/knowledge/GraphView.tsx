@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState, Component, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  Component,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react";
 import { Empty, Spin } from "antd";
 import { api, type VaultGraph, type VaultGraphNode } from "@/shared/api/client";
 import { formatError } from "@/shared/ui/feedback";
@@ -189,7 +198,7 @@ function simStep(nodes: GraphNode[], links: GraphLink[], width: number, height: 
     b.vy -= fy;
   }
 
-  // center gravity + integrate
+  // center gravity + integrate（世界坐标，不钳到画布，便于缩放后查看）
   for (const n of nodes) {
     n.vx += (cx - n.x) * 0.005;
     n.vy += (cy - n.y) * 0.005;
@@ -197,9 +206,54 @@ function simStep(nodes: GraphNode[], links: GraphLink[], width: number, height: 
     n.vy *= 0.85;
     n.x += n.vx;
     n.y += n.vy;
-    n.x = Math.min(width - 24, Math.max(24, n.x));
-    n.y = Math.min(height - 24, Math.max(24, n.y));
   }
+}
+
+const ZOOM_MIN = 0.25;
+const ZOOM_MAX = 4;
+const ZOOM_STEP = 1.2;
+
+type ViewTransform = { tx: number; ty: number; scale: number };
+
+function clampZoom(scale: number) {
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, scale));
+}
+
+/** 选中节点的一跳邻居（含自身） */
+function focusNeighborhood(selectedId: string | null, links: GraphLink[]): Set<string> | null {
+  if (!selectedId) return null;
+  const ids = new Set<string>([selectedId]);
+  for (const l of links) {
+    if (l.source === selectedId) ids.add(l.target);
+    if (l.target === selectedId) ids.add(l.source);
+  }
+  return ids;
+}
+
+function drawArrow(
+  ctx: CanvasRenderingContext2D,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  nodeR: number,
+  scale: number,
+) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len;
+  const uy = dy / len;
+  const tipX = x2 - ux * (nodeR + 2);
+  const tipY = y2 - uy * (nodeR + 2);
+  const ah = 8 / scale;
+  const aw = 5 / scale;
+  ctx.beginPath();
+  ctx.moveTo(tipX, tipY);
+  ctx.lineTo(tipX - ux * ah - uy * aw, tipY - uy * ah + ux * aw);
+  ctx.lineTo(tipX - ux * ah + uy * aw, tipY - uy * ah - ux * aw);
+  ctx.closePath();
+  ctx.fill();
 }
 
 function CanvasGraph({
@@ -221,10 +275,120 @@ function CanvasGraph({
   const nodesRef = useRef(nodes);
   const linksRef = useRef(links);
   const selectedRef = useRef(selectedId);
-  const dragRef = useRef<{ id: string; ox: number; oy: number } | null>(null);
+  const focusRef = useRef<Set<string> | null>(null);
+  const viewRef = useRef<ViewTransform>({ tx: 0, ty: 0, scale: 1 });
+  const userViewRef = useRef(false);
+  /** 点选聚焦已完成：禁止布局结束后再次自动 fit，避免「先偏再居中」 */
+  const focusSettledRef = useRef(false);
+  const sizeRef = useRef({ w: width, h: height });
+  sizeRef.current = { w: width, h: height };
+  const [zoomPct, setZoomPct] = useState(100);
+  const [focusCount, setFocusCount] = useState(0);
+  const dragRef = useRef<
+    | { mode: "node"; id: string; ox: number; oy: number }
+    | { mode: "pan"; x: number; y: number; tx: number; ty: number }
+    | null
+  >(null);
   nodesRef.current = nodes;
   linksRef.current = links;
   selectedRef.current = selectedId;
+  focusRef.current = focusNeighborhood(selectedId, links);
+
+  const syncZoomLabel = useCallback(() => {
+    setZoomPct(Math.round(viewRef.current.scale * 100));
+  }, []);
+
+  const applyZoomAt = useCallback(
+    (screenX: number, screenY: number, nextScale: number, fromUser = true) => {
+      const view = viewRef.current;
+      const scale = clampZoom(nextScale);
+      if (scale === view.scale) return;
+      if (fromUser) userViewRef.current = true;
+      const wx = (screenX - view.tx) / view.scale;
+      const wy = (screenY - view.ty) / view.scale;
+      view.scale = scale;
+      view.tx = screenX - wx * scale;
+      view.ty = screenY - wy * scale;
+      syncZoomLabel();
+    },
+    [syncZoomLabel],
+  );
+
+  const fitView = useCallback(
+    (fromUser = true, onlyIds: Set<string> | null = null) => {
+      const ns = nodesRef.current;
+      const { w, h } = sizeRef.current;
+      const subset = onlyIds ? ns.filter((n) => onlyIds.has(n.id)) : ns;
+      const targets = subset.length ? subset : ns;
+      if (!targets.length || w < 10 || h < 10) return;
+      if (fromUser) userViewRef.current = true;
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (const n of targets) {
+        minX = Math.min(minX, n.x);
+        minY = Math.min(minY, n.y);
+        maxX = Math.max(maxX, n.x);
+        maxY = Math.max(maxY, n.y);
+      }
+      // 单点或极少邻居时给最小包围盒，避免缩放过猛
+      if (maxX - minX < 80) {
+        const mid = (minX + maxX) / 2;
+        minX = mid - 40;
+        maxX = mid + 40;
+      }
+      if (maxY - minY < 80) {
+        const mid = (minY + maxY) / 2;
+        minY = mid - 40;
+        maxY = mid + 40;
+      }
+      const pad = onlyIds ? 72 : 56;
+      const bw = Math.max(maxX - minX, 40);
+      const bh = Math.max(maxY - minY, 40);
+      const maxScale = onlyIds ? 2.4 : 1.5;
+      const scale = clampZoom(Math.min((w - pad * 2) / bw, (h - pad * 2) / bh, maxScale));
+      viewRef.current = {
+        scale,
+        tx: w / 2 - ((minX + maxX) / 2) * scale,
+        ty: h / 2 - ((minY + maxY) / 2) * scale,
+      };
+      syncZoomLabel();
+    },
+    [syncZoomLabel],
+  );
+
+  // 仅在 selectedId 变化时聚焦一次；等侧栏改宽完成后再取景，避免左右跳 + 数秒后再居中
+  const prevSelectedRef = useRef<string | null>(null);
+  useEffect(() => {
+    const focus = focusNeighborhood(selectedId, links);
+    setFocusCount(focus ? Math.max(0, focus.size - 1) : 0);
+    const prev = prevSelectedRef.current;
+    if (prev === selectedId) return;
+    prevSelectedRef.current = selectedId;
+
+    if (!selectedId || !focus) {
+      focusSettledRef.current = false;
+      if (prev && !selectedId) {
+        const t = window.setTimeout(() => fitView(false, null), 150);
+        return () => window.clearTimeout(t);
+      }
+      return;
+    }
+
+    focusSettledRef.current = false;
+    // 冻结节点速度，聚焦过程中不再漂移
+    for (const n of nodesRef.current) {
+      n.vx = 0;
+      n.vy = 0;
+    }
+    const t = window.setTimeout(() => {
+      fitView(false, focus);
+      focusSettledRef.current = true;
+      userViewRef.current = true;
+    }, 150);
+    return () => window.clearTimeout(t);
+  }, [selectedId, links, fitView]);
 
   useEffect(() => {
     const cx = width / 2;
@@ -242,52 +406,144 @@ function CanvasGraph({
         n.vy = 0;
       }
     }
-  }, [nodes, width, height]);
+    // 仅在图谱数据变更时重置视口
+    userViewRef.current = false;
+    focusSettledRef.current = false;
+    viewRef.current = { tx: 0, ty: 0, scale: 1 };
+    syncZoomLabel();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 刻意忽略 width/height
+  }, [nodes, syncZoomLabel]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || width < 10 || height < 10) return;
+
+    const onWheelNative = (ev: WheelEvent) => {
+      ev.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const sx = canvas.width / Math.max(rect.width, 1);
+      const sy = canvas.height / Math.max(rect.height, 1);
+      const x = (ev.clientX - rect.left) * sx;
+      const y = (ev.clientY - rect.top) * sy;
+      const fine = Math.abs(ev.deltaY) < 40;
+      const f = fine
+        ? ev.deltaY < 0
+          ? 1.08
+          : 1 / 1.08
+        : ev.deltaY < 0
+          ? ZOOM_STEP
+          : 1 / ZOOM_STEP;
+      applyZoomAt(x, y, viewRef.current.scale * f);
+    };
+    canvas.addEventListener("wheel", onWheelNative, { passive: false });
+
     const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    if (!ctx) {
+      canvas.removeEventListener("wheel", onWheelNative);
+      return;
+    }
     let raf = 0;
     let ticks = 0;
+    let didFit = false;
 
     const draw = () => {
       const ns = nodesRef.current;
       const ls = linksRef.current;
-      if (ticks < 180) {
+      const view = viewRef.current;
+      const sel = selectedRef.current;
+      const focus = focusRef.current;
+      const focusing = Boolean(focus && sel);
+      // 点选聚焦时暂停力导向，避免节点继续漂、随后又被二次 fit
+      if (ticks < 180 && !sel) {
         simStep(ns, ls, width, height);
         ticks += 1;
+      } else if (!didFit && ticks >= 180) {
+        didFit = true;
+        if (!userViewRef.current && !focusSettledRef.current && !sel) {
+          fitView(false, null);
+        }
       }
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, width, height);
       ctx.fillStyle = "#f7f9fa";
       ctx.fillRect(0, 0, width, height);
 
+      ctx.setTransform(view.scale, 0, 0, view.scale, view.tx, view.ty);
+
       const byId = new Map(ns.map((n) => [n.id, n]));
+
+      const dimLinks: GraphLink[] = [];
+      const hotLinks: GraphLink[] = [];
       for (const link of ls) {
+        const hot =
+          focusing &&
+          (link.source === sel || link.target === sel);
+        (hot ? hotLinks : dimLinks).push(link);
+      }
+
+      const strokeLink = (link: GraphLink, hot: boolean) => {
         const a = byId.get(link.source);
         const b = byId.get(link.target);
-        if (!a || !b) continue;
+        if (!a || !b) return;
+        const isCat = link.kind === "in_category";
         ctx.beginPath();
         ctx.moveTo(a.x, a.y);
         ctx.lineTo(b.x, b.y);
-        const isCat = link.kind === "in_category";
-        ctx.strokeStyle = !link.resolved ? "#cbd5e1" : isCat ? "#d1d5db" : "#94a3b8";
-        ctx.lineWidth = link.resolved ? (isCat ? 1 : 1.4) : 1;
-        if (!link.resolved || isCat) ctx.setLineDash([5, 4]);
+        if (hot) {
+          ctx.strokeStyle = !link.resolved ? "#f59e0b" : isCat ? "#64748b" : "#2a6f6a";
+          ctx.lineWidth = (isCat ? 2 : 2.6) / view.scale;
+          ctx.globalAlpha = 1;
+        } else if (focusing) {
+          ctx.strokeStyle = "#cbd5e1";
+          ctx.lineWidth = 1 / view.scale;
+          ctx.globalAlpha = 0.18;
+        } else {
+          ctx.strokeStyle = !link.resolved ? "#cbd5e1" : isCat ? "#d1d5db" : "#94a3b8";
+          ctx.lineWidth = (link.resolved ? (isCat ? 1 : 1.4) : 1) / view.scale;
+          ctx.globalAlpha = 1;
+        }
+        if (!link.resolved || isCat) ctx.setLineDash([5 / view.scale, 4 / view.scale]);
         else ctx.setLineDash([]);
         ctx.stroke();
         ctx.setLineDash([]);
-      }
+        if (hot && link.resolved && !isCat) {
+          ctx.fillStyle = "#2a6f6a";
+          const tr = b.phantom ? 5 : b.kind === "category" ? 7 : 6 + Math.min(7, (b.degree || 0) * 0.55);
+          drawArrow(ctx, a.x, a.y, b.x, b.y, tr, view.scale);
+        }
+        ctx.globalAlpha = 1;
+      };
 
-      const sel = selectedRef.current;
-      for (const n of ns) {
+      for (const link of dimLinks) strokeLink(link, false);
+      for (const link of hotLinks) strokeLink(link, true);
+
+      const showLabels = focusing || view.scale >= 0.45;
+      const fontPx = Math.max(10, Math.min(15, (focusing ? 13 : 12) / Math.sqrt(view.scale)));
+      // 先画非焦点，再画焦点，保证关联节点在上层
+      const ordered = focusing
+        ? [...ns].sort((a, b) => {
+            const af = focus!.has(a.id) ? 1 : 0;
+            const bf = focus!.has(b.id) ? 1 : 0;
+            if (af !== bf) return af - bf;
+            if (a.id === sel) return 1;
+            if (b.id === sel) return -1;
+            return 0;
+          })
+        : ns;
+
+      for (const n of ordered) {
         const isCat = n.kind === "category";
-        const r = n.phantom
+        const inFocus = !focusing || focus!.has(n.id);
+        const isSel = n.id === sel;
+        let r = n.phantom
           ? 5
           : isCat
             ? 7
             : 6 + Math.min(7, (n.degree || 0) * 0.55);
+        if (isSel) r += 2;
+        else if (inFocus && focusing) r += 1;
+
+        ctx.globalAlpha = inFocus ? 1 : 0.14;
         ctx.beginPath();
         if (isCat) {
           const s = r * 1.2;
@@ -295,77 +551,205 @@ function CanvasGraph({
         } else {
           ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
         }
-        ctx.fillStyle = kindColor(n.kind, n.id === sel, Boolean(n.phantom));
+        ctx.fillStyle = kindColor(n.kind, isSel, Boolean(n.phantom));
         ctx.fill();
-        if (n.id === sel) {
+
+        if (isSel) {
           ctx.strokeStyle = "#1f5450";
-          ctx.lineWidth = 2;
+          ctx.lineWidth = 2.5 / view.scale;
+          ctx.stroke();
+          // 外圈光晕，突出当前焦点
+          ctx.beginPath();
+          ctx.arc(n.x, n.y, r + 5, 0, Math.PI * 2);
+          ctx.strokeStyle = "rgba(42, 111, 106, 0.35)";
+          ctx.lineWidth = 3 / view.scale;
+          ctx.stroke();
+        } else if (inFocus && focusing) {
+          ctx.strokeStyle = "rgba(42, 111, 106, 0.55)";
+          ctx.lineWidth = 1.5 / view.scale;
           ctx.stroke();
         }
-        const label = n.title || n.path;
-        const text = label.length > 16 ? `${label.slice(0, 16)}…` : label;
-        ctx.font = '12px "IBM Plex Sans", "PingFang SC", sans-serif';
-        ctx.textAlign = "center";
-        ctx.textBaseline = "top";
-        ctx.fillStyle = n.phantom ? "#94a3b8" : "#334155";
-        ctx.fillText(text, n.x, n.y + r + 4);
+
+        const drawLabel = showLabels && (inFocus || !focusing);
+        if (drawLabel) {
+          const label = n.title || n.path;
+          const maxLen = focusing && inFocus ? 22 : view.scale < 0.7 ? 10 : 16;
+          const text = label.length > maxLen ? `${label.slice(0, maxLen)}…` : label;
+          ctx.font = `${isSel ? "600 " : ""}${fontPx}px "IBM Plex Sans", "PingFang SC", sans-serif`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "top";
+          ctx.fillStyle = n.phantom ? "#94a3b8" : isSel ? "#0f172a" : "#334155";
+          ctx.fillText(text, n.x, n.y + r + 4);
+        }
+        ctx.globalAlpha = 1;
       }
       raf = requestAnimationFrame(draw);
     };
     raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
-  }, [width, height]);
+    return () => {
+      cancelAnimationFrame(raf);
+      canvas.removeEventListener("wheel", onWheelNative);
+    };
+  }, [width, height, applyZoomAt, fitView]);
 
-  const hitTest = (x: number, y: number) => {
+  const canvasPoint = (
+    e: Pick<ReactPointerEvent<HTMLCanvasElement>, "currentTarget" | "clientX" | "clientY">,
+  ) => {
+    const canvas = e.currentTarget;
+    const rect = canvas.getBoundingClientRect();
+    const sx = canvas.width / Math.max(rect.width, 1);
+    const sy = canvas.height / Math.max(rect.height, 1);
+    return {
+      x: (e.clientX - rect.left) * sx,
+      y: (e.clientY - rect.top) * sy,
+    };
+  };
+
+  const toWorld = (screenX: number, screenY: number) => {
+    const { tx, ty, scale } = viewRef.current;
+    return { x: (screenX - tx) / scale, y: (screenY - ty) / scale };
+  };
+
+  const hitTest = (worldX: number, worldY: number) => {
+    const scale = viewRef.current.scale;
+    const focus = focusRef.current;
     let best: GraphNode | null = null;
-    let bestD = 16;
+    let bestScore = Infinity;
     for (const n of nodesRef.current) {
-      const d = Math.hypot(n.x - x, n.y - y);
+      const d = Math.hypot(n.x - worldX, n.y - worldY);
       const r = n.phantom ? 8 : 10 + Math.min(7, (n.degree || 0) * 0.55);
-      if (d <= r + 4 && d < bestD) {
+      if (d > r + 14 / scale) continue;
+      // 聚焦时优先点中关联节点
+      const score = d - (focus?.has(n.id) ? 4 / scale : 0);
+      if (score < bestScore) {
         best = n;
-        bestD = d;
+        bestScore = score;
       }
     }
     return best;
   };
 
   return (
-    <canvas
-      ref={canvasRef}
-      width={width}
-      height={height}
-      className={styles.canvasEl}
-      onPointerDown={(e) => {
-        const rect = e.currentTarget.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
-        const hit = hitTest(x, y);
-        if (hit) {
-          onSelect(hit.id);
-          dragRef.current = { id: hit.id, ox: x - hit.x, oy: y - hit.y };
+    <>
+      <canvas
+        ref={canvasRef}
+        width={width}
+        height={height}
+        className={styles.canvasEl}
+        onPointerDown={(e: ReactPointerEvent<HTMLCanvasElement>) => {
+          const { x, y } = canvasPoint(e);
+          const world = toWorld(x, y);
+          const hit = hitTest(world.x, world.y);
+          if (hit) {
+            onSelect(hit.id);
+            dragRef.current = {
+              mode: "node",
+              id: hit.id,
+              ox: world.x - hit.x,
+              oy: world.y - hit.y,
+            };
+          } else {
+            onSelect(null);
+            dragRef.current = {
+              mode: "pan",
+              x,
+              y,
+              tx: viewRef.current.tx,
+              ty: viewRef.current.ty,
+            };
+          }
           e.currentTarget.setPointerCapture(e.pointerId);
-        } else {
-          onSelect(null);
-        }
-      }}
-      onPointerMove={(e) => {
-        const drag = dragRef.current;
-        if (!drag) return;
-        const rect = e.currentTarget.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
-        const node = nodesRef.current.find((n) => n.id === drag.id);
-        if (!node) return;
-        node.x = x - drag.ox;
-        node.y = y - drag.oy;
-        node.vx = 0;
-        node.vy = 0;
-      }}
-      onPointerUp={() => {
-        dragRef.current = null;
-      }}
-    />
+        }}
+        onPointerMove={(e: ReactPointerEvent<HTMLCanvasElement>) => {
+          const drag = dragRef.current;
+          if (!drag) return;
+          const { x, y } = canvasPoint(e);
+          if (drag.mode === "pan") {
+            userViewRef.current = true;
+            viewRef.current.tx = drag.tx + (x - drag.x);
+            viewRef.current.ty = drag.ty + (y - drag.y);
+            return;
+          }
+          const world = toWorld(x, y);
+          const node = nodesRef.current.find((n) => n.id === drag.id);
+          if (!node) return;
+          node.x = world.x - drag.ox;
+          node.y = world.y - drag.oy;
+          node.vx = 0;
+          node.vy = 0;
+        }}
+        onPointerUp={() => {
+          dragRef.current = null;
+        }}
+        onDoubleClick={(e) => {
+          const { x, y } = canvasPoint(e);
+          applyZoomAt(x, y, viewRef.current.scale * ZOOM_STEP);
+        }}
+      />
+      <div className={styles.zoomBar} aria-label="图谱缩放">
+        {selectedId ? (
+          <>
+            <button
+              type="button"
+              className={styles.zoomBtn}
+              title="重新聚焦到当前关联"
+              onClick={() => {
+                const focus = focusNeighborhood(selectedId, linksRef.current);
+                fitView(true, focus);
+              }}
+            >
+              关联{focusCount > 0 ? ` ${focusCount}` : ""}
+            </button>
+            <button
+              type="button"
+              className={styles.zoomBtn}
+              title="退出聚焦，查看全图"
+              onClick={() => {
+                onSelect(null);
+              }}
+            >
+              全图
+            </button>
+            <span className={styles.zoomDivider} />
+          </>
+        ) : null}
+        <button
+          type="button"
+          className={styles.zoomBtn}
+          title="缩小"
+          onClick={() => applyZoomAt(width / 2, height / 2, viewRef.current.scale / ZOOM_STEP)}
+        >
+          −
+        </button>
+        <button
+          type="button"
+          className={styles.zoomLabel}
+          title="点击适应画布"
+          onClick={() => fitView()}
+        >
+          {zoomPct}%
+        </button>
+        <button
+          type="button"
+          className={styles.zoomBtn}
+          title="放大"
+          onClick={() => applyZoomAt(width / 2, height / 2, viewRef.current.scale * ZOOM_STEP)}
+        >
+          +
+        </button>
+        <button
+          type="button"
+          className={styles.zoomBtn}
+          title="适应画布"
+          onClick={() => {
+            const focus = focusNeighborhood(selectedId, linksRef.current);
+            fitView(true, focus);
+          }}
+        >
+          适应
+        </button>
+      </div>
+    </>
   );
 }
 
@@ -453,7 +837,7 @@ export function GraphView({ onOpenNode, onError }: GraphViewProps) {
             <div className={styles.canvas}>
               {canvasW > 0 && canvasH > 0 ? (
                 <CanvasGraph
-                  key={`${nonce}-${graphData.nodes.length}-${canvasW}x${canvasH}`}
+                  key={`${nonce}-${graphData.nodes.length}`}
                   nodes={graphData.nodes}
                   links={graphData.links}
                   selectedId={selectedId}
@@ -486,6 +870,9 @@ export function GraphView({ onOpenNode, onError }: GraphViewProps) {
                 <button type="button" className={styles.refreshBtn} onClick={() => void refresh()}>
                   刷新
                 </button>
+                <span className={styles.hudTip}>
+                  点击节点查看关联 · 滚轮缩放 · 拖空白平移
+                </span>
               </div>
             </div>
 
@@ -495,6 +882,9 @@ export function GraphView({ onOpenNode, onError }: GraphViewProps) {
                 <p className={styles.sidePath}>
                   {kindLabel(selected.kind)}
                   {selected.path ? ` · ${selected.path}` : ""}
+                </p>
+                <p className={styles.focusBadge}>
+                  聚焦关联 · 出链 {neighbors.out.length} · 回链 {neighbors.back.length}
                 </p>
                 {selected.phantom ? (
                   <p className={styles.sideHint}>断链目标：库中尚无对应条目</p>

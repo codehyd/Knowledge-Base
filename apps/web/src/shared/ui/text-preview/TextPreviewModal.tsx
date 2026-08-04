@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useNavigate } from "react-router-dom";
 import { App, Button, Modal, Space, Typography } from "antd";
 import { api } from "@/shared/api/client";
 import { formatError } from "@/shared/ui/feedback";
+import { resolveWikilinkHref } from "@/shared/ui/markdown-editor/wikilink/resolve";
 import { AnnotationSidebar } from "./AnnotationSidebar";
 import {
   DraftNoteModal,
@@ -49,6 +51,7 @@ export function TextPreviewModal({
   initialOffset = null,
   initialAnnotationId = null,
 }: Props) {
+  const navigate = useNavigate();
   const { message } = App.useApp();
   const [fontSize, setFontSize] = useState(() => readStoredFontSize());
   const [fontWeight, setFontWeight] = useState(() => readStoredFontWeight());
@@ -71,6 +74,36 @@ export function TextPreviewModal({
 
   setActiveQueryRef.current = search.setActiveQuery;
   setActiveAnnIdRef.current = ann.setActiveAnnId;
+
+  const onBodyClick = useCallback(
+    (e: ReactMouseEvent) => {
+      const wl = (e.target as HTMLElement | null)?.closest?.(
+        "[data-wikilink-target]",
+      ) as HTMLElement | null;
+      if (wl) {
+        e.preventDefault();
+        e.stopPropagation();
+        const target = wl.getAttribute("data-wikilink-target") || "";
+        if (!target) return;
+        void (async () => {
+          try {
+            const href = await resolveWikilinkHref(target);
+            if (!href) {
+              message.warning(`断链：未找到「${target}」`);
+              return;
+            }
+            onClose();
+            navigate(href);
+          } catch {
+            message.error("打开双链失败");
+          }
+        })();
+        return;
+      }
+      ann.onBodyClick(e);
+    },
+    [ann, message, navigate, onClose],
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -303,7 +336,7 @@ export function TextPreviewModal({
             })
           }
           onMouseUp={ann.onBodyMouseUp}
-          onClick={ann.onBodyClick}
+          onClick={onBodyClick}
           onDoubleClick={ann.onBodyDoubleClick}
           onCancelReselect={ann.cancelReselectMode}
           onJumpToHit={(hit, i) => void search.jumpToHit(hit, i)}

@@ -143,6 +143,19 @@ export type VaultGraph = {
   broken_links: VaultBrokenLink[];
 };
 
+export type VaultLinkTarget = {
+  id: string;
+  title: string;
+  path: string;
+  source_id?: number | null;
+  stem?: string;
+};
+
+export type VaultLinkTargets = {
+  items: VaultLinkTarget[];
+  total: number;
+};
+
 export type LibraryFile = {
   name: string;
   kind: string;
@@ -673,6 +686,13 @@ export const api = {
       nodes: VaultNode[];
     }>("/api/vault/tree"),
   getVaultGraph: () => request<VaultGraph>("/api/vault/graph"),
+  getVaultLinkTargets: (params?: { q?: string; limit?: number }) => {
+    const sp = new URLSearchParams();
+    if (params?.q) sp.set("q", params.q);
+    if (params?.limit != null) sp.set("limit", String(params.limit));
+    const qs = sp.toString();
+    return request<VaultLinkTargets>(`/api/vault/link-targets${qs ? `?${qs}` : ""}`);
+  },
   createVaultFolder: (body: { parent?: string; name: string }) =>
     request<VaultNode>("/api/vault/folders", {
       method: "POST",

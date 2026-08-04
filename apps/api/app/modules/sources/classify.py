@@ -23,6 +23,8 @@ _KEYWORD_TAGS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"编程|代码|软件|算法"), "技术"),
     (re.compile(r"教育|育儿|学习法"), "教育"),
     (re.compile(r"沟通|人际关系|社交"), "沟通"),
+    (re.compile(r"社会[学学]|sociology|sociolog", re.I), "社会学"),
+    (re.compile(r"自我启发"), "自我启发"),
 ]
 
 _FORMAT_NOISE = {
@@ -37,7 +39,110 @@ _FORMAT_NOISE = {
     "未分类",
     "材料",
     "文档",
+    "the",
+    "and",
+    "for",
+    "with",
+    "from",
+    "this",
+    "that",
+    "life",
+    "as",
+    "of",
+    "to",
+    "in",
+    "on",
+    "or",
+    "an",
+    "a",
 }
+
+# 英文虚词 / 书名碎片，禁止进侧栏分类
+_EN_STOPWORDS = {
+    "a",
+    "an",
+    "the",
+    "and",
+    "or",
+    "of",
+    "to",
+    "in",
+    "on",
+    "for",
+    "with",
+    "from",
+    "by",
+    "as",
+    "at",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "this",
+    "that",
+    "these",
+    "those",
+    "it",
+    "its",
+    "into",
+    "over",
+    "under",
+    "about",
+    "after",
+    "before",
+    "between",
+    "through",
+    "during",
+    "without",
+    "within",
+    "than",
+    "then",
+    "so",
+    "if",
+    "but",
+    "not",
+    "no",
+    "nor",
+    "all",
+    "any",
+    "each",
+    "few",
+    "more",
+    "most",
+    "other",
+    "some",
+    "such",
+    "only",
+    "own",
+    "same",
+    "too",
+    "very",
+    "can",
+    "will",
+    "just",
+    "don",
+    "should",
+    "now",
+    "life",
+    "practice",
+    "promise",
+    "book",
+    "volume",
+    "part",
+    "chapter",
+    "edition",
+    "vol",
+    "vs",
+    "et",
+    "al",
+}
+
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_ASCII_WORD_RE = re.compile(r"^[A-Za-z0-9]+$")
+# 纯数字或书号尾巴
+_ID_TAIL_RE = re.compile(r"^\d{5,}$")
 
 
 def normalize_title_key(title: str) -> str:
@@ -54,18 +159,56 @@ def content_fingerprint(text: str) -> str:
     return hashlib.sha256(compact.encode("utf-8")).hexdigest()
 
 
+def _has_cjk(text: str) -> bool:
+    return bool(_CJK_RE.search(text or ""))
+
+
+def is_good_tag(name: str) -> bool:
+    """侧栏分类质量门闩：拒绝英文虚词、书名碎片、过长短句。"""
+    raw = (name or "").strip()
+    if not raw:
+        return False
+    # 保留原始空格判断前先规范化展示用名
+    compact = re.sub(r"\s+", "", raw)
+    compact = compact.strip("#·-_/\\")
+    if len(compact) < 2 or len(compact) > 16:
+        return False
+    lower = compact.lower()
+    if lower in _FORMAT_NOISE or compact in _FORMAT_NOISE:
+        return False
+    if lower in _EN_STOPWORDS:
+        return False
+    if _ID_TAIL_RE.match(compact):
+        return False
+    # 纯英文：仅允许「像学科/专有名词」的较长词，禁止 the/and/forest 等书名切片
+    if _ASCII_WORD_RE.match(compact):
+        if lower in _EN_STOPWORDS:
+            return False
+        # 过短英文一律不要（Forest/Trees/The）
+        if len(compact) <= 6:
+            return False
+        # 允许 Sociology / Psychology 这类学科词（首字母大写或全小写均可，长度够）
+        if len(compact) < 8:
+            return False
+    # 含大量标点的「标题整句」不作分类（如视频花哨标题）
+    punct = len(re.findall(r"[!！?？,，.。:：;；…—]", raw))
+    if punct >= 2:
+        return False
+    if "！" in raw or "!" in raw:
+        return False
+    return True
+
+
 def _clean_tag(name: str) -> str:
     name = re.sub(r"\s+", "", (name or "").strip())
     name = name.strip("#·-_/\\")
-    if len(name) < 2 or len(name) > 20:
-        return ""
-    if name.lower() in _FORMAT_NOISE or name in _FORMAT_NOISE:
+    if not is_good_tag(name):
         return ""
     return name
 
 
 def heuristic_tags(title: str, text_sample: str = "") -> list[str]:
-    """无 Key 时：从书名片段 + 关键词映射推断标签。"""
+    """无 Key 时：优先中文书名片段 + 关键词映射；不把英文书名切片当分类。"""
     tags: list[str] = []
     seen: set[str] = set()
 
@@ -75,11 +218,11 @@ def heuristic_tags(title: str, text_sample: str = "") -> list[str]:
             seen.add(cleaned)
             tags.append(cleaned)
 
-    # 书名按常见分隔符拆成片段（被讨厌的勇气_自我启发之父_阿德勒的哲学课）
+    # 书名按常见分隔符拆成片段；仅收中文可读片段（避免 The/Forest/and）
     parts = re.split(r"[_\-–—·・|／/]+", title or "")
     for part in parts:
         part = part.strip()
-        if not part:
+        if not part or not _has_cjk(part):
             continue
         # 去掉「的哲学课」「之父」等尾巴后仍可作标签
         short = re.sub(
@@ -87,10 +230,9 @@ def heuristic_tags(title: str, text_sample: str = "") -> list[str]:
             "",
             part,
         ).strip()
-        if 2 <= len(short) <= 12:
-            add(short)
-        elif 2 <= len(part) <= 12:
-            add(part)
+        candidate = short if 2 <= len(short) <= 12 else part
+        if 2 <= len(candidate) <= 12:
+            add(candidate)
 
     haystack = f"{title}\n{text_sample[:2000]}"
     for pattern, tag in _KEYWORD_TAGS:
@@ -132,9 +274,10 @@ async def llm_suggest(
         "你是个人知识库的归类助手。根据书名与正文片段，输出严格 JSON（不要 markdown）：\n"
         '{"tags":["标签1","标签2"],"summary":"80-160字中文摘要"}\n'
         "规则：\n"
-        "1. tags 1~5 个，用可检索的主题词（如：心理学、阿德勒、自我启发、哲学），可多选；\n"
-        "2. 禁止用格式词：电子书、PDF、EPUB、笔记、网页、未分类；\n"
-        "3. summary 忠实概括内容，不要空话。\n"
+        "1. tags 1~4 个，必须是可检索的中文主题词（学科/人物/流派），如：心理学、社会学、阿德勒；\n"
+        "2. 禁止：书名英文切片（The/Forest/and）、格式词（电子书/PDF/EPUB）、整句标题、感叹号口号；\n"
+        "3. 中英混排书名时，用中文主题概括，不要把英文单词拆成标签；\n"
+        "4. summary 忠实概括内容，不要空话。\n"
         f"书名：{title}\n"
         f"正文片段：\n{text_sample[:3500]}"
     )

@@ -111,6 +111,20 @@
   border-radius: 2px;
 }
 
+.wikilink {
+  color: #1f5450;
+  background: rgba(42, 111, 106, 0.12);
+  border-radius: 4px;
+  padding: 0 3px;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.wikilink:hover {
+  background: rgba(42, 111, 106, 0.22);
+  text-decoration: none;
+}
+
 .hitActive {
   background: #2a6f6a;
   color: #fff;

@@ -4,9 +4,11 @@ import {
   useEffect,
   useImperativeHandle,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
+import { useNavigate } from "react-router-dom";
 import { EditorContent, useEditor } from "@tiptap/react";
 import { BubbleMenu } from "@tiptap/react/menus";
 import StarterKit from "@tiptap/starter-kit";
@@ -33,25 +35,22 @@ import {
   UndoOutlined,
   UnorderedListOutlined,
 } from "@ant-design/icons";
-import { Button, Dropdown, Tooltip } from "antd";
-import { api } from "@/shared/api/client";
+import { App, Button, Dropdown, Tooltip } from "antd";
+import { hasMark } from "@/shared/editor-extensions";
 import { getFilteredSlashItems, SlashCommandMenu } from "./SlashCommandMenu";
-import { getFilteredWikiItems, WikiLinkMenu } from "./WikiLinkMenu";
 import { readSlashQuery } from "./slashCommands";
-import {
-  flattenVaultNotes,
-  insertWikilink,
-  readWikilinkQuery,
-  restoreWikilinkMarkers,
-  WikilinkHighlight,
-  type WikiNoteOption,
-} from "./wikilinks";
+import { restoreWikilinkMarkers } from "./wikilinks";
+import { WikilinkExtension, type WikilinkSuggestState } from "./wikilink/WikilinkExtension";
+import { WikilinkSuggest } from "./wikilink/WikilinkSuggest";
+import { resolveWikilinkHref } from "./wikilink/resolve";
 import styles from "./MarkdownEditor.module.css";
 
 export type MarkdownEditorHandle = {
   getMarkdown: () => string;
   focus: () => void;
   setMarkdown: (md: string) => void;
+  /** 在光标处插入双链字面量 [[label]] */
+  insertWikilink: (label: string) => void;
 };
 
 type Props = {
@@ -76,7 +75,7 @@ const QuoteIcon = () => (
 export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function MarkdownEditor(
   {
     initialMarkdown = "",
-    placeholder = "输入正文，按 / 插入块，或输入 [[ 添加双链…",
+    placeholder = "输入正文，或按 / 插入块；[[ 链接笔记…",
     dirty = false,
     onDirtyChange,
     onSave,
@@ -84,41 +83,35 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
   },
   ref,
 ) {
+  const navigate = useNavigate();
+  const { message } = App.useApp();
   const [slash, setSlash] = useState<{
     query: string;
     left: number;
     top: number;
   } | null>(null);
   const [slashIndex, setSlashIndex] = useState(0);
-  const [wiki, setWiki] = useState<{
-    query: string;
-    from: number;
-    to: number;
-    left: number;
-    top: number;
-  } | null>(null);
-  const [wikiIndex, setWikiIndex] = useState(0);
-  const [wikiNotes, setWikiNotes] = useState<WikiNoteOption[]>([]);
+  const [wikiSuggest, setWikiSuggest] = useState<WikilinkSuggestState | null>(null);
   const [toolbarOpen, setToolbarOpen] = useState(false);
   const mod = useMemo(() => (isMac() ? "⌘" : "Ctrl"), []);
   const onSaveRef = useCallback(() => onSave?.(), [onSave]);
+  const enableWikilink = hasMark("wikilink");
+  const openLinkRef = useRef<(target: string) => void>(() => {});
+  openLinkRef.current = (target: string) => {
+    void (async () => {
+      try {
+        const href = await resolveWikilinkHref(target);
+        if (!href) {
+          message.warning(`断链：未找到「${target}」`);
+          return;
+        }
+        navigate(href);
+      } catch {
+        message.error("打开双链失败");
+      }
+    })();
+  };
 
-  useEffect(() => {
-    let cancelled = false;
-    void api
-      .getVaultTree()
-      .then((res) => {
-        if (!cancelled) setWikiNotes(flattenVaultNotes(res.nodes || []));
-      })
-      .catch(() => {
-        if (!cancelled) setWikiNotes([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // menu coords are computed inside onUpdate from the live editor
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -135,7 +128,6 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
         defaultProtocol: "https",
       }),
       Placeholder.configure({ placeholder }),
-      WikilinkHighlight,
       Markdown.configure({
         html: false,
         tightLists: true,
@@ -145,6 +137,14 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
         transformPastedText: true,
         transformCopiedText: true,
       }),
+      ...(enableWikilink
+        ? [
+            WikilinkExtension.configure({
+              onSuggest: (state) => setWikiSuggest(state),
+              onOpenLink: (target) => openLinkRef.current(target),
+            }),
+          ]
+        : []),
     ],
     content: initialMarkdown || "",
     editorProps: {
@@ -167,32 +167,25 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
     },
     onUpdate: ({ editor: ed }) => {
       onDirtyChange?.(true);
-      const coords = ed.view.coordsAtPos(ed.state.selection.from);
-      const pos = {
-        left: Math.min(coords.left, window.innerWidth - 300),
-        top: Math.min(coords.bottom + 6, window.innerHeight - 300),
-      };
-      const wikiHit = readWikilinkQuery(ed);
-      if (wikiHit) {
-        setWiki({
-          query: wikiHit.query,
-          from: wikiHit.from,
-          to: wikiHit.to,
-          ...pos,
-        });
-        setWikiIndex(0);
-        setSlash(null);
-        return;
-      }
-      setWiki(null);
       const hit = readSlashQuery(ed);
       if (!hit) {
         setSlash(null);
         return;
       }
+      // 双链建议打开时不抢 slash 菜单
+      if (enableWikilink) {
+        const $from = ed.state.doc.resolve(ed.state.selection.from);
+        const textBefore = $from.parent.textBetween(0, $from.parentOffset, "\n", "\n");
+        if (/\[\[[^\]]*$/.test(textBefore)) {
+          setSlash(null);
+          return;
+        }
+      }
+      const coords = ed.view.coordsAtPos(ed.state.selection.from);
       setSlash({
         query: hit.query,
-        ...pos,
+        left: Math.min(coords.left, window.innerWidth - 300),
+        top: Math.min(coords.bottom + 6, window.innerHeight - 300),
       });
       setSlashIndex(0);
     },
@@ -213,6 +206,10 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
       setMarkdown: (md: string) => {
         editor?.commands.setContent(md || "");
       },
+      insertWikilink: (label: string) => {
+        const text = `[[${(label || "笔记名").trim()}]]`;
+        editor?.chain().focus().insertContent(text).run();
+      },
     }),
     [editor],
   );
@@ -223,7 +220,6 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
   }, [editor, initialMarkdown]);
 
   const closeSlash = useCallback(() => setSlash(null), []);
-  const closeWiki = useCallback(() => setWiki(null), []);
 
   useEffect(() => {
     if (!editor) return;
@@ -288,35 +284,17 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
         editor.chain().focus().extendMarkRange("link").setLink({ href: url }).run();
         return;
       }
-      if (event.key === "Escape" && (wiki || slash)) {
+      if (event.key === "Escape" && wikiSuggest) {
         event.preventDefault();
-        closeWiki();
+        setWikiSuggest(null);
+        return;
+      }
+      if (event.key === "Escape" && slash) {
+        event.preventDefault();
         closeSlash();
         return;
       }
-      if (wiki) {
-        const items = getFilteredWikiItems(wikiNotes, wiki.query);
-        if (event.key === "ArrowDown") {
-          event.preventDefault();
-          setWikiIndex((i) => (items.length ? (i + 1) % items.length : 0));
-          return;
-        }
-        if (event.key === "ArrowUp") {
-          event.preventDefault();
-          setWikiIndex((i) => (items.length ? (i - 1 + items.length) % items.length : 0));
-          return;
-        }
-        if (event.key === "Enter" && items.length) {
-          event.preventDefault();
-          event.stopPropagation();
-          insertWikilink(editor, items[wikiIndex]?.title || wiki.query, {
-            from: wiki.from,
-            to: wiki.to,
-          });
-          closeWiki();
-        }
-        return;
-      }
+      if (wikiSuggest) return;
       if (!slash) return;
       const items = getFilteredSlashItems(slash.query);
       if (event.key === "ArrowDown") {
@@ -338,7 +316,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [closeSlash, closeWiki, editor, slash, slashIndex, wiki, wikiIndex, wikiNotes]);
+  }, [closeSlash, editor, slash, slashIndex, wikiSuggest]);
 
   if (!editor) return null;
 
@@ -432,7 +410,6 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
         {btn("引用", editor.isActive("blockquote"), () => editor.chain().focus().toggleBlockquote().run(), <QuoteIcon />)}
         {btn("代码块", editor.isActive("codeBlock"), () => editor.chain().focus().toggleCodeBlock().run(), <CodeOutlined />)}
         {btn(`${mod}+K 链接`, editor.isActive("link"), promptLink, <LinkOutlined />)}
-        {btn("双链 [[", false, () => editor.chain().focus().insertContent("[[").run(), <span className={styles.slashGlyph}>[[</span>)}
         {btn("分割线", false, () => editor.chain().focus().setHorizontalRule().run(), <MinusOutlined />)}
       </div>
 
@@ -462,20 +439,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
         <div className={styles.editor}>
           <EditorContent editor={editor} />
         </div>
-        {wiki ? (
-          <WikiLinkMenu
-            editor={editor}
-            query={wiki.query}
-            range={{ from: wiki.from, to: wiki.to }}
-            notes={wikiNotes}
-            left={wiki.left}
-            top={wiki.top}
-            selectedIndex={wikiIndex}
-            onSelectedIndexChange={setWikiIndex}
-            onClose={closeWiki}
-          />
-        ) : null}
-        {slash && !wiki ? (
+        {slash && !wikiSuggest ? (
           <SlashCommandMenu
             editor={editor}
             query={slash.query}
@@ -486,13 +450,20 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
             onClose={closeSlash}
           />
         ) : null}
+        {wikiSuggest?.active ? (
+          <WikilinkSuggest
+            editor={editor}
+            state={wikiSuggest}
+            onClose={() => setWikiSuggest(null)}
+          />
+        ) : null}
       </div>
 
       <div className={styles.footer}>
         <span className={dirty ? styles.saveStateDirty : undefined}>
           {dirty ? (saving ? "保存中…" : "未保存") : "已保存"}
         </span>
-        <span className={styles.footerHint}>{mod}+S 保存 · `/` 插入块 · `[[` 双链</span>
+        <span className={styles.footerHint}>{mod}+S 保存 · `/` 插入 · `[[` 或 Ctrl+Shift+L 双链</span>
       </div>
     </div>
   );

@@ -1,4 +1,4 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   CompressOutlined,
@@ -6,17 +6,28 @@ import {
   ExpandOutlined,
   FileAddOutlined,
   FileTextOutlined,
+  LinkOutlined,
 } from "@ant-design/icons";
-import { Button } from "antd";
+import { Button, Tooltip } from "antd";
 import type { VaultNode, VaultNote } from "@/shared/api/client";
 import { MarkdownEditor, type MarkdownEditorHandle } from "@/shared/ui/markdown-editor";
 import type { LakeEditorHandle } from "@/shared/ui/lake-editor";
+import {
+  NoteLinkPicker,
+  isNoteLinkHotkey,
+  noteLinkHotkeyLabel,
+} from "@/shared/ui/note-link";
 import type { NoteTab } from "./types";
 import styles from "./NotesPage.module.css";
 
 const LakeEditor = lazy(() =>
   import("@/shared/ui/lake-editor").then((m) => ({ default: m.LakeEditor })),
 );
+
+function isMac() {
+  return typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+}
+
 export type NoteEditorPaneProps = {
   tabs: NoteTab[];
   activeId: number | null;
@@ -69,6 +80,35 @@ export function NoteEditorPane({
   onDirtyChange,
 }: NoteEditorPaneProps) {
   const navigate = useNavigate();
+  const [linkPickerOpen, setLinkPickerOpen] = useState(false);
+  const hotkeyLabel = noteLinkHotkeyLabel(isMac());
+
+  const insertNoteLink = useCallback(
+    (label: string) => {
+      const text = `[[${label}]]`;
+      if (lakeMode) {
+        lakeRef.current?.insertText(text);
+        onDirtyChange(true);
+      } else {
+        editorRef.current?.insertWikilink(label);
+        onDirtyChange(true);
+      }
+      setLinkPickerOpen(false);
+    },
+    [editorRef, lakeMode, lakeRef, onDirtyChange],
+  );
+
+  useEffect(() => {
+    if (activeId == null) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (!isNoteLinkHotkey(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setLinkPickerOpen(true);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [activeId]);
 
   return (
     <div className={styles.editorPane}>
@@ -98,6 +138,16 @@ export function NoteEditorPane({
                 aria-label="笔记标题"
               />
               <div className={`${styles.headActions}${dirty ? ` ${styles.headActionsVisible}` : ""}`}>
+                <Tooltip title={`插入双链（${hotkeyLabel}）`}>
+                  <button
+                    type="button"
+                    className={styles.iconBtn}
+                    aria-label="插入双链"
+                    onClick={() => setLinkPickerOpen(true)}
+                  >
+                    <LinkOutlined />
+                  </button>
+                </Tooltip>
                 {lakeMode && lakeFocus && (
                   <button
                     type="button"
@@ -156,9 +206,7 @@ export function NoteEditorPane({
               {activeInTree?.path || activeTab.path
                 ? ` · ${activeInTree?.path || activeTab.path}`
                 : ""}
-              {lakeMode
-                ? " · 语雀：顶部「插入双链」或正文末尾输入 [["
-                : ""}
+              {` · 双链 ${hotkeyLabel}`}
             </div>
           </div>
           <div className={styles.editorBody}>
@@ -189,6 +237,11 @@ export function NoteEditorPane({
                 <span className={styles.bootSpinner} />
               </div>
             )}
+            <NoteLinkPicker
+              open={linkPickerOpen}
+              onClose={() => setLinkPickerOpen(false)}
+              onPick={(label) => insertNoteLink(label)}
+            />
           </div>
         </div>
       )}

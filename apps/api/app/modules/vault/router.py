@@ -1,11 +1,13 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+
 from app.modules.vault.schemas import (
     VaultFolderIn,
     VaultGraphOut,
     VaultImportIn,
+    VaultLinkTargetsOut,
     VaultNodeOut,
     VaultNodePatchIn,
     VaultNoteCreateIn,
@@ -34,6 +36,20 @@ async def get_tree(db: AsyncSession = Depends(get_db)) -> VaultTreeOut:
 )
 async def get_graph(db: AsyncSession = Depends(get_db)) -> VaultGraphOut:
     return await vault_service.graph(db)
+
+
+@router.get(
+    "/link-targets",
+    response_model=VaultLinkTargetsOut,
+    summary="双链补全目标",
+    description="按标题/路径/文件名搜索 vault 笔记，供 [[ 补全与点击解析。",
+)
+async def get_link_targets(
+    q: str = Query(default="", description="搜索关键字"),
+    limit: int = Query(default=20, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+) -> VaultLinkTargetsOut:
+    return await vault_service.link_targets(db, q=q, limit=limit)
 
 
 @router.post("/folders", response_model=VaultNodeOut, summary="新建文件夹")

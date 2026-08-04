@@ -40,7 +40,7 @@ function hexToRgba(hex: string, alpha: number): string {
 export type MarkSpan = {
   start: number;
   end: number;
-  kind: "search" | "ann" | "pending";
+  kind: "search" | "ann" | "pending" | "wikilink";
   annId?: number;
   color?: string;
   active?: boolean;
@@ -51,6 +51,8 @@ export type MarkSpan = {
   stackIds?: number[];
   /** 本连续叠层片段是否显示角标（只在开头显示一次） */
   showBadge?: boolean;
+  /** Obsidian 双链目标 */
+  wikilinkTarget?: string;
 };
 
 export type PendingSel = {
@@ -211,7 +213,10 @@ export function mergeSpans(spans: MarkSpan[]): MarkSpan[] {
       anns.find((s) => !s.isAnchor) ||
       anns[0] ||
       null;
-    const pick = pending ?? pickAnn ?? covering[0];
+    const pickSearch = covering.find((s) => s.kind === "search");
+    const pickWiki = covering.find((s) => s.kind === "wikilink");
+    // 标注 > 搜索高亮 > 双链
+    const pick = pending ?? pickAnn ?? pickSearch ?? pickWiki ?? covering[0];
     const stackIds = [
       ...new Set(anns.map((s) => s.annId).filter((id): id is number => id != null)),
     ];
@@ -265,6 +270,23 @@ export function mergeSpans(spans: MarkSpan[]): MarkSpan[] {
   return out;
 }
 
+function collectWikilinkSpans(text: string): MarkSpan[] {
+  const out: MarkSpan[] = [];
+  const re = /\[\[([^\]|#]+?)(?:\|([^\]]+))?\]\]/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    const target = (m[1] || "").trim().replace(/\\/g, "/");
+    if (!target) continue;
+    out.push({
+      start: m.index,
+      end: m.index + m[0].length,
+      kind: "wikilink",
+      wikilinkTarget: target,
+    });
+  }
+  return out;
+}
+
 export function buildHighlightedHtml(
   text: string,
   baseOffset: number,
@@ -293,6 +315,7 @@ export function buildHighlightedHtml(
         )
       : []),
     ...collectPendingSpan(text.length, baseOffset, pending),
+    ...collectWikilinkSpans(text),
   ]);
   if (!spans.length) return escapeHtml(text);
 
@@ -321,6 +344,9 @@ export function buildHighlightedHtml(
           ? `<sup class="${styles.annBadge}" data-offset-ignore="1" data-count="${span.stackCount}" title="此处有 ${span.stackCount} 条标注" aria-hidden="true"></sup>`
           : "";
       html += `<mark class="${styles.ann}${activeCls}${pendingCls}${stackedCls}" style="background:${bg}"${annAttr}${stackAttr}>${chunk}</mark>${badge}`;
+    } else if (span.kind === "wikilink" && span.wikilinkTarget) {
+      const t = escapeHtml(span.wikilinkTarget);
+      html += `<a class="${styles.wikilink}" href="#" data-wikilink-target="${t}" title="${t}">${chunk}</a>`;
     } else {
       const cls = span.active ? `${styles.hit} ${styles.hitActive}` : styles.hit;
       const abs = baseOffset + span.start;
@@ -359,5 +385,6 @@ export function collectSpans(
         )
       : []),
     ...collectPendingSpan(text.length, baseOffset, pending),
+    ...collectWikilinkSpans(text),
   ]);
 }

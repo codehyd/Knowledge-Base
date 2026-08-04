@@ -37,6 +37,60 @@
   cursor: grabbing;
 }
 
+.zoomBar {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.zoomBtn,
+.zoomLabel {
+  min-width: 32px;
+  height: 30px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: #475569;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.zoomLabel {
+  min-width: 52px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: #64748b;
+}
+
+.zoomBtn:hover,
+.zoomLabel:hover {
+  background: #f1f5f9;
+  color: #2a6f6a;
+}
+
+.zoomBtn:active,
+.zoomLabel:active {
+  background: #e2e8f0;
+}
+
+.zoomDivider {
+  width: 1px;
+  height: 16px;
+  margin: 0 2px;
+  background: #e2e8f0;
+}
+
 .center {
   flex: 1;
   display: flex;
@@ -49,6 +103,7 @@
   position: absolute;
   left: 12px;
   top: 12px;
+  z-index: 2;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -60,6 +115,7 @@
   font-size: 12px;
   color: #64748b;
   pointer-events: none;
+  max-width: calc(100% - 24px);
 }
 
 .hudWarn {
@@ -98,6 +154,10 @@
 .hudLegend i[data-k="category"] {
   background: #64748b;
   border-radius: 1px;
+}
+
+.hudTip {
+  color: #94a3b8;
 }
 
 .refreshBtn {
@@ -141,6 +201,16 @@
   font-size: 12px;
   color: #94a3b8;
   word-break: break-all;
+}
+
+.focusBadge {
+  margin: 0;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgba(42, 111, 106, 0.08);
+  color: #2a6f6a;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .sideMeta {

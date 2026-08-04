@@ -57,6 +57,9 @@ const startHeadGuard = () => {
 export type LakeEditorHandle = {
   getMarkdown: () => string;
   getLakeSource: () => string;
+  /** 在引擎光标处插入纯文本（如 [[笔记名]]） */
+  insertText: (text: string) => void;
+  focus: () => void;
 };
 
 type Props = {
@@ -199,8 +202,25 @@ export const LakeEditor = forwardRef<LakeEditorHandle, Props>(function LakeEdito
           return "";
         }
       },
+      insertText: (text: string) => {
+        const ed = editorRef.current;
+        if (!ed || !text) return;
+        try {
+          ed.insertText(text);
+        } catch (err) {
+          console.error("[lake-editor] insertText", err);
+        }
+      },
+      focus: () => {
+        focusEngine();
+        try {
+          editorRef.current?.focusToStart();
+        } catch {
+          /* ignore */
+        }
+      },
     }),
-    [readMarkdown],
+    [focusEngine, readMarkdown],
   );
 
   useEffect(() => {

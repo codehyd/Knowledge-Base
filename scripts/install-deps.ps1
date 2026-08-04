@@ -39,20 +39,24 @@ function Test-PythonVersion {
 
 function Find-Python {
     $seen = @{}
+    $candidateList = New-Object System.Collections.Generic.List[object]
 
     function Add-Candidate {
         param([string]$Cmd, [string]$Exe = "")
+        if ([string]::IsNullOrWhiteSpace($Cmd)) { return }
         if ($seen.ContainsKey($Cmd)) { return }
-        if ($Exe -and -not (Test-Path $Exe)) { return }
+        if ($Exe -and -not (Test-Path -LiteralPath $Exe)) { return }
+        # 跳过 Microsoft Store 占位 python.exe
+        if ($Exe -match 'WindowsApps\\python\.exe$') { return }
         $seen[$Cmd] = $true
-        $script:candidateList += ,@($Cmd, $Exe)
+        $candidateList.Add(@($Cmd, $Exe)) | Out-Null
     }
 
-    $candidateList = @()
     try {
         $pyList = & py -0p 2>$null
-        foreach ($line in $pyList) {
-            if ($line -match '-V:(\d+\.\d+)\s+(.+\.exe)\s*$') {
+        foreach ($line in @($pyList)) {
+            # 兼容默认标记行： -V:3.13 *        C:\...\python.exe
+            if ($line -match '-V:(\d+\.\d+)\s+\*?\s*(.+\.exe)\s*$') {
                 $ver = $matches[1]
                 $exe = $matches[2].Trim()
                 $parts = $ver.Split(".")
@@ -62,26 +66,47 @@ function Find-Python {
                     Add-Candidate "py -$ver" $exe
                 }
             }
+            # uv / 其它标签：-V:Astral/CPython3.12.13 C:\...\python.exe
+            elseif ($line -match '-V:\S*?(3\.\d+)\S*\s+(.+\.exe)\s*$') {
+                $ver = $matches[1]
+                $exe = $matches[2].Trim()
+                $parts = $ver.Split(".")
+                $major = [int]$parts[0]
+                $minor = [int]$parts[1]
+                if ($major -eq 3 -and $minor -ge 12) {
+                    Add-Candidate $exe $exe
+                }
+            }
         }
     } catch { }
 
-    foreach ($name in @("python3.12", "python3.13", "python3.14", "python3", "python")) {
+    foreach ($name in @("python3.12", "python3.13", "python3.14", "python3", "python", "py")) {
         $cmd = Get-Command $name -ErrorAction SilentlyContinue
-        if ($cmd) {
+        if ($cmd -and $cmd.Source) {
             Add-Candidate $cmd.Source $cmd.Source
         }
+    }
+
+    # 本机常见安装路径（不依赖 PATH）
+    foreach ($verDir in @("Python314", "Python313", "Python312")) {
+        $exe = Join-Path $env:LOCALAPPDATA "Programs\Python\$verDir\python.exe"
+        Add-Candidate $exe $exe
     }
 
     foreach ($item in $candidateList) {
         $cmd = $item[0]
         $exe = $item[1]
         if ($exe -and (Test-PythonVersion $exe)) {
-            return $cmd
+            return $exe
         }
-        if (-not $exe) {
+        if (-not $exe -or $cmd -ne $exe) {
             try {
-                $ver = & cmd /c "$cmd -c `"import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')`"" 2>$null
-                if ($LASTEXITCODE -eq 0) {
+                if ($cmd -match '^py\s+') {
+                    $ver = & cmd /c "$cmd -c `"import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')`"" 2>$null
+                } else {
+                    $ver = & $cmd -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null
+                }
+                if ($LASTEXITCODE -eq 0 -and $ver) {
                     $parts = $ver.Trim().Split(".")
                     $major = [int]$parts[0]
                     $minor = [int]$parts[1]
@@ -97,7 +122,8 @@ function Find-Python {
 }
 
 $pyCmd = Find-Python
-Write-Host "==> Python：$(& cmd /c "$pyCmd --version")"
+$pyVer = (& $pyCmd --version 2>&1 | Out-String).Trim()
+Write-Host "==> Python：$pyVer"
 
 $venv = "apps\api\.venv"
 if ($FreshVenv -and (Test-Path $venv)) {
@@ -107,12 +133,12 @@ if ($FreshVenv -and (Test-Path $venv)) {
 
 if (-not (Test-Path $venv)) {
     Write-Host "==> 创建 API 虚拟环境"
-    & cmd /c "$pyCmd -m venv $venv"
+    & $pyCmd -m venv $venv
 }
 
-$pip = Join-Path $Root "apps\api\.venv\Scripts\pip.exe"
-& $pip install -U pip
-& $pip install -r apps\api\requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+$venvPython = Join-Path $Root "apps\api\.venv\Scripts\python.exe"
+& $venvPython -m pip install -U pip
+& $venvPython -m pip install -r apps\api\requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 function Install-NodeDeps {
     param([string]$Dir, [string]$Name)
