@@ -13,6 +13,7 @@ const {
   openVideoPreviewWindow,
 } = require("./media.cjs");
 const { API_ORIGIN, runtimeDataDir, ytDlpCookiesPath } = require("./paths.cjs");
+const { normalizeExternalUrl } = require("./external-url.cjs");
 
 function registerIpcHandlers() {
   ipcMain.handle("kongku:getConfig", async () => {
@@ -68,6 +69,19 @@ function registerIpcHandlers() {
       const err = await shell.openPath(resolved);
       if (err) return { ok: false, message: err };
       return { ok: true };
+    } catch (e) {
+      return { ok: false, message: String(e?.message || e) };
+    }
+  });
+
+  ipcMain.handle("shell:open-external", async (_event, rawUrl) => {
+    const next = normalizeExternalUrl(typeof rawUrl === "string" ? rawUrl : "");
+    if (!next) {
+      return { ok: false, message: "无效链接" };
+    }
+    try {
+      await shell.openExternal(next);
+      return { ok: true, url: next };
     } catch (e) {
       return { ok: false, message: String(e?.message || e) };
     }

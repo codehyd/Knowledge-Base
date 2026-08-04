@@ -52,6 +52,7 @@ export type KongkuDesktopBridge = {
     title?: string,
   ) => Promise<{ ok: boolean; reused?: boolean; message?: string }>;
   openPath: (targetPath: string) => Promise<{ ok: boolean; message?: string }>;
+  openExternal: (url: string) => Promise<{ ok: boolean; url?: string; message?: string }>;
   onMediaCookiesExported: (
     cb: (info: MediaCookiesExportResult) => void,
   ) => () => void;

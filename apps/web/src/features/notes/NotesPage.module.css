@@ -566,6 +566,16 @@
   transition: opacity 0.15s ease;
 }
 
+/* 帮助始终可点，不随操作区淡出 */
+.headHelp {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  padding-top: 4px;
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .editorPane:hover .headActions,
 .headActions:focus-within,
 .headActionsVisible {
@@ -867,5 +877,232 @@
 @media (max-width: 900px) {
   .layout {
     grid-template-columns: 220px minmax(0, 1fr);
+  }
+}
+
+.shortcutsLead {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: #64748b;
+  line-height: 1.5;
+}
+
+.shortcutsBody {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+}
+
+/* rootClassName 挂在 wrap 上，才能正确限制整窗 */
+.shortcutsModalRoot {
+  padding: 12px !important;
+  box-sizing: border-box;
+  overflow: hidden !important;
+}
+
+.shortcutsModalRoot :global(.ant-modal) {
+  top: 0 !important;
+  padding-bottom: 0 !important;
+  margin: 0 auto !important;
+  max-width: min(560px, calc(100vw - 24px)) !important;
+  width: min(560px, calc(100vw - 24px)) !important;
+  max-height: calc(100vh - 24px) !important;
+  max-height: calc(100dvh - 24px) !important;
+}
+
+.shortcutsModalRoot :global(.ant-modal-container),
+.shortcutsModalRoot :global(.ant-modal-content) {
+  max-height: calc(100vh - 24px) !important;
+  max-height: calc(100dvh - 24px) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+  /* 避免语雀注入的 antd v4 样式打乱关闭按钮 */
+  position: relative !important;
+}
+
+.shortcutsModalRoot :global(.ant-modal-header) {
+  flex: 0 0 auto !important;
+  margin-bottom: 0 !important;
+  padding-inline-end: 40px !important;
+}
+
+/* 关闭按钮：纠正语雀 antd v4 全局样式把 × 挤到右下角 */
+.shortcutsModalRoot :global(.ant-modal-close) {
+  position: absolute !important;
+  top: 12px !important;
+  right: 12px !important;
+  inset-inline-end: 12px !important;
+  inset-block-start: 12px !important;
+  z-index: 10 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 32px !important;
+  height: 32px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  line-height: 1 !important;
+  font-size: 16px !important;
+}
+
+.shortcutsModalRoot :global(.ant-modal-close-x) {
+  position: static !important;
+  top: auto !important;
+  right: auto !important;
+  inset: auto !important;
+  float: none !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 100% !important;
+  height: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  line-height: 1 !important;
+  font-size: 16px !important;
+}
+
+.shortcutsModalRoot :global(.ant-modal-close .anticon),
+.shortcutsModalRoot :global(.ant-modal-close svg) {
+  display: block !important;
+  width: 1em !important;
+  height: 1em !important;
+  margin: 0 !important;
+  vertical-align: middle !important;
+}
+
+.shortcutsModalRoot :global(.ant-modal-body) {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.shortcutsToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+}
+
+.shortcutsToolbar .shortcutsLead {
+  margin: 0;
+  flex: 1 1 auto;
+  min-width: 160px;
+}
+
+.shortcutsScroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 2px;
+}
+
+.shortcutsSection {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid #eef1f4;
+  border-radius: 10px;
+  background: #fafbfc;
+}
+
+.shortcutsSection:last-child {
+  margin-bottom: 0;
+}
+
+.shortcutsSectionActive {
+  border-color: #b7d4d1;
+  background: #f3faf9;
+}
+
+.shortcutsSectionTitle {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 650;
+  color: #0f172a;
+}
+
+.shortcutsHint {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.shortcutsTable {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.shortcutsTable td {
+  padding: 5px 0;
+  vertical-align: top;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.shortcutsKeys {
+  width: 40%;
+  padding-right: 10px !important;
+  white-space: normal;
+}
+
+.shortcutsDesc {
+  color: #475569;
+}
+
+.shortcutsKbd {
+  display: inline-block;
+  margin: 1px 2px 1px 0;
+  padding: 2px 6px;
+  border: 1px solid #e2e8f0;
+  border-radius: 5px;
+  background: #fff;
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 12px;
+  color: #0f172a;
+  box-shadow: 0 1px 0 #e2e8f0;
+  white-space: nowrap;
+}
+
+.shortcutsOr {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+@media (max-height: 640px) {
+  .shortcutsSection {
+    padding: 8px 10px;
+    margin-bottom: 8px;
+  }
+
+  .shortcutsTable td {
+    padding: 3px 0;
+    font-size: 12px;
+  }
+
+  .shortcutsLead {
+    margin-bottom: 8px;
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 480px) {
+  .shortcutsKeys {
+    width: 46%;
+  }
+
+  .shortcutsKbd {
+    font-size: 11px;
+    padding: 1px 5px;
   }
 }

@@ -188,7 +188,8 @@ class VaultService:
         dest, title = self._allocate_note_path(
             parent, (payload.title or "未命名笔记").strip()[:180] or "未命名笔记"
         )
-        content = f"# {title}\n\n"
+        # 正文保持空白；标题只体现在文件名 / title 字段，不预写 # 标题
+        content = ""
         dest.write_text(content, encoding="utf-8")
         rel = to_vault_rel(dest)
 
@@ -873,7 +874,10 @@ class VaultService:
                     by_title=title_index,
                 )
                 label = link.alias or link.target
-                if resolved and resolved in nodes and resolved != node_id:
+                if resolved and resolved in nodes:
+                    # 整篇自链 / 同笔记标题锚点：不进图谱边（跳转仍可用）
+                    if resolved == node_id:
+                        continue
                     add_edge(node_id, resolved, kind="wikilink", resolved=True, label=label)
                 else:
                     key = (node_id, link.target, "wikilink")

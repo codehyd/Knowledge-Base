@@ -8,6 +8,7 @@ const fs = require("fs");
 
 const state = require("./state.cjs");
 const { waitForHttp } = require("./http-wait.cjs");
+const { normalizeExternalUrl } = require("./external-url.cjs");
 const {
   API_ORIGIN,
   DEV_WEB,
@@ -157,8 +158,26 @@ async function createWindow(options = {}) {
   });
 
   state.mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
+    const next = normalizeExternalUrl(url);
+    if (next) void shell.openExternal(next);
     return { action: "deny" };
+  });
+
+  // 语雀点链接默认 _self：不会走 setWindowOpenHandler，改拦 will-navigate
+  state.mainWindow.webContents.on("will-navigate", (event, url) => {
+    const next = normalizeExternalUrl(url);
+    if (!next) return;
+    try {
+      const current = state.mainWindow.webContents.getURL();
+      const curHost = new URL(current).host;
+      const nextHost = new URL(next).host;
+      // 同 host 的前端路由放行
+      if (curHost === nextHost) return;
+    } catch {
+      /* treat as external */
+    }
+    event.preventDefault();
+    void shell.openExternal(next);
   });
 
   if (!app.isPackaged) {

@@ -40,7 +40,7 @@ export function tabFromNote(res: VaultNote): NoteTab {
     path: res.path,
     note: res,
     draftTitle: res.title || "",
-    draftContent: res.content,
+    draftContent: res.content ?? "",
     draftLake: res.source_lake ?? null,
     dirty: false,
   };

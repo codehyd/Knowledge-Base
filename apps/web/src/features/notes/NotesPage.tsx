@@ -63,6 +63,20 @@ export function NotesPage() {
   readEditorDraftRef.current = editor.readEditorDraft;
   lakeModeRef.current = editor.lakeMode;
 
+  // 同笔记切换标题锚点时不重挂载编辑器，需主动滚到标题
+  const headingParam = params.get("heading");
+  useEffect(() => {
+    if (!headingParam || editor.lakeMode) return;
+    const timer = window.setTimeout(() => {
+      try {
+        editor.editorRef.current?.scrollToHeading(headingParam);
+      } catch (err) {
+        console.warn("[notes] scrollToHeading", err);
+      }
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [headingParam, editor.lakeMode, editor.editorRef, tabsHook.activeId, tabsHook.contentKey]);
+
   const activeInTree =
     tabsHook.activeId != null ? findNote(vault.nodes, tabsHook.activeId) : null;
 
@@ -234,6 +248,7 @@ export function NotesPage() {
           onDeleteNote={vault.onDeleteNote}
           onSave={editor.save}
           onDirtyChange={editor.markActiveDirty}
+          initialHeading={params.get("heading")}
         />
       </div>
 

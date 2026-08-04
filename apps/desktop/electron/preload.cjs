@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld("kongkuDesktop", {
   openVideoPreview: (url, title) =>
     ipcRenderer.invoke("media:open-preview", url || "", title || ""),
   openPath: (targetPath) => ipcRenderer.invoke("shell:open-path", targetPath || ""),
+  openExternal: (url) => ipcRenderer.invoke("shell:open-external", url || ""),
   onMediaCookiesExported: (cb) => {
     const listener = (_event, info) => cb(info);
     ipcRenderer.on("media:cookies-exported", listener);

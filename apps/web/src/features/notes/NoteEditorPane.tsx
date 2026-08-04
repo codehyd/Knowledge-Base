@@ -7,6 +7,7 @@ import {
   FileAddOutlined,
   FileTextOutlined,
   LinkOutlined,
+  QuestionCircleOutlined,
 } from "@ant-design/icons";
 import { Button, Tooltip } from "antd";
 import type { VaultNode, VaultNote } from "@/shared/api/client";
@@ -18,6 +19,7 @@ import {
   noteLinkHotkeyLabel,
 } from "@/shared/ui/note-link";
 import type { NoteTab } from "./types";
+import { NoteShortcutsHelp } from "./NoteShortcutsHelp";
 import styles from "./NotesPage.module.css";
 
 const LakeEditor = lazy(() =>
@@ -52,6 +54,8 @@ export type NoteEditorPaneProps = {
   onDeleteNote: (sourceId: number, title: string) => void;
   onSave: () => void;
   onDirtyChange: (dirty: boolean) => void;
+  /** URL ?heading= 打开时滚到标题 */
+  initialHeading?: string | null;
 };
 
 export function NoteEditorPane({
@@ -78,10 +82,13 @@ export function NoteEditorPane({
   onDeleteNote,
   onSave,
   onDirtyChange,
+  initialHeading = null,
 }: NoteEditorPaneProps) {
   const navigate = useNavigate();
   const [linkPickerOpen, setLinkPickerOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const hotkeyLabel = noteLinkHotkeyLabel(isMac());
+  const mac = isMac();
 
   const insertNoteLink = useCallback(
     (label: string) => {
@@ -89,14 +96,24 @@ export function NoteEditorPane({
       if (lakeMode) {
         lakeRef.current?.insertText(text);
         onDirtyChange(true);
+        lakeRef.current?.focus();
       } else {
         editorRef.current?.insertWikilink(label);
         onDirtyChange(true);
+        editorRef.current?.focus();
       }
       setLinkPickerOpen(false);
     },
     [editorRef, lakeMode, lakeRef, onDirtyChange],
   );
+
+  const closeLinkPicker = useCallback(() => {
+    setLinkPickerOpen(false);
+    window.requestAnimationFrame(() => {
+      if (lakeMode) lakeRef.current?.focus();
+      else editorRef.current?.focus();
+    });
+  }, [editorRef, lakeMode, lakeRef]);
 
   useEffect(() => {
     if (activeId == null) return;
@@ -137,6 +154,18 @@ export function NoteEditorPane({
                 placeholder="无标题"
                 aria-label="笔记标题"
               />
+              <div className={styles.headHelp}>
+                <Tooltip title="快捷键帮助">
+                  <button
+                    type="button"
+                    className={styles.iconBtn}
+                    aria-label="快捷键帮助"
+                    onClick={() => setHelpOpen(true)}
+                  >
+                    <QuestionCircleOutlined />
+                  </button>
+                </Tooltip>
+              </div>
               <div className={`${styles.headActions}${dirty ? ` ${styles.headActionsVisible}` : ""}`}>
                 <Tooltip title={`插入双链（${hotkeyLabel}）`}>
                   <button
@@ -230,6 +259,8 @@ export function NoteEditorPane({
                 onDirtyChange={onDirtyChange}
                 onSave={onSave}
                 saving={saving}
+                excludeSourceId={activeId}
+                initialHeading={initialHeading}
               />
             )}
             {!lakeMode && mdBooting && (
@@ -239,8 +270,15 @@ export function NoteEditorPane({
             )}
             <NoteLinkPicker
               open={linkPickerOpen}
-              onClose={() => setLinkPickerOpen(false)}
+              excludeSourceId={activeId}
+              onClose={closeLinkPicker}
               onPick={(label) => insertNoteLink(label)}
+            />
+            <NoteShortcutsHelp
+              open={helpOpen}
+              onClose={() => setHelpOpen(false)}
+              lakeMode={lakeMode}
+              isMac={mac}
             />
           </div>
         </div>
