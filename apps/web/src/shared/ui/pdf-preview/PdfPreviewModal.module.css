@@ -1,0 +1,434 @@
+.modal :global(.ant-modal-body) {
+  padding-top: 12px;
+  padding-bottom: 8px;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.pageNav {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pageInput {
+  width: 64px;
+}
+
+.fitGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.zoomControls {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.noteToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-size: 12px;
+  color: #475569;
+  cursor: pointer;
+  user-select: none;
+}
+
+.hint {
+  margin: 0 !important;
+  font-size: 12px;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 1fr 260px;
+  gap: 12px;
+  min-height: 0;
+}
+
+.layoutSolo {
+  grid-template-columns: 1fr;
+}
+
+.stageShell {
+  position: relative;
+  height: min(74vh, 840px);
+  border-radius: 10px;
+  background: #525659;
+  border: 1px solid #3f4346;
+  overflow: hidden;
+}
+
+.stageNote {
+  /* 笔记模式时边缘点按翻页关闭，避免误触 */
+}
+
+.stage {
+  position: relative;
+  z-index: 1;
+  height: 100%;
+  overflow: auto;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 12px;
+  overscroll-behavior: contain;
+}
+
+.pageBox {
+  position: relative;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  background: #fff;
+  line-height: 0;
+  user-select: none;
+  z-index: 1;
+}
+
+.pageBoxRead {
+  /* 阅读模式可点左右侧翻页 */
+}
+
+.pageFade {
+  animation: pageFadeIn 0.2s ease-out;
+}
+
+.pageCanvas {
+  display: block;
+  max-width: none;
+}
+
+@keyframes pageFadeIn {
+  from {
+    opacity: 0.2;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pageFade {
+    animation: none;
+  }
+}
+
+.edgeHit {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 88px;
+  border: none;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  z-index: 6;
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  transition: background 0.18s ease;
+}
+
+.edgePrev {
+  left: 0;
+  justify-content: flex-start;
+  padding-left: 10px;
+}
+
+.edgeNext {
+  right: 0;
+  justify-content: flex-end;
+  padding-right: 10px;
+}
+
+.edgeHit:hover,
+.edgeHitActive {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.22),
+    rgba(255, 255, 255, 0.08) 55%,
+    transparent 100%
+  );
+}
+
+.edgeNext:hover,
+.edgeNext.edgeHitActive {
+  background: linear-gradient(
+    270deg,
+    rgba(255, 255, 255, 0.22),
+    rgba(255, 255, 255, 0.08) 55%,
+    transparent 100%
+  );
+}
+
+.edgeBadge {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 44px;
+  padding: 10px 8px;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.55);
+  color: #fff;
+  font-size: 18px;
+  line-height: 1;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+  opacity: 0.55;
+  transform: scale(0.92);
+  transition: opacity 0.18s ease, transform 0.18s ease, background 0.18s ease;
+}
+
+.edgeBadge em {
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.edgeHit:hover .edgeBadge,
+.edgeHitActive .edgeBadge {
+  opacity: 1;
+  transform: scale(1);
+  background: rgba(15, 23, 42, 0.78);
+}
+
+.pageSideGlow {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 18%;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.pageSidePrev {
+  left: 0;
+  background: linear-gradient(
+    90deg,
+    rgba(42, 111, 106, 0.2),
+    rgba(42, 111, 106, 0.06) 55%,
+    transparent 100%
+  );
+}
+
+.pageSideNext {
+  right: 0;
+  background: linear-gradient(
+    270deg,
+    rgba(42, 111, 106, 0.2),
+    rgba(42, 111, 106, 0.06) 55%,
+    transparent 100%
+  );
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+}
+
+.overlayDraw {
+  cursor: crosshair;
+}
+
+.rectMark {
+  position: absolute;
+  border: 2px solid;
+  border-radius: 2px;
+  box-sizing: border-box;
+  pointer-events: auto;
+  cursor: pointer;
+  background: transparent;
+}
+
+.rectMarkActive {
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.7);
+  z-index: 2;
+}
+
+.draftRect {
+  position: absolute;
+  border: 2px dashed #60a5fa;
+  background: rgba(96, 165, 250, 0.18);
+  pointer-events: none;
+  box-sizing: border-box;
+}
+
+.loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.25);
+  z-index: 7;
+  pointer-events: none;
+}
+
+.notePane {
+  height: min(74vh, 840px);
+  overflow: auto;
+  border: 1px solid #eef1f3;
+  border-radius: 10px;
+  background: #fafbfc;
+  padding: 10px 10px 12px;
+}
+
+.notePaneHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.notePaneTitle {
+  font-weight: 600;
+  font-size: 13px;
+  color: #334155;
+}
+
+.noteEmpty {
+  margin: 12px 4px;
+  font-size: 12px;
+  color: #94a3b8;
+  line-height: 1.6;
+}
+
+.noteList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.noteItem {
+  width: 100%;
+  text-align: left;
+  border: 1px solid #e8edf2;
+  background: #fff;
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.noteItem:hover {
+  border-color: #c9d5de;
+}
+
+.noteItemActive {
+  border-color: var(--color-accent, #2a6f6a);
+  box-shadow: 0 0 0 1px rgba(42, 111, 106, 0.25);
+}
+
+.noteDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 5px;
+  flex: 0 0 auto;
+}
+
+.noteText {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.noteText strong {
+  font-size: 12px;
+  color: #1e293b;
+  font-weight: 600;
+}
+
+.noteText em {
+  font-style: normal;
+  font-size: 11px;
+  color: #64748b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.noteText small {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.quoteBox {
+  margin-bottom: 10px !important;
+  padding: 8px 10px;
+  background: #f8fafc;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.colorRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.colorBtn {
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  color: #fff;
+}
+
+.colorBtnActive {
+  outline: 2px solid #0f172a;
+  outline-offset: 1px;
+}
+
+.colorCustom {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #64748b;
+  cursor: pointer;
+}
+
+.colorCustom input {
+  width: 28px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+@media (max-width: 860px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .notePane {
+    height: 220px;
+  }
+
+  .edgeHit {
+    width: 14%;
+    max-width: 72px;
+  }
+}

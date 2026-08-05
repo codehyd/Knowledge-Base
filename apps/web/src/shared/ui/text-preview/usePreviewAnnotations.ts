@@ -418,8 +418,10 @@ export function usePreviewAnnotations(
     if (!showHighlights) setStackPopup(null);
   }, [showHighlights]);
 
-  const userNotes = annotations.filter((a) => !isChatAnchor(a));
-  const chatAnchors = annotations.filter((a) => isChatAnchor(a));
+  // 正文预览只展示偏移批注；PDF 页注在 PdfPreviewModal 中管理
+  const textAnnotations = annotations.filter((a) => a.page == null || a.page <= 0);
+  const userNotes = textAnnotations.filter((a) => !isChatAnchor(a));
+  const chatAnchors = textAnnotations.filter((a) => isChatAnchor(a));
   const paneNotes = noteTab === "anchor" ? chatAnchors : userNotes;
 
   const stackPopupItems = stackPopup

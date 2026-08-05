@@ -4,8 +4,15 @@ import { ReadOutlined } from "@ant-design/icons";
 import { App, Button, Empty, Modal, Spin, Tag } from "antd";
 import { api, type BookshelfItem } from "@/shared/api/client";
 import { formatError } from "@/shared/ui/feedback";
+import { PdfPreviewModal } from "@/shared/ui/PdfPreviewModal";
 import { TextPreviewModal } from "@/shared/ui/TextPreviewModal";
 import styles from "./BookshelfModal.module.css";
+
+function isPdfItem(item: BookshelfItem) {
+  const fmt = (item.format || "").toLowerCase();
+  if (fmt === "pdf") return true;
+  return (item.filename || "").toLowerCase().endsWith(".pdf");
+}
 
 const SPINE_PALETTES = [
   ["#1f4e46", "#2a6f6a"],
@@ -56,6 +63,7 @@ export function BookshelfModal({
   const [loading, setLoading] = useState(false);
   const [items, setItems] = useState<BookshelfItem[]>([]);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [pdfOpen, setPdfOpen] = useState(false);
   const [previewTitle, setPreviewTitle] = useState("");
   const [previewEntryId, setPreviewEntryId] = useState<number | null>(null);
   const [previewSourceId, setPreviewSourceId] = useState<number | null>(null);
@@ -85,7 +93,20 @@ export function BookshelfModal({
     setPreviewTitle(item.title);
     setPreviewEntryId(item.entry_id ?? null);
     setPreviewSourceId(item.source_id);
-    setPreviewOpen(true);
+    if (isPdfItem(item)) {
+      setPdfOpen(true);
+      setPreviewOpen(false);
+    } else {
+      setPreviewOpen(true);
+      setPdfOpen(false);
+    }
+  }
+
+  function closePreviews() {
+    setPreviewOpen(false);
+    setPdfOpen(false);
+    setPreviewEntryId(null);
+    setPreviewSourceId(null);
   }
 
   useEffect(() => {
@@ -174,16 +195,24 @@ export function BookshelfModal({
         )}
       </Modal>
 
+      <PdfPreviewModal
+        open={pdfOpen}
+        title={previewTitle || "PDF 预览"}
+        sourceId={previewSourceId}
+        entryId={previewEntryId}
+        onClose={closePreviews}
+        onOpenTextPreview={() => {
+          setPdfOpen(false);
+          setPreviewOpen(true);
+        }}
+      />
+
       <TextPreviewModal
         open={previewOpen}
         title={previewTitle || "正文预览"}
         entryId={previewEntryId}
         sourceId={previewSourceId}
-        onClose={() => {
-          setPreviewOpen(false);
-          setPreviewEntryId(null);
-          setPreviewSourceId(null);
-        }}
+        onClose={closePreviews}
         loadSegment={async (offset, limit) => {
           if (previewEntryId != null) {
             try {
@@ -223,6 +252,7 @@ export function BookshelfModal({
           return { total: res.total, offset: res.offset, hits: res.hits };
         }}
       />
+
     </>
   );
 }

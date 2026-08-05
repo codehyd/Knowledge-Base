@@ -148,6 +148,8 @@ function collectAnnSpans(
       ? annotations.filter((a) => a.id === activeAnnId)
       : annotations;
   for (const ann of list) {
+    // PDF 页内笔记不参与正文偏移高亮
+    if (ann.page != null && ann.page > 0) continue;
     const useEdit = activeAnnId === ann.id && editRange != null;
     const rawStart = useEdit ? editRange.start : ann.start_offset;
     const rawEnd = useEdit ? editRange.end : ann.end_offset;

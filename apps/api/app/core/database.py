@@ -178,6 +178,31 @@ async def _ensure_ai_settings_columns(conn) -> None:
     )
 
 
+async def _ensure_category_columns(conn) -> None:
+    await _add_column_if_missing(
+        conn, "categories", "kind", "VARCHAR(20) DEFAULT 'tag'"
+    )
+    await _add_column_if_missing(conn, "categories", "parent_id", "INTEGER")
+    await conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_categories_kind ON categories (kind)")
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_categories_parent_id ON categories (parent_id)"
+        )
+    )
+    # 旧数据一律视为主题标签
+    await conn.execute(
+        text(
+            """
+            UPDATE categories
+            SET kind = 'tag'
+            WHERE kind IS NULL OR kind = ''
+            """
+        )
+    )
+
+
 async def _ensure_entry_columns(conn) -> None:
     await _add_column_if_missing(conn, "entries", "title_key", "VARCHAR(200) DEFAULT ''")
     await _add_column_if_missing(conn, "entries", "content_hash", "VARCHAR(64) DEFAULT ''")
@@ -190,9 +215,18 @@ async def _ensure_entry_columns(conn) -> None:
     await _add_column_if_missing(
         conn, "entry_annotations", "kind", "VARCHAR(20) DEFAULT 'note'"
     )
+    await _add_column_if_missing(conn, "entry_annotations", "page", "INTEGER")
+    await _add_column_if_missing(
+        conn, "entry_annotations", "rect_json", "TEXT DEFAULT ''"
+    )
     await conn.execute(
         text(
             "CREATE INDEX IF NOT EXISTS ix_entry_annotations_kind ON entry_annotations (kind)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_entry_annotations_page ON entry_annotations (page)"
         )
     )
     # 旧版用 note 前缀标记的对话引用 → 归入预笔记分类
@@ -322,6 +356,7 @@ async def init_db() -> dict[str, Any]:
         await conn.run_sync(Base.metadata.create_all)
         await _ensure_ai_settings_columns(conn)
         await _ensure_entry_columns(conn)
+        await _ensure_category_columns(conn)
         await _ensure_source_book_columns(conn)
         await _ensure_chat_message_columns(conn)
 

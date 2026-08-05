@@ -241,6 +241,28 @@ async def get_source_media(
     )
 
 
+@router.get(
+    "/{source_id}/original",
+    summary="电子书原件",
+    description="返回上传的 PDF/EPUB/TXT 原件（支持 Range），供 PDF 预览等使用。",
+)
+async def get_source_original(
+    source_id: int, db: AsyncSession = Depends(get_db)
+) -> FileResponse:
+    path = await sources_service.resolve_original_path(db, source_id)
+    suffix = path.suffix.lower()
+    media_types = {
+        ".pdf": "application/pdf",
+        ".epub": "application/epub+zip",
+        ".txt": "text/plain; charset=utf-8",
+    }
+    return FileResponse(
+        path,
+        media_type=media_types.get(suffix, "application/octet-stream"),
+        filename=path.name,
+    )
+
+
 @router.post(
     "/{source_id}/retry",
     response_model=SourceOut,

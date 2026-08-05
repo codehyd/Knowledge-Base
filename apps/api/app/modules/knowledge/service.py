@@ -18,8 +18,11 @@ from app.modules.knowledge.schemas import (
     AnnotationUpdate,
     BookshelfItemOut,
     BookshelfListOut,
+    CategoryCreate,
     CategoryListOut,
     CategoryOut,
+    CategoryUpdate,
+    EntryCategoriesIn,
     EntryDetailOut,
     EntryListItem,
     EntryListOut,
@@ -68,10 +71,11 @@ class KnowledgeService:
     def _entry_list_item(
         self,
         row: Entry,
-        cats: dict[int, list[str]],
+        labels: dict[int, dict[str, list]],
         sources: dict[int, Source],
     ) -> EntryListItem:
         src = sources.get(int(row.source_id)) if row.source_id else None
+        lab = labels.get(row.id) or {}
         return EntryListItem(
             id=row.id,
             title=row.title,
@@ -80,46 +84,175 @@ class KnowledgeService:
             source_type=(src.type if src else "") or "",
             source_uri=(src.source_uri if src else "") or "",
             in_vault=bool(src and (getattr(src, "vault_path", None) or "").strip()),
-            categories=cats.get(row.id, []),
+            categories=list(lab.get("categories") or []),
+            category_ids=list(lab.get("category_ids") or []),
+            tags=list(lab.get("tags") or []),
             created_at=row.created_at,
         )
 
-    async def _categories_for_entries(
+    async def _labels_for_entries(
         self, db: AsyncSession, entry_ids: list[int]
-    ) -> dict[int, list[str]]:
+    ) -> dict[int, dict[str, list]]:
+        """拆分人工分类与自动标签。"""
         if not entry_ids:
             return {}
         result = await db.execute(
-            select(EntryCategory.entry_id, Category.name)
+            select(EntryCategory.entry_id, Category.id, Category.name, Category.kind)
             .join(Category, Category.id == EntryCategory.category_id)
             .where(EntryCategory.entry_id.in_(entry_ids))
             .order_by(Category.name)
         )
-        mapping: dict[int, list[str]] = {eid: [] for eid in entry_ids}
-        for entry_id, name in result.all():
-            mapping.setdefault(entry_id, []).append(name)
+        mapping: dict[int, dict[str, list]] = {
+            eid: {"categories": [], "category_ids": [], "tags": []} for eid in entry_ids
+        }
+        for entry_id, cat_id, name, kind in result.all():
+            bucket = mapping.setdefault(
+                int(entry_id), {"categories": [], "category_ids": [], "tags": []}
+            )
+            kind_norm = (kind or "tag").strip().lower()
+            if kind_norm == "domain":
+                bucket["categories"].append(name or "")
+                bucket["category_ids"].append(int(cat_id))
+            else:
+                bucket["tags"].append(name or "")
         return mapping
+
+    async def _categories_for_entries(
+        self, db: AsyncSession, entry_ids: list[int]
+    ) -> dict[int, list[str]]:
+        """兼容旧调用：返回全部关联名（分类+标签）。"""
+        labels = await self._labels_for_entries(db, entry_ids)
+        return {
+            eid: list(lab.get("categories") or []) + list(lab.get("tags") or [])
+            for eid, lab in labels.items()
+        }
+
+    @staticmethod
+    def _cat_kind(row: Category) -> str:
+        kind = (getattr(row, "kind", None) or "tag").strip().lower()
+        return kind if kind in {"domain", "tag"} else "tag"
 
     async def list_categories(self, db: AsyncSession) -> CategoryListOut:
         total_entries = int(
             (await db.execute(select(func.count()).select_from(Entry))).scalar_one()
         )
-        # 清掉英文书名碎片（The/and/Forest）与空分类
+        # 清掉英文书名碎片（The/and/Forest）与空主题标签；用户顶级域保留
         await self._prune_low_quality_categories(db)
         await self._prune_empty_categories(db)
 
-        counts = (
-            await db.execute(
-                select(Category.id, Category.name, func.count(EntryCategory.entry_id))
-                .join(EntryCategory, EntryCategory.category_id == Category.id)
-                .group_by(Category.id, Category.name)
-                .order_by(Category.name)
+        tag_counts = {
+            int(cid): int(cnt or 0)
+            for cid, cnt in (
+                await db.execute(
+                    select(EntryCategory.category_id, func.count(EntryCategory.entry_id))
+                    .group_by(EntryCategory.category_id)
+                )
+            ).all()
+        }
+
+        rows = list((await db.execute(select(Category).order_by(Category.name))).scalars().all())
+        # 人工分类计数 = 直接挂到该 domain 的条目数（不再汇总子标签）
+        items: list[CategoryOut] = []
+        for row in rows:
+            kind = self._cat_kind(row)
+            parent_id = getattr(row, "parent_id", None)
+            count = tag_counts.get(int(row.id), 0)
+            if kind == "domain":
+                parent_id = None
+            items.append(
+                CategoryOut(
+                    id=int(row.id),
+                    name=row.name or "",
+                    count=count,
+                    kind=kind,
+                    parent_id=int(parent_id) if parent_id is not None else None,
+                )
             )
-        ).all()
-        items = [
-            CategoryOut(id=row[0], name=row[1], count=int(row[2] or 0)) for row in counts
-        ]
+        # 域在前，再按名称
+        items.sort(key=lambda c: (0 if c.kind == "domain" else 1, c.name))
         return CategoryListOut(items=items, total_entries=total_entries)
+
+    async def create_domain(self, db: AsyncSession, payload: CategoryCreate) -> CategoryOut:
+        name = re.sub(r"\s+", " ", (payload.name or "").strip())
+        if not name:
+            raise HTTPException(status_code=400, detail="请填写顶级分类名称")
+        if len(name) > 100:
+            raise HTTPException(status_code=400, detail="名称过长")
+        exists = await db.execute(select(Category).where(Category.name == name))
+        if exists.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail="已有同名分类")
+        row = Category(name=name, kind="domain", parent_id=None)
+        db.add(row)
+        await db.commit()
+        await db.refresh(row)
+        return CategoryOut(id=row.id, name=row.name, count=0, kind="domain", parent_id=None)
+
+    async def update_category(
+        self, db: AsyncSession, category_id: int, payload: CategoryUpdate
+    ) -> CategoryOut:
+        row = await db.get(Category, category_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="分类不存在")
+        kind = self._cat_kind(row)
+
+        if payload.name is not None:
+            name = re.sub(r"\s+", " ", payload.name.strip())
+            if not name:
+                raise HTTPException(status_code=400, detail="名称不能为空")
+            clash = await db.execute(
+                select(Category).where(Category.name == name, Category.id != category_id)
+            )
+            if clash.scalar_one_or_none():
+                raise HTTPException(status_code=400, detail="已有同名分类")
+            row.name = name
+
+        # parent_id：仅主题标签可挂到顶级域；显式传 null 取消挂靠
+        fields_set = getattr(payload, "model_fields_set", None) or getattr(
+            payload, "__fields_set__", set()
+        )
+        if "parent_id" in fields_set:
+            if kind == "domain":
+                raise HTTPException(status_code=400, detail="顶级分类不能再挂到其他分类下")
+            parent_id = payload.parent_id
+            if parent_id is None:
+                row.parent_id = None
+            else:
+                parent = await db.get(Category, int(parent_id))
+                if not parent or self._cat_kind(parent) != "domain":
+                    raise HTTPException(status_code=400, detail="只能挂到用户顶级分类下")
+                if int(parent.id) == int(row.id):
+                    raise HTTPException(status_code=400, detail="不能挂到自己")
+                row.parent_id = int(parent.id)
+
+        await db.commit()
+        await db.refresh(row)
+        # 复用列表计数逻辑的简化版
+        listing = await self.list_categories(db)
+        for item in listing.items:
+            if item.id == row.id:
+                return item
+        return CategoryOut(
+            id=row.id,
+            name=row.name or "",
+            count=0,
+            kind=self._cat_kind(row),
+            parent_id=getattr(row, "parent_id", None),
+        )
+
+    async def delete_domain(self, db: AsyncSession, category_id: int) -> None:
+        row = await db.get(Category, category_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="分类不存在")
+        if self._cat_kind(row) != "domain":
+            raise HTTPException(status_code=400, detail="只能删除用户顶级分类")
+        # 子标签解除挂靠，不删主题标签本身
+        children = await db.execute(
+            select(Category).where(Category.parent_id == category_id)
+        )
+        for child in children.scalars().all():
+            child.parent_id = None
+        await db.delete(row)
+        await db.commit()
 
     async def _prune_low_quality_categories(self, db: AsyncSession) -> None:
         """拆除低质量标签挂靠并删除分类（书名英文切片、口号标题等）。"""
@@ -127,6 +260,8 @@ class KnowledgeService:
         cats = list(result.scalars().all())
         removed = False
         for cat in cats:
+            if self._cat_kind(cat) == "domain":
+                continue
             if is_good_tag(cat.name or ""):
                 continue
             links = await db.execute(
@@ -145,9 +280,14 @@ class KnowledgeService:
         orphans = list(result.scalars().all())
         if not orphans:
             return
+        removed = False
         for cat in orphans:
+            if self._cat_kind(cat) == "domain":
+                continue  # 用户顶级域即使暂时无条目也保留
             await db.delete(cat)
-        await db.commit()
+            removed = True
+        if removed:
+            await db.commit()
 
     async def list_entries(
         self,
@@ -180,10 +320,12 @@ class KnowledgeService:
                 count_stmt = count_stmt.where(Source.type == "note")
 
         if category.strip():
+            # 按名过滤：domain / tag 均只匹配直接挂靠该 Category 的条目
+            cat_name = category.strip()
             cat_filter = (
                 select(EntryCategory.entry_id)
                 .join(Category, Category.id == EntryCategory.category_id)
-                .where(Category.name == category.strip())
+                .where(Category.name == cat_name)
             )
             stmt = stmt.where(Entry.id.in_(cat_filter))
             count_stmt = count_stmt.where(Entry.id.in_(cat_filter))
@@ -202,9 +344,9 @@ class KnowledgeService:
             .limit(page_size)
         )
         rows = list(result.scalars().all())
-        cats = await self._categories_for_entries(db, [r.id for r in rows])
+        labels = await self._labels_for_entries(db, [r.id for r in rows])
         sources = await self._sources_for_entries(db, rows)
-        items = [self._entry_list_item(r, cats, sources) for r in rows]
+        items = [self._entry_list_item(r, labels, sources) for r in rows]
         return EntryListOut(items=items, total=total, page=page, page_size=page_size)
 
     async def list_media(self, db: AsyncSession) -> MediaListOut:
@@ -308,7 +450,8 @@ class KnowledgeService:
         if not row:
             raise HTTPException(status_code=404, detail="条目不存在")
 
-        cats = await self._categories_for_entries(db, [row.id])
+        labels = await self._labels_for_entries(db, [row.id])
+        lab = labels.get(row.id) or {}
         preview = ""
         preview_truncated = False
         char_count = 0
@@ -341,7 +484,9 @@ class KnowledgeService:
             title=row.title,
             summary=row.summary,
             source_id=row.source_id,
-            categories=cats.get(row.id, []),
+            categories=list(lab.get("categories") or []),
+            category_ids=list(lab.get("category_ids") or []),
+            tags=list(lab.get("tags") or []),
             created_at=row.created_at,
             preview=preview or row.summary,
             preview_truncated=preview_truncated,
@@ -352,6 +497,48 @@ class KnowledgeService:
             in_vault=in_vault,
             has_follow_along=has_follow_along,
         )
+
+    async def set_entry_categories(
+        self, db: AsyncSession, entry_id: int, payload: EntryCategoriesIn
+    ) -> EntryDetailOut:
+        row = await db.get(Entry, entry_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="条目不存在")
+
+        wanted_ids = sorted({int(x) for x in (payload.category_ids or []) if int(x) > 0})
+        if wanted_ids:
+            found = list(
+                (
+                    await db.execute(select(Category).where(Category.id.in_(wanted_ids)))
+                ).scalars().all()
+            )
+            if len(found) != len(wanted_ids):
+                raise HTTPException(status_code=400, detail="存在无效的分类")
+            for cat in found:
+                if self._cat_kind(cat) != "domain":
+                    raise HTTPException(
+                        status_code=400, detail="只能挂靠人工分类，不能把自动标签当作分类"
+                    )
+
+        # 仅替换 domain 关联；tag 关联原样保留
+        existing = list(
+            (
+                await db.execute(
+                    select(EntryCategory, Category)
+                    .join(Category, Category.id == EntryCategory.category_id)
+                    .where(EntryCategory.entry_id == entry_id)
+                )
+            ).all()
+        )
+        for link, cat in existing:
+            if self._cat_kind(cat) == "domain":
+                await db.delete(link)
+
+        for cid in wanted_ids:
+            db.add(EntryCategory(entry_id=entry_id, category_id=cid))
+
+        await db.commit()
+        return await self.get_entry(db, entry_id)
 
     async def get_preview(
         self,
@@ -500,6 +687,7 @@ class KnowledgeService:
         kind = (getattr(row, "kind", None) or "").strip().lower()
         if not kind:
             kind = "chat_anchor" if (row.note or "").startswith("对话引用") else "note"
+        page = getattr(row, "page", None)
         data = {
             "id": row.id,
             "entry_id": row.entry_id,
@@ -509,6 +697,8 @@ class KnowledgeService:
             "note": row.note or "",
             "kind": kind if kind in {"note", "chat_anchor"} else "note",
             "color": row.color or "#facc15",
+            "page": int(page) if page is not None else None,
+            "rect_json": (getattr(row, "rect_json", None) or "") or "",
             "created_at": row.created_at,
             "updated_at": row.updated_at,
         }
@@ -757,6 +947,34 @@ class KnowledgeService:
         await db.flush()
         return row
 
+    @staticmethod
+    def _normalize_rect_json(raw: str | None) -> str:
+        import json
+
+        text = (raw or "").strip()
+        if not text:
+            return ""
+        try:
+            data = json.loads(text)
+            if not isinstance(data, dict):
+                raise ValueError("rect_json 须为对象")
+            x = float(data.get("x", 0))
+            y = float(data.get("y", 0))
+            w = float(data.get("w", 0))
+            h = float(data.get("h", 0))
+            # 归一化到页面 0~1，允许轻微越界后夹紧
+            x = max(0.0, min(1.0, x))
+            y = max(0.0, min(1.0, y))
+            w = max(0.0, min(1.0 - x, w))
+            h = max(0.0, min(1.0 - y, h))
+            if w < 0.005 or h < 0.005:
+                raise ValueError("标注区域过小")
+            return json.dumps({"x": x, "y": y, "w": w, "h": h}, ensure_ascii=False)
+        except HTTPException:
+            raise
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=400, detail=f"区域坐标无效：{exc}") from exc
+
     async def create_annotation(
         self, db: AsyncSession, entry_id: int, payload: AnnotationCreate
     ) -> AnnotationOut:
@@ -764,16 +982,27 @@ class KnowledgeService:
         if not entry:
             raise HTTPException(status_code=404, detail="条目不存在")
 
-        start = int(payload.start_offset)
-        end = int(payload.end_offset)
-        if start < 0 or end <= start:
-            raise HTTPException(status_code=400, detail="划选区间无效")
-        if end - start > 2000:
-            raise HTTPException(status_code=400, detail="单次划选不超过 2000 字")
+        page = int(payload.page) if payload.page is not None else None
+        if page is not None and page < 1:
+            raise HTTPException(status_code=400, detail="页码无效")
 
-        quote = (payload.quote or "").strip()
-        if not quote:
-            raise HTTPException(status_code=400, detail="缺少划选原文")
+        if page is not None:
+            # PDF 页内笔记：可不绑定正文偏移
+            start, end = 0, 0
+            quote = (payload.quote or "").strip() or f"第{page}页"
+            rect_json = self._normalize_rect_json(payload.rect_json)
+        else:
+            start = int(payload.start_offset)
+            end = int(payload.end_offset)
+            if start < 0 or end <= start:
+                raise HTTPException(status_code=400, detail="划选区间无效")
+            if end - start > 2000:
+                raise HTTPException(status_code=400, detail="单次划选不超过 2000 字")
+            quote = (payload.quote or "").strip()
+            if not quote:
+                raise HTTPException(status_code=400, detail="缺少划选原文")
+            rect_json = ""
+
         if len(quote) > 2000:
             quote = quote[:2000]
 
@@ -794,6 +1023,8 @@ class KnowledgeService:
             note=(payload.note or "").strip(),
             kind=kind,
             color=color,
+            page=page,
+            rect_json=rect_json,
         )
         db.add(row)
         await db.commit()
@@ -853,21 +1084,43 @@ class KnowledgeService:
                 row.color = normalize_ann_color(payload.color)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if payload.page is not None:
+            if int(payload.page) < 1:
+                raise HTTPException(status_code=400, detail="页码无效")
+            row.page = int(payload.page)
+        if payload.rect_json is not None:
+            row.rect_json = self._normalize_rect_json(payload.rect_json)
+
+        page = getattr(row, "page", None)
         if payload.start_offset is not None or payload.end_offset is not None or payload.quote is not None:
-            start = int(payload.start_offset) if payload.start_offset is not None else int(row.start_offset)
-            end = int(payload.end_offset) if payload.end_offset is not None else int(row.end_offset)
-            if start < 0 or end <= start:
-                raise HTTPException(status_code=400, detail="划选区间无效")
-            if end - start > 2000:
-                end = start + 2000
-            quote = (payload.quote if payload.quote is not None else row.quote or "").strip()
-            if not quote:
-                raise HTTPException(status_code=400, detail="缺少划选原文")
-            if len(quote) > 2000:
-                quote = quote[:2000]
-            row.start_offset = start
-            row.end_offset = end
-            row.quote = quote
+            if page is not None:
+                # 页内笔记：允许无正文偏移，仅更新 quote
+                if payload.quote is not None:
+                    quote = payload.quote.strip() or f"第{int(page)}页"
+                    row.quote = quote[:2000]
+            else:
+                start = (
+                    int(payload.start_offset)
+                    if payload.start_offset is not None
+                    else int(row.start_offset)
+                )
+                end = (
+                    int(payload.end_offset)
+                    if payload.end_offset is not None
+                    else int(row.end_offset)
+                )
+                if start < 0 or end <= start:
+                    raise HTTPException(status_code=400, detail="划选区间无效")
+                if end - start > 2000:
+                    end = start + 2000
+                quote = (payload.quote if payload.quote is not None else row.quote or "").strip()
+                if not quote:
+                    raise HTTPException(status_code=400, detail="缺少划选原文")
+                if len(quote) > 2000:
+                    quote = quote[:2000]
+                row.start_offset = start
+                row.end_offset = end
+                row.quote = quote
         await db.commit()
         await db.refresh(row)
         return self._ann_out(row)

@@ -428,7 +428,7 @@ class SourcesService:
         cat = result.scalar_one_or_none()
         if cat:
             return cat
-        cat = Category(name=name)
+        cat = Category(name=name, kind="tag", parent_id=None)
         db.add(cat)
         await db.flush()
         return cat
@@ -509,6 +509,32 @@ class SourcesService:
                 detail="尚无音轨。请对该视频重新「重试」提取（会下载音轨供跟读）。",
             )
         return media
+
+    async def resolve_original_path(self, db: AsyncSession, source_id: int) -> Path:
+        """返回电子书原件路径（PDF/EPUB/TXT），供前端预览。"""
+        row = await self.get(db, source_id)
+        if row.type != "ebook":
+            raise HTTPException(status_code=400, detail="仅电子书来源有原件预览")
+        path: Path | None = None
+        if row.storage_path:
+            candidate = _data_root() / row.storage_path
+            if candidate.is_file():
+                path = candidate
+        if path is None:
+            folder = self._source_folder(row.id)
+            for name in ("original.pdf", "original.epub", "original.txt"):
+                candidate = folder / name
+                if candidate.is_file():
+                    path = candidate
+                    break
+            if path is None and folder.is_dir():
+                for candidate in sorted(folder.glob("original.*")):
+                    if candidate.is_file():
+                        path = candidate
+                        break
+        if path is None:
+            raise HTTPException(status_code=404, detail="原件不存在或已被清理")
+        return path
 
     async def search_preview(
         self,

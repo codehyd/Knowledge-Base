@@ -9,6 +9,9 @@ class CategoryOut(BaseModel):
     id: int
     name: str
     count: int = 0
+    # domain=用户顶级域；tag=主题标签
+    kind: str = "tag"
+    parent_id: Optional[int] = None
 
     model_config = {"from_attributes": True}
 
@@ -16,6 +19,19 @@ class CategoryOut(BaseModel):
 class CategoryListOut(BaseModel):
     items: list[CategoryOut]
     total_entries: int = 0
+
+
+class CategoryCreate(BaseModel):
+    """创建用户顶级域（kind 固定为 domain）。"""
+
+    name: str = Field(min_length=1, max_length=100)
+
+
+class CategoryUpdate(BaseModel):
+    """重命名，或把主题标签挂到某个顶级域下（parent_id=null 表示取消挂靠）。"""
+
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    parent_id: Optional[int] = Field(default=None)
 
 
 class EntryListItem(BaseModel):
@@ -26,10 +42,20 @@ class EntryListItem(BaseModel):
     source_type: str = ""
     source_uri: str = ""
     in_vault: bool = False
+    # 人工分类（kind=domain）
     categories: list[str] = Field(default_factory=list)
+    category_ids: list[int] = Field(default_factory=list)
+    # 自动标签（kind=tag）
+    tags: list[str] = Field(default_factory=list)
     created_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
+
+
+class EntryCategoriesIn(BaseModel):
+    """设置条目的人工分类（仅替换 domain 关联，不触碰自动标签）。"""
+
+    category_ids: list[int] = Field(default_factory=list)
 
 
 class EntryListOut(BaseModel):
@@ -45,6 +71,8 @@ class EntryDetailOut(BaseModel):
     summary: str
     source_id: Optional[int] = None
     categories: list[str] = Field(default_factory=list)
+    category_ids: list[int] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
     created_at: Optional[datetime] = None
     preview: str = ""
     preview_truncated: bool = False
@@ -179,6 +207,9 @@ class AnnotationOut(BaseModel):
     # note | chat_anchor
     kind: str = "note"
     color: str = "#facc15"
+    # PDF 页内笔记（与正文偏移批注互斥使用）
+    page: Optional[int] = None
+    rect_json: str = ""
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -190,20 +221,25 @@ class AnnotationListOut(BaseModel):
 
 
 class AnnotationCreate(BaseModel):
-    start_offset: int = Field(ge=0)
-    end_offset: int = Field(ge=1)
-    quote: str = Field(min_length=1, max_length=2000)
+    # 正文划选：start < end；PDF 页注：可传 page，偏移可省略
+    start_offset: int = Field(default=0, ge=0)
+    end_offset: int = Field(default=0, ge=0)
+    quote: str = Field(default="", max_length=2000)
     note: str = Field(default="", max_length=2000)
     color: str = Field(default="#facc15", max_length=20)
     kind: str = Field(default="note", max_length=20)
+    page: Optional[int] = Field(default=None, ge=1)
+    rect_json: str = Field(default="", max_length=500)
 
 
 class AnnotationUpdate(BaseModel):
     note: Optional[str] = Field(default=None, max_length=2000)
     color: Optional[str] = Field(default=None, max_length=20)
     start_offset: Optional[int] = Field(default=None, ge=0)
-    end_offset: Optional[int] = Field(default=None, ge=1)
+    end_offset: Optional[int] = Field(default=None, ge=0)
     quote: Optional[str] = Field(default=None, max_length=2000)
+    page: Optional[int] = Field(default=None, ge=1)
+    rect_json: Optional[str] = Field(default=None, max_length=500)
 
 
 class AnnotationPromoteIn(BaseModel):

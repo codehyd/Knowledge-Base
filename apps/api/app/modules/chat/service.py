@@ -940,8 +940,8 @@ class ChatService:
         )
         if existing.scalar_one_or_none() is None:
             session.title = self._title_from_message(user_text)
-        if category_id is not None:
-            session.category_id = category_id
+        # 始终同步前端筛选（含 null=全部分类），以便用户清空后生效
+        session.category_id = category_id
         session.updated_at = datetime.now(timezone.utc)
 
         db.add(

@@ -1,19 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import type { MessageInstance } from "antd/es/message/interface";
 import type { SetURLSearchParams } from "react-router-dom";
 import { api } from "@/shared/api/client";
 import { formatError } from "@/shared/ui/feedback";
-import { tabFromNote, type NoteTab } from "../types";
+import { tabFromNote } from "../types";
+import {
+  selectActiveTab,
+  useNotesStore,
+  type UnsavedConfirm,
+} from "../store/notesStore";
 
-export type UnsavedConfirm =
-  | { type: "switch"; next: boolean }
-  | { type: "closeTab"; sourceId: number }
-  | null;
-
-export type EditorDraft = {
-  content: string;
-  lake: string | null;
-};
+export type { UnsavedConfirm };
+export type { EditorDraft } from "../store/notesStore";
 
 export type UseNoteTabsOptions = {
   message: MessageInstance;
@@ -21,8 +19,6 @@ export type UseNoteTabsOptions = {
   refreshTree: () => Promise<void>;
   selectedFolder: string;
   params: URLSearchParams;
-  readEditorDraft: () => EditorDraft;
-  lakeModeRef: React.RefObject<boolean>;
 };
 
 export function useNoteTabs({
@@ -31,182 +27,61 @@ export function useNoteTabs({
   refreshTree,
   selectedFolder,
   params,
-  readEditorDraft,
-  lakeModeRef,
 }: UseNoteTabsOptions) {
-  const [tabs, setTabs] = useState<NoteTab[]>([]);
-  const [activeId, setActiveId] = useState<number | null>(null);
-  const [contentKey, setContentKey] = useState(0);
-  const [loadingNote, setLoadingNote] = useState(false);
-  const [unsavedConfirm, setUnsavedConfirm] = useState<UnsavedConfirm>(null);
-  const [draggingTabId, setDraggingTabId] = useState<number | null>(null);
-  const [dragOver, setDragOver] = useState<{ id: number; side: "before" | "after" } | null>(null);
+  const tabs = useNotesStore((s) => s.tabs);
+  const activeId = useNotesStore((s) => s.activeId);
+  const contentKey = useNotesStore((s) => s.contentKey);
+  const loadingNote = useNotesStore((s) => s.loadingNote);
+  const unsavedConfirm = useNotesStore((s) => s.unsavedConfirm);
+  const draggingTabId = useNotesStore((s) => s.draggingTabId);
+  const dragOver = useNotesStore((s) => s.dragOver);
 
+  const setTabs = useNotesStore((s) => s.setTabs);
+  const setActiveId = useNotesStore((s) => s.setActiveId);
+  const setContentKey = useNotesStore((s) => s.setContentKey);
+  const setUnsavedConfirm = useNotesStore((s) => s.setUnsavedConfirm);
+  const setDraggingTabId = useNotesStore((s) => s.setDraggingTabId);
+  const setDragOver = useNotesStore((s) => s.setDragOver);
+  const clearTabDrag = useNotesStore((s) => s.clearTabDrag);
+  const flushActiveDraft = useNotesStore((s) => s.flushActiveDraft);
+  const activateTab = useNotesStore((s) => s.activateTab);
+  const removeTab = useNotesStore((s) => s.removeTab);
+  const closeTabAction = useNotesStore((s) => s.closeTab);
+  const reorderTabs = useNotesStore((s) => s.reorderTabs);
+  const openNoteAction = useNotesStore((s) => s.openNote);
+  const markActiveDirty = useNotesStore((s) => s.markActiveDirty);
+  const setActiveTitle = useNotesStore((s) => s.setActiveTitle);
+  const resetActiveTabFromServer = useNotesStore((s) => s.resetActiveTabFromServer);
+
+  const activeTab = useNotesStore(selectActiveTab);
   const tabDragMovedRef = useRef(false);
-  const tabsRef = useRef(tabs);
-  const activeIdRef = useRef(activeId);
-  tabsRef.current = tabs;
-  activeIdRef.current = activeId;
 
-  const activeTab = activeId != null ? tabs.find((t) => t.sourceId === activeId) ?? null : null;
-
-  const flushActiveDraft = useCallback(() => {
-    const id = activeIdRef.current;
-    if (id == null) return;
-    const { content, lake } = readEditorDraft();
-    setTabs((prev) =>
-      prev.map((t) =>
-        t.sourceId === id
-          ? {
-              ...t,
-              draftContent: content,
-              draftLake: lakeModeRef.current ? lake : t.draftLake,
-            }
-          : t,
-      ),
-    );
-  }, [readEditorDraft, lakeModeRef]);
-
-  const activateTab = useCallback(
-    (sourceId: number) => {
-      if (sourceId === activeIdRef.current) return;
-      flushActiveDraft();
-      setActiveId(sourceId);
-      setParams({ id: String(sourceId) }, { replace: true });
-      setContentKey((k) => k + 1);
-    },
-    [flushActiveDraft, setParams],
+  const activateTabBound = useCallback(
+    (sourceId: number) => activateTab(sourceId, setParams),
+    [activateTab, setParams],
   );
 
-  const removeTab = useCallback(
-    (sourceId: number) => {
-      const prev = tabsRef.current;
-      const idx = prev.findIndex((t) => t.sourceId === sourceId);
-      if (idx < 0) return;
-      const next = prev.filter((t) => t.sourceId !== sourceId);
-      setTabs(next);
-      if (activeIdRef.current !== sourceId) return;
-      const neighbor = next[idx] ?? next[idx - 1] ?? null;
-      if (neighbor) {
-        setActiveId(neighbor.sourceId);
-        setParams({ id: String(neighbor.sourceId) }, { replace: true });
-        setContentKey((k) => k + 1);
-      } else {
-        setActiveId(null);
-        setParams({}, { replace: true });
-      }
-    },
-    [setParams],
+  const removeTabBound = useCallback(
+    (sourceId: number) => removeTab(sourceId, setParams),
+    [removeTab, setParams],
   );
 
   const closeTab = useCallback(
-    (sourceId: number, force = false) => {
-      const tab = tabsRef.current.find((t) => t.sourceId === sourceId);
-      if (!tab) return;
-      if (tab.dirty && !force) {
-        setUnsavedConfirm({ type: "closeTab", sourceId });
-        return;
-      }
-      if (sourceId === activeIdRef.current) {
-        // 丢弃当前编辑器未 flush 的脏内容
-      } else {
-        flushActiveDraft();
-      }
-      removeTab(sourceId);
-    },
-    [flushActiveDraft, removeTab],
+    (sourceId: number, force = false) => closeTabAction(sourceId, setParams, force),
+    [closeTabAction, setParams],
   );
-
-  const reorderTabs = useCallback((fromId: number, toId: number, side: "before" | "after") => {
-    if (fromId === toId) return;
-    setTabs((prev) => {
-      const fromIdx = prev.findIndex((t) => t.sourceId === fromId);
-      if (fromIdx < 0) return prev;
-      const next = [...prev];
-      const [item] = next.splice(fromIdx, 1);
-      let toIdx = next.findIndex((t) => t.sourceId === toId);
-      if (toIdx < 0) return prev;
-      if (side === "after") toIdx += 1;
-      next.splice(toIdx, 0, item);
-      return next;
-    });
-  }, []);
-
-  const clearTabDrag = useCallback(() => {
-    setDraggingTabId(null);
-    setDragOver(null);
-  }, []);
 
   const openNote = useCallback(
-    async (sourceId: number) => {
-      if (tabsRef.current.some((t) => t.sourceId === sourceId)) {
-        activateTab(sourceId);
-        return;
-      }
-      setLoadingNote(true);
-      try {
-        const res = await api.getVaultNote(sourceId);
-        flushActiveDraft();
-        setTabs((prev) => {
-          if (prev.some((t) => t.sourceId === res.source_id)) return prev;
-          return [...prev, tabFromNote(res)];
-        });
-        setActiveId(res.source_id);
-        setParams({ id: String(res.source_id) }, { replace: true });
-        setContentKey((k) => k + 1);
-      } catch (err) {
-        message.error(formatError(err));
-      } finally {
-        setLoadingNote(false);
-      }
-    },
-    [activateTab, flushActiveDraft, message, setParams],
+    (sourceId: number) => openNoteAction(sourceId, { message, setParams }),
+    [message, openNoteAction, setParams],
   );
-
-  const markActiveDirty = useCallback((nextDirty: boolean) => {
-    const id = activeIdRef.current;
-    if (id == null) return;
-    setTabs((prev) =>
-      prev.map((t) => (t.sourceId === id ? { ...t, dirty: nextDirty } : t)),
-    );
-  }, []);
-
-  const setActiveTitle = useCallback((nextTitle: string) => {
-    const id = activeIdRef.current;
-    if (id == null) return;
-    setTabs((prev) =>
-      prev.map((t) =>
-        t.sourceId === id
-          ? { ...t, draftTitle: nextTitle, title: nextTitle, dirty: true }
-          : t,
-      ),
-    );
-  }, []);
-
-  const resetActiveTabFromServer = useCallback(() => {
-    const id = activeIdRef.current;
-    if (id == null) return;
-    setTabs((prev) =>
-      prev.map((t) =>
-        t.sourceId === id
-          ? {
-              ...t,
-              draftTitle: t.note.title || "",
-              draftContent: t.note.content,
-              draftLake: t.note.source_lake ?? null,
-              dirty: false,
-            }
-          : t,
-      ),
-    );
-  }, []);
 
   const confirmUnsavedCloseTab = useCallback(() => {
     if (unsavedConfirm?.type !== "closeTab") return;
     const { sourceId } = unsavedConfirm;
     setUnsavedConfirm(null);
-    removeTab(sourceId);
-  }, [unsavedConfirm, removeTab]);
+    removeTabBound(sourceId);
+  }, [unsavedConfirm, removeTabBound, setUnsavedConfirm]);
 
   const importHandledRef = useRef<string | null>(null);
   const newHandledRef = useRef(false);
@@ -217,6 +92,8 @@ export function useNoteTabs({
     const isNew = params.get("new") === "1";
 
     void (async () => {
+      const store = useNotesStore.getState();
+
       if (isNew) {
         if (newHandledRef.current) return;
         newHandledRef.current = true;
@@ -227,13 +104,13 @@ export function useNoteTabs({
           });
           await refreshTree();
           setParams({ id: String(res.source_id) }, { replace: true });
-          flushActiveDraft();
-          setTabs((prev) => {
+          store.flushActiveDraft();
+          store.setTabs((prev) => {
             if (prev.some((t) => t.sourceId === res.source_id)) return prev;
             return [...prev, tabFromNote(res)];
           });
-          setActiveId(res.source_id);
-          setContentKey((k) => k + 1);
+          store.setActiveId(res.source_id);
+          store.setContentKey((k) => k + 1);
         } catch (err) {
           newHandledRef.current = false;
           message.error(formatError(err));
@@ -245,13 +122,14 @@ export function useNoteTabs({
       if (id) {
         const num = Number(id);
         if (!Number.isNaN(num)) {
-          if (tabsRef.current.some((t) => t.sourceId === num)) {
-            if (num !== activeIdRef.current) {
-              flushActiveDraft();
-              setActiveId(num);
-              setContentKey((k) => k + 1);
+          const current = useNotesStore.getState();
+          if (current.tabs.some((t) => t.sourceId === num)) {
+            if (num !== current.activeId) {
+              current.flushActiveDraft();
+              current.setActiveId(num);
+              current.setContentKey((k) => k + 1);
             }
-          } else if (num !== activeIdRef.current) {
+          } else if (num !== current.activeId) {
             await openNote(num);
           }
         }
@@ -269,13 +147,14 @@ export function useNoteTabs({
           if (params.get("import") !== importId || params.get("id")) return;
           await refreshTree();
           setParams({ id: String(res.source_id) }, { replace: true });
-          flushActiveDraft();
-          setTabs((prev) => {
+          const latest = useNotesStore.getState();
+          latest.flushActiveDraft();
+          latest.setTabs((prev) => {
             if (prev.some((t) => t.sourceId === res.source_id)) return prev;
             return [...prev, tabFromNote(res)];
           });
-          setActiveId(res.source_id);
-          setContentKey((k) => k + 1);
+          latest.setActiveId(res.source_id);
+          latest.setContentKey((k) => k + 1);
           message.success("已导入笔记库");
         } catch (err) {
           importHandledRef.current = null;
@@ -302,10 +181,8 @@ export function useNoteTabs({
     dragOver,
     setDragOver,
     tabDragMovedRef,
-    tabsRef,
-    activeIdRef,
-    activateTab,
-    removeTab,
+    activateTab: activateTabBound,
+    removeTab: removeTabBound,
     closeTab,
     reorderTabs,
     clearTabDrag,

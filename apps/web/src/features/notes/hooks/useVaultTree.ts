@@ -1,35 +1,22 @@
-import { createElement, useCallback, useEffect, useRef, useState } from "react";
+import { createElement, useCallback, useEffect, useRef } from "react";
 import { Input, Modal } from "antd";
 import type { MessageInstance } from "antd/es/message/interface";
 import type { ModalStaticFunctions } from "antd/es/modal/confirm";
+import type { SetURLSearchParams } from "react-router-dom";
 import { api, type VaultNode } from "@/shared/api/client";
 import { formatError } from "@/shared/ui/feedback";
-import type { NoteTab } from "../types";
+import {
+  useNotesStore,
+  type DeleteConfirm,
+  type RenameConfirm,
+} from "../store/notesStore";
 
-export type RenameConfirm = {
-  path: string;
-  kind: "note" | "folder";
-  name: string;
-} | null;
-
-export type DeleteConfirm = {
-  sourceId: number | null;
-  path?: string;
-  noteTitle: string;
-  orphan?: boolean;
-} | null;
-
-export type VaultBridge = {
-  openNote: (sourceId: number) => Promise<void>;
-  removeTab: (sourceId: number) => void;
-  tabsRef: React.RefObject<NoteTab[]>;
-  setTabs: React.Dispatch<React.SetStateAction<NoteTab[]>>;
-};
+export type { RenameConfirm, DeleteConfirm };
 
 export type UseVaultTreeOptions = {
   message: MessageInstance;
   modal: Omit<ModalStaticFunctions, "warn">;
-  bridgeRef: React.RefObject<VaultBridge>;
+  setParams: SetURLSearchParams;
 };
 
 function deleteFolderConfirmContent() {
@@ -51,32 +38,34 @@ function deleteFolderConfirmContent() {
   );
 }
 
-export function useVaultTree({ message, modal, bridgeRef }: UseVaultTreeOptions) {
-  const [nodes, setNodes] = useState<VaultNode[]>([]);
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [selectedFolder, setSelectedFolder] = useState("");
-  const [loadingTree, setLoadingTree] = useState(false);
-  const [renameConfirm, setRenameConfirm] = useState<RenameConfirm>(null);
-  const [renaming, setRenaming] = useState(false);
-  const [deleteConfirm, setDeleteConfirm] = useState<DeleteConfirm>(null);
-  const [deleting, setDeleting] = useState(false);
+export function useVaultTree({ message, modal, setParams }: UseVaultTreeOptions) {
+  const nodes = useNotesStore((s) => s.nodes);
+  const expanded = useNotesStore((s) => s.expanded);
+  const selectedFolder = useNotesStore((s) => s.selectedFolder);
+  const loadingTree = useNotesStore((s) => s.loadingTree);
+  const renameConfirm = useNotesStore((s) => s.renameConfirm);
+  const renaming = useNotesStore((s) => s.renaming);
+  const deleteConfirm = useNotesStore((s) => s.deleteConfirm);
+  const deleting = useNotesStore((s) => s.deleting);
+
+  const setSelectedFolder = useNotesStore((s) => s.setSelectedFolder);
+  const setRenameConfirm = useNotesStore((s) => s.setRenameConfirm);
+  const setDeleteConfirm = useNotesStore((s) => s.setDeleteConfirm);
+  const setExpanded = useNotesStore((s) => s.setExpanded);
+  const toggleFolder = useNotesStore((s) => s.toggleFolder);
+  const refreshTree = useNotesStore((s) => s.refreshTree);
+  const openNote = useNotesStore((s) => s.openNote);
+  const removeTab = useNotesStore((s) => s.removeTab);
+  const patchTabAfterRename = useNotesStore((s) => s.patchTabAfterRename);
+  const tabsUnderPath = useNotesStore((s) => s.tabsUnderPath);
+  const setRenaming = useNotesStore((s) => s.setRenaming);
+  const setDeleting = useNotesStore((s) => s.setDeleting);
+
   const renameInputRef = useRef<HTMLInputElement>(null);
 
-  const refreshTree = useCallback(async () => {
-    setLoadingTree(true);
-    try {
-      const res = await api.getVaultTree();
-      setNodes(res.nodes || []);
-    } catch (err) {
-      message.error(formatError(err));
-    } finally {
-      setLoadingTree(false);
-    }
-  }, [message]);
-
   useEffect(() => {
-    void refreshTree();
-  }, [refreshTree]);
+    void refreshTree(message);
+  }, [message, refreshTree]);
 
   useEffect(() => {
     if (!renameConfirm) return;
@@ -106,7 +95,7 @@ export function useVaultTree({ message, modal, bridgeRef }: UseVaultTreeOptions)
           try {
             await api.createVaultFolder({ parent, name: name.trim() || "新建文件夹" });
             if (parent) setExpanded((s) => new Set(s).add(parent));
-            await refreshTree();
+            await refreshTree(message);
             message.success("已创建文件夹");
           } catch (err) {
             message.error(formatError(err));
@@ -115,7 +104,7 @@ export function useVaultTree({ message, modal, bridgeRef }: UseVaultTreeOptions)
         },
       });
     },
-    [message, refreshTree, selectedFolder],
+    [message, refreshTree, selectedFolder, setExpanded],
   );
 
   const onCreateNote = useCallback(
@@ -126,22 +115,25 @@ export function useVaultTree({ message, modal, bridgeRef }: UseVaultTreeOptions)
           title: "未命名笔记",
         });
         if (parent) setExpanded((s) => new Set(s).add(parent));
-        await refreshTree();
-        await bridgeRef.current.openNote(res.source_id);
+        await refreshTree(message);
+        await openNote(res.source_id, { message, setParams });
       } catch (err) {
         message.error(formatError(err));
       }
     },
-    [bridgeRef, message, refreshTree, selectedFolder],
+    [message, openNote, refreshTree, selectedFolder, setExpanded, setParams],
   );
 
-  const onRenameNode = useCallback((nodePath: string, kind: "note" | "folder", currentName: string) => {
-    setRenameConfirm({
-      path: nodePath,
-      kind,
-      name: currentName.replace(/\.md$/i, ""),
-    });
-  }, []);
+  const onRenameNode = useCallback(
+    (nodePath: string, kind: "note" | "folder", currentName: string) => {
+      setRenameConfirm({
+        path: nodePath,
+        kind,
+        name: currentName.replace(/\.md$/i, ""),
+      });
+    },
+    [setRenameConfirm],
+  );
 
   const confirmRename = useCallback(async () => {
     if (!renameConfirm || renaming) return;
@@ -157,23 +149,9 @@ export function useVaultTree({ message, modal, bridgeRef }: UseVaultTreeOptions)
         path: renameConfirm.path,
         new_name: next,
       });
-      await refreshTree();
+      await refreshTree(message);
       if (renameConfirm.kind === "note") {
-        const oldPath = renameConfirm.path;
-        const { setTabs } = bridgeRef.current;
-        setTabs((prev) =>
-          prev.map((t) =>
-            t.path === oldPath || t.path === patched.path
-              ? {
-                  ...t,
-                  path: patched.path,
-                  title: next,
-                  draftTitle: t.dirty ? t.draftTitle : next,
-                  note: { ...t.note, title: next, path: patched.path },
-                }
-              : t,
-          ),
-        );
+        patchTabAfterRename(renameConfirm.path, patched.path, next);
       }
       setRenameConfirm(null);
       message.success("已重命名");
@@ -182,7 +160,15 @@ export function useVaultTree({ message, modal, bridgeRef }: UseVaultTreeOptions)
     } finally {
       setRenaming(false);
     }
-  }, [bridgeRef, message, refreshTree, renameConfirm, renaming]);
+  }, [
+    message,
+    patchTabAfterRename,
+    refreshTree,
+    renameConfirm,
+    renaming,
+    setRenameConfirm,
+    setRenaming,
+  ]);
 
   const onDeleteNote = useCallback(
     (
@@ -197,7 +183,7 @@ export function useVaultTree({ message, modal, bridgeRef }: UseVaultTreeOptions)
         orphan: opts?.orphan,
       });
     },
-    [],
+    [setDeleteConfirm],
   );
 
   const confirmDeleteNote = useCallback(async () => {
@@ -209,13 +195,13 @@ export function useVaultTree({ message, modal, bridgeRef }: UseVaultTreeOptions)
         await api.deleteVaultPath(path);
       } else if (sourceId != null) {
         await api.deleteVaultNote(sourceId);
-        bridgeRef.current.removeTab(sourceId);
+        removeTab(sourceId, setParams);
       } else if (path) {
         await api.deleteVaultPath(path);
       } else {
         throw new Error("无法删除：缺少笔记标识");
       }
-      await refreshTree();
+      await refreshTree(message);
       setDeleteConfirm(null);
       message.success("已删除");
     } catch (err) {
@@ -223,7 +209,16 @@ export function useVaultTree({ message, modal, bridgeRef }: UseVaultTreeOptions)
     } finally {
       setDeleting(false);
     }
-  }, [bridgeRef, deleteConfirm, deleting, message, refreshTree]);
+  }, [
+    deleteConfirm,
+    deleting,
+    message,
+    refreshTree,
+    removeTab,
+    setDeleteConfirm,
+    setDeleting,
+    setParams,
+  ]);
 
   const onDeleteFolder = useCallback(
     (path: string) => {
@@ -237,16 +232,24 @@ export function useVaultTree({ message, modal, bridgeRef }: UseVaultTreeOptions)
           if (selectedFolder === path || selectedFolder.startsWith(path + "/")) {
             setSelectedFolder("");
           }
-          const doomed = bridgeRef.current.tabsRef.current?.filter(
-            (t) => t.path === path || t.path.startsWith(path + "/"),
-          ) ?? [];
-          for (const t of doomed) bridgeRef.current.removeTab(t.sourceId);
-          await refreshTree();
+          for (const t of tabsUnderPath(path)) {
+            removeTab(t.sourceId, setParams);
+          }
+          await refreshTree(message);
           message.success("已删除文件夹");
         },
       });
     },
-    [bridgeRef, message, modal, refreshTree, selectedFolder],
+    [
+      message,
+      modal,
+      refreshTree,
+      removeTab,
+      selectedFolder,
+      setParams,
+      setSelectedFolder,
+      tabsUnderPath,
+    ],
   );
 
   const selectNote = useCallback(
@@ -255,8 +258,8 @@ export function useVaultTree({ message, modal, bridgeRef }: UseVaultTreeOptions)
         void (async () => {
           try {
             const res = await api.registerVaultPath(node.path);
-            await refreshTree();
-            await bridgeRef.current.openNote(res.source_id);
+            await refreshTree(message);
+            await openNote(res.source_id, { message, setParams });
             message.success("已重新关联到笔记库");
           } catch (err) {
             message.error(formatError(err));
@@ -264,20 +267,10 @@ export function useVaultTree({ message, modal, bridgeRef }: UseVaultTreeOptions)
         })();
         return;
       }
-      void bridgeRef.current.openNote(node.source_id);
+      void openNote(node.source_id, { message, setParams });
     },
-    [bridgeRef, message, refreshTree],
+    [message, openNote, refreshTree, setParams],
   );
-
-  const toggleFolder = useCallback((path: string) => {
-    setSelectedFolder(path);
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
-  }, []);
 
   return {
     nodes,
@@ -285,7 +278,7 @@ export function useVaultTree({ message, modal, bridgeRef }: UseVaultTreeOptions)
     selectedFolder,
     setSelectedFolder,
     loadingTree,
-    refreshTree,
+    refreshTree: () => refreshTree(message),
     renameConfirm,
     setRenameConfirm,
     renaming,

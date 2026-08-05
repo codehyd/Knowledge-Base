@@ -214,7 +214,12 @@ export type EntryListItem = {
   source_type?: string;
   source_uri?: string;
   in_vault?: boolean;
+  /** 人工分类名 */
   categories: string[];
+  /** 人工分类 id */
+  category_ids?: number[];
+  /** 自动标签名 */
+  tags?: string[];
   created_at?: string | null;
 };
 
@@ -246,6 +251,13 @@ export type PreviewSearchHit = {
   snippet: string;
 };
 
+export type AnnotationRect = {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+};
+
 export type EntryAnnotation = {
   id: number;
   entry_id: number;
@@ -255,6 +267,10 @@ export type EntryAnnotation = {
   note: string;
   kind?: "note" | "chat_anchor" | string;
   color: string;
+  /** PDF 页内笔记的 1-based 页码；正文偏移批注为 null */
+  page?: number | null;
+  /** 归一化矩形 JSON：{"x","y","w","h"}，相对页面 0~1 */
+  rect_json?: string;
   created_at?: string | null;
   updated_at?: string | null;
 };
@@ -263,6 +279,9 @@ export type CategoryItem = {
   id: number;
   name: string;
   count: number;
+  /** domain=用户顶级域；tag=主题标签 */
+  kind?: "domain" | "tag" | string;
+  parent_id?: number | null;
 };
 
 export type BookshelfItem = {
@@ -777,6 +796,7 @@ export const api = {
   },
   getSourceCues: (id: number) => request<SourceCues>(`/api/sources/${id}/cues`),
   sourceMediaUrl: (id: number) => `${apiBase}/api/sources/${id}/media`,
+  sourceOriginalUrl: (id: number) => `${apiBase}/api/sources/${id}/original`,
   searchSourcePreview: (
     id: number,
     q: string,
@@ -796,6 +816,26 @@ export const api = {
 
   listCategories: () =>
     request<{ items: CategoryItem[]; total_entries: number }>("/api/categories"),
+  createCategory: (body: { name: string }) =>
+    request<CategoryItem>("/api/categories", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  updateCategory: (
+    id: number,
+    body: { name?: string; parent_id?: number | null },
+  ) =>
+    request<CategoryItem>(`/api/categories/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  deleteCategory: (id: number) =>
+    request<void>(`/api/categories/${id}`, { method: "DELETE" }),
+  setEntryCategories: (entryId: number, categoryIds: number[]) =>
+    request<EntryDetail>(`/api/entries/${entryId}/categories`, {
+      method: "PUT",
+      body: JSON.stringify({ category_ids: categoryIds }),
+    }),
   listBookshelf: () =>
     request<{ items: BookshelfItem[]; total: number }>("/api/bookshelf"),
   listMedia: () => request<{ items: MediaItem[]; total: number }>("/api/media"),
@@ -846,12 +886,14 @@ export const api = {
   createAnnotation: (
     entryId: number,
     body: {
-      start_offset: number;
-      end_offset: number;
-      quote: string;
+      start_offset?: number;
+      end_offset?: number;
+      quote?: string;
       note?: string;
       color?: string;
       kind?: "note" | "chat_anchor" | string;
+      page?: number;
+      rect_json?: string;
     },
   ) =>
     request<EntryAnnotation>(`/api/entries/${entryId}/annotations`, {
@@ -866,6 +908,8 @@ export const api = {
       start_offset?: number;
       end_offset?: number;
       quote?: string;
+      page?: number;
+      rect_json?: string;
     },
   ) =>
     request<EntryAnnotation>(`/api/annotations/${annId}`, {

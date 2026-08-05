@@ -29,6 +29,7 @@ import {
 import { api, type OpenBookItem, type OpenBookSourceInfo, type SourceItem } from "@/shared/api/client";
 import { getDesktopBridge } from "@/shared/desktop";
 import { formatError } from "@/shared/ui/feedback";
+import { PdfPreviewModal } from "@/shared/ui/PdfPreviewModal";
 import { TextPreviewModal } from "@/shared/ui/TextPreviewModal";
 import styles from "./FeedPage.module.css";
 
@@ -76,6 +77,7 @@ export function FeedPage() {
   const [transcriptFor, setTranscriptFor] = useState<number | null>(null);
   const [transcriptText, setTranscriptText] = useState("");
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [pdfOpen, setPdfOpen] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewTitle, setPreviewTitle] = useState("");
   const [previewSourceId, setPreviewSourceId] = useState<number | null>(null);
@@ -368,7 +370,20 @@ export function FeedPage() {
     const item = items.find((i) => i.id === id);
     setPreviewSourceId(id);
     setPreviewTitle(item?.title || item?.filename || `来源 #${id}`);
-    setPreviewOpen(true);
+    const name = (item?.filename || item?.title || "").toLowerCase();
+    if (item?.type === "ebook" && name.endsWith(".pdf")) {
+      setPdfOpen(true);
+      setPreviewOpen(false);
+    } else {
+      setPreviewOpen(true);
+      setPdfOpen(false);
+    }
+  }
+
+  function closePreviews() {
+    setPreviewOpen(false);
+    setPdfOpen(false);
+    setPreviewSourceId(null);
   }
 
   async function ingestOne(id: number) {
@@ -400,8 +415,7 @@ export function FeedPage() {
         try {
           await api.deleteSource(item.id);
           if (previewSourceId === item.id) {
-            setPreviewOpen(false);
-            setPreviewSourceId(null);
+            closePreviews();
           }
           await refresh();
           message.success("已移出队列");
@@ -1145,14 +1159,22 @@ export function FeedPage() {
         />
       </Modal>
 
+      <PdfPreviewModal
+        open={pdfOpen}
+        title={previewTitle || "PDF 预览"}
+        sourceId={previewSourceId}
+        onClose={closePreviews}
+        onOpenTextPreview={() => {
+          setPdfOpen(false);
+          setPreviewOpen(true);
+        }}
+      />
+
       <TextPreviewModal
         open={previewOpen}
         title={previewTitle || "正文预览"}
         sourceId={previewSourceId}
-        onClose={() => {
-          setPreviewOpen(false);
-          setPreviewSourceId(null);
-        }}
+        onClose={closePreviews}
         loadSegment={async (offset, limit) => {
           if (previewSourceId == null) {
             return { text: "", char_count: 0, offset: 0, truncated: false };

@@ -131,3 +131,32 @@ textarea {
 .ant-modal-confirm .ant-modal-body {
   max-height: none !important;
 }
+
+/* 输入框聚焦：细描边 + 轻柔光晕，去掉默认厚重双层感 */
+.ant-input:focus,
+.ant-input-focused,
+.ant-input-affix-wrapper:focus,
+.ant-input-affix-wrapper-focused,
+.ant-input-outlined:focus,
+.ant-input-outlined:focus-within,
+.ant-input-affix-wrapper-outlined:focus,
+.ant-input-affix-wrapper-outlined:focus-within {
+  border-color: var(--color-accent) !important;
+  box-shadow: 0 0 0 3px rgba(42, 111, 106, 0.14) !important;
+  outline: none;
+}
+
+.ant-input-number:focus,
+.ant-input-number-focused,
+.ant-input-number-outlined:focus,
+.ant-input-number-outlined:focus-within {
+  border-color: var(--color-accent) !important;
+  box-shadow: 0 0 0 3px rgba(42, 111, 106, 0.14) !important;
+}
+
+.ant-select-focused .ant-select-selector,
+.ant-select-outlined.ant-select-focused:not(.ant-select-disabled):not(.ant-select-customize-input)
+  .ant-select-selector {
+  border-color: var(--color-accent) !important;
+  box-shadow: 0 0 0 3px rgba(42, 111, 106, 0.14) !important;
+}

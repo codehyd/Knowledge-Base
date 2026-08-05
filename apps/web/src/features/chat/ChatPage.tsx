@@ -20,6 +20,7 @@ import {
   type ChatSession,
 } from "@/shared/api/client";
 import { formatError } from "@/shared/ui/feedback";
+import { MarkdownView } from "@/shared/ui/markdown";
 import { TextPreviewModal } from "@/shared/ui/TextPreviewModal";
 import styles from "./ChatPage.module.css";
 
@@ -409,7 +410,9 @@ export function ChatPage() {
           api.listChatSessions(),
         ]);
         setConfigured(ai.configured);
-        setCategories(cats.items || []);
+        setCategories(
+          (cats.items || []).filter((c) => (c.kind || "tag") === "domain"),
+        );
         const list = sess.items || [];
         setSessions(list);
 
@@ -623,7 +626,7 @@ export function ChatPage() {
         <Space wrap>
           <Select
             allowClear
-            placeholder="全部分类"
+            placeholder="全部分类（人工）"
             className={styles.categorySelect}
             value={categoryId ?? undefined}
             onChange={(v) => setCategoryId(v ?? null)}
@@ -631,6 +634,7 @@ export function ChatPage() {
               value: c.id,
               label: `${c.name}（${c.count}）`,
             }))}
+            notFoundContent="暂无分类，请先到知识页创建"
           />
           <Link to="/settings">
             <Button icon={<SettingOutlined />}>模型设置</Button>
@@ -756,7 +760,11 @@ export function ChatPage() {
                           </div>
                         </div>
                       )}
-                      <div className={styles.bubbleText}>
+                      <div
+                        className={`${styles.bubbleText}${
+                          m.role === "user" ? ` ${styles.bubbleTextPlain}` : ""
+                        }`}
+                      >
                         {isPending ? (
                           <div className={styles.progressBox}>
                             <div
@@ -804,6 +812,8 @@ export function ChatPage() {
                               })}
                             </ol>
                           </div>
+                        ) : m.role === "assistant" ? (
+                          <MarkdownView content={m.content} />
                         ) : (
                           m.content
                         )}

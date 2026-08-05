@@ -25,6 +25,11 @@ class Category(Base):
 
     id = mapped_column(Integer, primary_key=True, autoincrement=True)
     name = mapped_column(String(100), unique=True, index=True)
+    # domain=用户顶级域；tag=自动/主题标签（默认可挂到某个 domain 下）
+    kind = mapped_column(String(20), default="tag", index=True)
+    parent_id = mapped_column(
+        Integer, ForeignKey("categories.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
 
 class EntryCategory(Base):
@@ -55,6 +60,10 @@ class EntryAnnotation(Base):
     kind = mapped_column(String(20), default="note", index=True)
     # yellow | teal | coral | #rrggbb
     color = mapped_column(String(20), default="#facc15")
+    # PDF 页内笔记：1-based 页码；无则表示正文偏移批注
+    page = mapped_column(Integer, nullable=True, index=True)
+    # 归一化矩形 JSON：{"x":0,"y":0,"w":0,"h":0}，相对页面宽高 0~1
+    rect_json = mapped_column(Text, default="")
     created_at = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

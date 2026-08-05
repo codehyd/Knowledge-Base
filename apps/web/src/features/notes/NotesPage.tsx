@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useState, type MouseEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 import { App } from "antd";
 import { ConfirmDialog, confirmDialogStyles } from "@/shared/ui/ConfirmDialog";
 import { findNote } from "./types";
 import { useNoteTabs } from "./hooks/useNoteTabs";
-import { useVaultTree, type VaultBridge } from "./hooks/useVaultTree";
+import { useVaultTree } from "./hooks/useVaultTree";
 import { useNoteEditor } from "./hooks/useNoteEditor";
 import { VaultTree } from "./VaultTree";
 import { NoteTabBar } from "./NoteTabBar";
@@ -16,18 +16,9 @@ import styles from "./NotesPage.module.css";
 export function NotesPage() {
   const { message, modal } = App.useApp();
   const [params, setParams] = useSearchParams();
-  const readEditorDraftRef = useRef(() => ({ content: "", lake: null as string | null }));
-  const lakeModeRef = useRef(false);
-  const bridgeRef = useRef<VaultBridge>({
-    openNote: async () => {},
-    removeTab: () => {},
-    tabsRef: { current: [] },
-    setTabs: () => {},
-  });
-
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null);
 
-  const vault = useVaultTree({ message, modal, bridgeRef });
+  const vault = useVaultTree({ message, modal, setParams });
 
   const tabsHook = useNoteTabs({
     message,
@@ -35,33 +26,9 @@ export function NotesPage() {
     refreshTree: vault.refreshTree,
     selectedFolder: vault.selectedFolder,
     params,
-    readEditorDraft: () => readEditorDraftRef.current(),
-    lakeModeRef,
   });
 
-  bridgeRef.current = {
-    openNote: tabsHook.openNote,
-    removeTab: tabsHook.removeTab,
-    tabsRef: tabsHook.tabsRef,
-    setTabs: tabsHook.setTabs,
-  };
-
-  const editor = useNoteEditor({
-    message,
-    activeId: tabsHook.activeId,
-    activeTab: tabsHook.activeTab,
-    tabsRef: tabsHook.tabsRef,
-    setTabs: tabsHook.setTabs,
-    refreshTree: vault.refreshTree,
-    flushActiveDraft: tabsHook.flushActiveDraft,
-    markActiveDirty: tabsHook.markActiveDirty,
-    resetActiveTabFromServer: tabsHook.resetActiveTabFromServer,
-    setContentKey: tabsHook.setContentKey,
-    setUnsavedConfirm: tabsHook.setUnsavedConfirm,
-  });
-
-  readEditorDraftRef.current = editor.readEditorDraft;
-  lakeModeRef.current = editor.lakeMode;
+  const editor = useNoteEditor({ message });
 
   // 同笔记切换标题锚点时不重挂载编辑器，需主动滚到标题
   const headingParam = params.get("heading");

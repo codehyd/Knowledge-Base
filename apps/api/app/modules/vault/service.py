@@ -263,7 +263,7 @@ class VaultService:
         cat = result.scalar_one_or_none()
         if cat:
             return cat
-        cat = Category(name=name)
+        cat = Category(name=name, kind="tag", parent_id=None)
         db.add(cat)
         await db.flush()
         return cat

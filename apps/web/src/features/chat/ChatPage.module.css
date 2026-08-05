@@ -224,7 +224,6 @@
   border-radius: 14px;
   line-height: 1.6;
   font-size: 14px;
-  white-space: pre-wrap;
   word-break: break-word;
 }
 
@@ -304,6 +303,10 @@
 
 .bubbleText {
   margin: 0;
+}
+
+.bubbleTextPlain {
+  white-space: pre-wrap;
 }
 
 .progressBox {

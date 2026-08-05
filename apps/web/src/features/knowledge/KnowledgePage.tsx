@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   ApartmentOutlined,
@@ -6,14 +6,17 @@ import {
   DeleteOutlined,
   EditOutlined,
   EyeOutlined,
+  FolderOutlined,
   FormOutlined,
   PlayCircleOutlined,
+  PlusOutlined,
   ReadOutlined,
   SearchOutlined,
+  TagsOutlined,
   UnorderedListOutlined,
   VideoCameraOutlined,
 } from "@ant-design/icons";
-import { App, Button, Empty, Input, Popconfirm, Tag, Typography } from "antd";
+import { App, Button, Dropdown, Empty, Input, Modal, Popconfirm, Select, Tag, Typography } from "antd";
 import {
   api,
   type CategoryItem,
@@ -21,12 +24,20 @@ import {
   type EntryListItem,
 } from "@/shared/api/client";
 import { formatError } from "@/shared/ui/feedback";
+import { PdfPreviewModal } from "@/shared/ui/PdfPreviewModal";
 import { TextPreviewModal } from "@/shared/ui/TextPreviewModal";
 import { VideoPreviewPanel } from "@/shared/ui/VideoPreviewPanel";
 import { FollowAlongPlayer } from "@/shared/ui/FollowAlongPlayer";
 import { BookshelfModal } from "./BookshelfModal";
 import { MediaShelfModal } from "./MediaShelfModal";
 import styles from "./KnowledgePage.module.css";
+
+const ENTRY_DND_MIME = "text/kongku-entry";
+
+function isPdfEntry(detail: EntryDetail | null) {
+  const filename = (detail?.source_filename || "").toLowerCase();
+  return filename.endsWith(".pdf");
+}
 
 const GraphView = lazy(() =>
   import("./GraphView").then((m) => ({ default: m.GraphView })),
@@ -111,6 +122,18 @@ export function KnowledgePage() {
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [pdfOpen, setPdfOpen] = useState(false);
+  const [domainModalOpen, setDomainModalOpen] = useState(false);
+  const [domainName, setDomainName] = useState("");
+  const [domainSaving, setDomainSaving] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<CategoryItem | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [entryDomainIds, setEntryDomainIds] = useState<number[]>([]);
+  const [entryDomainSaving, setEntryDomainSaving] = useState(false);
+  const [draggingEntryId, setDraggingEntryId] = useState<number | null>(null);
+  const [dropDomainId, setDropDomainId] = useState<number | null>(null);
+  const [assigningEntry, setAssigningEntry] = useState(false);
+  const entryDragMovedRef = useRef(false);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewEntryId, setPreviewEntryId] = useState<number | null>(null);
   const [previewSourceId, setPreviewSourceId] = useState<number | null>(null);
@@ -183,6 +206,120 @@ export function KnowledgePage() {
     setTotalEntries(res.total_entries);
   }, []);
 
+  const domains = useMemo(
+    () => categories.filter((c) => (c.kind || "tag") === "domain"),
+    [categories],
+  );
+
+  async function createDomain() {
+    const name = domainName.trim();
+    if (!name) {
+      message.warning("请填写分类名称");
+      return;
+    }
+    setDomainSaving(true);
+    try {
+      await api.createCategory({ name });
+      setDomainModalOpen(false);
+      setDomainName("");
+      await refreshCategories();
+      message.success("已创建分类");
+    } catch (err) {
+      message.error(formatError(err, "创建失败"));
+    } finally {
+      setDomainSaving(false);
+    }
+  }
+
+  async function saveRename() {
+    if (!renameTarget) return;
+    const name = renameValue.trim();
+    if (!name) {
+      message.warning("名称不能为空");
+      return;
+    }
+    setDomainSaving(true);
+    try {
+      const updated = await api.updateCategory(renameTarget.id, { name });
+      if (category === renameTarget.name) setCategory(updated.name);
+      setRenameTarget(null);
+      setRenameValue("");
+      await refreshCategories();
+      await refreshEntries();
+      message.success("已重命名");
+    } catch (err) {
+      message.error(formatError(err, "重命名失败"));
+    } finally {
+      setDomainSaving(false);
+    }
+  }
+
+  async function removeDomain(domain: CategoryItem) {
+    try {
+      await api.deleteCategory(domain.id);
+      if (category === domain.name) setCategory("");
+      await refreshCategories();
+      await refreshEntries();
+      message.success("已删除分类（条目上的自动标签不受影响）");
+    } catch (err) {
+      message.error(formatError(err, "删除失败"));
+    }
+  }
+
+  async function saveEntryDomains(ids: number[]) {
+    if (!detail) return;
+    setEntryDomainIds(ids);
+    setEntryDomainSaving(true);
+    try {
+      const updated = await api.setEntryCategories(detail.id, ids);
+      setDetail(updated);
+      setEntryDomainIds(updated.category_ids || []);
+      await refreshCategories();
+      await refreshEntries();
+      message.success("已更新分类");
+    } catch (err) {
+      setEntryDomainIds(detail.category_ids || []);
+      message.error(formatError(err, "更新分类失败"));
+    } finally {
+      setEntryDomainSaving(false);
+    }
+  }
+
+  function resolveEntryDomainIds(entry: EntryListItem): number[] {
+    if (entry.category_ids && entry.category_ids.length > 0) {
+      return [...entry.category_ids];
+    }
+    const names = new Set(entry.categories || []);
+    return domains.filter((d) => names.has(d.name)).map((d) => d.id);
+  }
+
+  async function assignEntryToDomain(entryId: number, domain: CategoryItem) {
+    const entry = items.find((i) => i.id === entryId);
+    if (!entry) return;
+    const current = resolveEntryDomainIds(entry);
+    if (current.includes(domain.id)) {
+      message.info(`已在「${domain.name}」中`);
+      return;
+    }
+    setAssigningEntry(true);
+    try {
+      const updated = await api.setEntryCategories(entryId, [...current, domain.id]);
+      if (detail?.id === entryId) {
+        setDetail(updated);
+        setEntryDomainIds(updated.category_ids || []);
+      }
+      await refreshCategories();
+      await refreshEntries();
+      message.success(`已放入「${domain.name}」`);
+    } catch (err) {
+      message.error(formatError(err, "放入分类失败"));
+    } finally {
+      setAssigningEntry(false);
+      setDraggingEntryId(null);
+      setDropDomainId(null);
+    }
+  }
+
   const refreshEntries = useCallback(async () => {
     setLoading(true);
     try {
@@ -233,6 +370,7 @@ export function KnowledgePage() {
   useEffect(() => {
     if (selectedId == null) {
       setDetail(null);
+      setEntryDomainIds([]);
       return;
     }
     let cancelled = false;
@@ -240,10 +378,14 @@ export function KnowledgePage() {
     void (async () => {
       try {
         const res = await api.getEntry(selectedId);
-        if (!cancelled) setDetail(res);
+        if (!cancelled) {
+          setDetail(res);
+          setEntryDomainIds(res.category_ids || []);
+        }
       } catch (err) {
         if (!cancelled) {
           setDetail(null);
+          setEntryDomainIds([]);
           message.error(formatError(err, "加载详情失败"));
         }
       } finally {
@@ -277,18 +419,39 @@ export function KnowledgePage() {
   async function openPreview(entryId: number) {
     setPreviewLoading(true);
     setPreviewEntryId(entryId);
-    setPreviewSourceId(
-      detail?.id === entryId
-        ? detail.source_id ?? null
-        : items.find((i) => i.id === entryId)?.source_id ?? null,
-    );
-    setPreviewTitle(
-      detail?.id === entryId
-        ? detail.title
-        : items.find((i) => i.id === entryId)?.title || "正文预览",
-    );
-    setPreviewOpen(true);
+    const item = items.find((i) => i.id === entryId) ?? null;
+    const current = detail?.id === entryId ? detail : null;
+    setPreviewSourceId(current?.source_id ?? item?.source_id ?? null);
+    setPreviewTitle(current?.title || item?.title || "正文预览");
+    // 详情未加载时先拉一下，用于判断是否 PDF
+    let resolved: EntryDetail | null = current;
+    if (!resolved) {
+      try {
+        resolved = await api.getEntry(entryId);
+      } catch {
+        resolved = null;
+      }
+    }
+    if (resolved) {
+      setPreviewTitle(resolved.title || current?.title || item?.title || "正文预览");
+      setPreviewSourceId(resolved.source_id ?? null);
+    }
+    const sourceId = resolved?.source_id ?? item?.source_id ?? null;
+    if (isPdfEntry(resolved) && sourceId != null) {
+      setPdfOpen(true);
+      setPreviewOpen(false);
+    } else {
+      setPreviewOpen(true);
+      setPdfOpen(false);
+    }
     setPreviewLoading(false);
+  }
+
+  function closePreviews() {
+    setPreviewOpen(false);
+    setPdfOpen(false);
+    setPreviewEntryId(null);
+    setPreviewSourceId(null);
   }
 
   if (viewMode === "graph") {
@@ -497,30 +660,124 @@ export function KnowledgePage() {
       </header>
 
       <div className={styles.layout}>
-        <aside className={styles.cats}>
-          <button
-            type="button"
-            className={`${styles.catItem}${category === "" ? ` ${styles.catActive}` : ""}`}
-            onClick={() => setCategory("")}
-          >
-            <span>全部</span>
-            <em>{totalEntries}</em>
-          </button>
-          {categories.map((cat) => (
+        <div className={styles.cats}>
+          <div className={styles.catScroll}>
+            <div className={styles.catHead}>
+              <span>分类</span>
+            </div>
             <button
-              key={cat.id}
               type="button"
-              className={`${styles.catItem}${category === cat.name ? ` ${styles.catActive}` : ""}`}
-              onClick={() => setCategory(cat.name)}
+              className={`${styles.catItem}${category === "" ? ` ${styles.catActive}` : ""}`}
+              onClick={() => setCategory("")}
             >
-              <span>{cat.name}</span>
-              <em>{cat.count}</em>
+              <span>全部</span>
+              <em>{totalEntries}</em>
             </button>
-          ))}
-          {categories.length === 0 && (
-            <p className={styles.catHint}>入库后会出现分类</p>
-          )}
-        </aside>
+
+            {domains.map((domain) => (
+              <Dropdown
+                key={domain.id}
+                trigger={["contextMenu"]}
+                menu={{
+                  items: [
+                    {
+                      key: "rename",
+                      icon: <EditOutlined />,
+                      label: "重命名",
+                      onClick: () => {
+                        setRenameTarget(domain);
+                        setRenameValue(domain.name);
+                      },
+                    },
+                    {
+                      key: "delete",
+                      icon: <DeleteOutlined />,
+                      danger: true,
+                      label: "删除分类",
+                      onClick: () => {
+                        Modal.confirm({
+                          title: `删除「${domain.name}」？`,
+                          content: "删除后，已挂到该分类的条目会解除挂靠；自动标签不受影响。",
+                          okText: "删除",
+                          okType: "danger",
+                          onOk: () => removeDomain(domain),
+                        });
+                      },
+                    },
+                  ],
+                }}
+              >
+                <div
+                  className={`${styles.domainRow}${
+                    dropDomainId === domain.id ? ` ${styles.domainDropOver}` : ""
+                  }`}
+                  title="左键筛选 · 右键管理 · 可拖入条目"
+                  onDragOver={(e) => {
+                    if (draggingEntryId == null) return;
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "copy";
+                    setDropDomainId(domain.id);
+                  }}
+                  onDragLeave={(e) => {
+                    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                      setDropDomainId((cur) => (cur === domain.id ? null : cur));
+                    }
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const raw =
+                      e.dataTransfer.getData(ENTRY_DND_MIME) ||
+                      e.dataTransfer.getData("text/plain");
+                    const id = Number(raw || draggingEntryId);
+                    if (Number.isFinite(id) && id > 0) {
+                      void assignEntryToDomain(id, domain);
+                    } else {
+                      setDropDomainId(null);
+                      setDraggingEntryId(null);
+                    }
+                  }}
+                >
+                  <button
+                    type="button"
+                    className={`${styles.catItem} ${styles.domainItem}${
+                      category === domain.name ? ` ${styles.catActive}` : ""
+                    }`}
+                    onClick={() => setCategory(domain.name)}
+                  >
+                    <span>
+                      <FolderOutlined className={styles.catIcon} />
+                      {domain.name}
+                    </span>
+                    <em>{domain.count}</em>
+                  </button>
+                </div>
+              </Dropdown>
+            ))}
+
+            {domains.length === 0 ? (
+              <p className={styles.catHint}>
+                新建分类后，可把下方条目拖到分类上。
+              </p>
+            ) : draggingEntryId != null ? (
+              <p className={styles.catHint}>拖到某个分类松开即可放入</p>
+            ) : null}
+          </div>
+
+          <Button
+            type="text"
+            size="small"
+            className={styles.catAdd}
+            icon={<PlusOutlined />}
+            onClick={() => {
+              setDomainName("");
+              setDomainModalOpen(true);
+            }}
+            title="新建分类"
+          >
+            新建
+          </Button>
+        </div>
 
         <div className={styles.listPane}>
           {items.length === 0 ? (
@@ -542,13 +799,41 @@ export function KnowledgePage() {
           ) : (
             <ul className={styles.list}>
               {items.map((item) => (
-                <li key={item.id} className={styles.listRow}>
+                <li
+                  key={item.id}
+                  className={`${styles.listRow}${
+                    draggingEntryId === item.id ? ` ${styles.listDragging}` : ""
+                  }`}
+                  draggable={!assigningEntry}
+                  onDragStart={(e) => {
+                    entryDragMovedRef.current = false;
+                    setDraggingEntryId(item.id);
+                    e.dataTransfer.effectAllowed = "copy";
+                    e.dataTransfer.setData(ENTRY_DND_MIME, String(item.id));
+                    e.dataTransfer.setData("text/plain", String(item.id));
+                  }}
+                  onDrag={(e) => {
+                    if (Math.abs(e.movementX) + Math.abs(e.movementY) > 0) {
+                      entryDragMovedRef.current = true;
+                    }
+                  }}
+                  onDragEnd={() => {
+                    setDraggingEntryId(null);
+                    setDropDomainId(null);
+                  }}
+                >
                   <button
                     type="button"
                     className={`${styles.listItem}${
                       selectedId === item.id ? ` ${styles.listActive}` : ""
                     }`}
-                    onClick={() => setSelectedId(item.id)}
+                    onClick={() => {
+                      if (entryDragMovedRef.current) {
+                        entryDragMovedRef.current = false;
+                        return;
+                      }
+                      setSelectedId(item.id);
+                    }}
                   >
                     <strong title={item.title || `条目 #${item.id}`}>
                       {item.title || `条目 #${item.id}`}
@@ -568,17 +853,42 @@ export function KnowledgePage() {
                         </Tag>
                       ) : null}
                       {(() => {
-                        const { shown, more } = visibleTags(item.categories);
+                        const cats = visibleTags(item.categories || []);
+                        const tags = visibleTags(item.tags || [], 3);
                         return (
                           <>
-                            {shown.map((name) => (
-                              <Tag key={name} title={name}>
+                            {cats.shown.map((name) => (
+                              <Tag key={`c-${name}`} color="processing" title={`分类：${name}`}>
                                 {name}
                               </Tag>
                             ))}
-                            {more > 0 ? (
-                              <span className={styles.listMetaMore} title={item.categories.join("、")}>
-                                +{more}
+                            {cats.more > 0 ? (
+                              <span
+                                className={styles.listMetaMore}
+                                title={(item.categories || []).join("、")}
+                              >
+                                +{cats.more}
+                              </span>
+                            ) : null}
+                            {tags.shown.map((name) => (
+                              <Tag
+                                key={`t-${name}`}
+                                className={styles.listTagChip}
+                                title={`标签：${name}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setCategory(name);
+                                }}
+                              >
+                                {name}
+                              </Tag>
+                            ))}
+                            {tags.more > 0 ? (
+                              <span
+                                className={styles.listMetaMore}
+                                title={(item.tags || []).join("、")}
+                              >
+                                +{tags.more}
                               </span>
                             ) : null}
                           </>
@@ -622,13 +932,38 @@ export function KnowledgePage() {
             <div className={styles.detailInner}>
               <div className={styles.detailHead}>
                 <h2 title={detail.title}>{detail.title}</h2>
-                <div className={styles.detailTags}>
-                  {detail.categories.map((name) => (
-                    <Tag key={name} color="processing" title={name}>
-                      {name}
-                    </Tag>
-                  ))}
+                <div className={styles.detailAssign}>
+                  <label className={styles.detailAssignLabel}>分类</label>
+                  <Select
+                    mode="multiple"
+                    allowClear
+                    placeholder={domains.length ? "选择要归入的分类" : "请先在左侧新建分类"}
+                    className={styles.detailDomainSelect}
+                    value={entryDomainIds}
+                    loading={entryDomainSaving}
+                    disabled={domains.length === 0 || entryDomainSaving}
+                    options={domains.map((d) => ({ value: d.id, label: d.name }))}
+                    onChange={(ids) => void saveEntryDomains(ids)}
+                    maxTagCount="responsive"
+                  />
                 </div>
+                {(detail.tags || []).length > 0 ? (
+                  <div className={styles.detailTags}>
+                    <span className={styles.detailTagsLabel}>
+                      <TagsOutlined /> 标签
+                    </span>
+                    {(detail.tags || []).map((name) => (
+                      <Tag
+                        key={name}
+                        className={styles.listTagChip}
+                        title={`按标签筛选：${name}`}
+                        onClick={() => setCategory(name)}
+                      >
+                        {name}
+                      </Tag>
+                    ))}
+                  </div>
+                ) : null}
                 <p className={styles.detailMeta}>
                   {detail.source_type ? `类型：${sourceTypeLabel(detail.source_type)}` : ""}
                   {detail.source_filename
@@ -722,7 +1057,7 @@ export function KnowledgePage() {
                   loading={previewLoading}
                   onClick={() => void openPreview(detail.id)}
                 >
-                  预览正文
+                  {isPdfEntry(detail) ? "打开 PDF" : "预览正文"}
                 </Button>
                 <Link to="/chat">
                   <Button type="primary">在对话中提问</Button>
@@ -733,16 +1068,24 @@ export function KnowledgePage() {
         </aside>
       </div>
 
+      <PdfPreviewModal
+        open={pdfOpen}
+        title={previewTitle || detail?.title || "PDF 预览"}
+        sourceId={previewSourceId}
+        entryId={previewEntryId}
+        onClose={closePreviews}
+        onOpenTextPreview={() => {
+          setPdfOpen(false);
+          setPreviewOpen(true);
+        }}
+      />
+
       <TextPreviewModal
         open={previewOpen}
         title={previewTitle || detail?.title || "正文预览"}
         entryId={previewEntryId}
         sourceId={previewSourceId}
-        onClose={() => {
-          setPreviewOpen(false);
-          setPreviewEntryId(null);
-          setPreviewSourceId(null);
-        }}
+        onClose={closePreviews}
         loadSegment={async (offset, limit) => {
           if (previewEntryId == null) {
             return { text: "", char_count: 0, offset: 0, truncated: false };
@@ -806,6 +1149,52 @@ export function KnowledgePage() {
           setFocusSourceId(null);
         }}
       />
+
+      <Modal
+        title="新建分类"
+        open={domainModalOpen}
+        onCancel={() => {
+          setDomainModalOpen(false);
+          setDomainName("");
+        }}
+        onOk={() => void createDomain()}
+        confirmLoading={domainSaving}
+        okText="创建"
+        destroyOnHidden
+      >
+        <Input
+          autoFocus
+          placeholder="例如：成长、工作、家庭"
+          value={domainName}
+          onChange={(e) => setDomainName(e.target.value)}
+          onPressEnter={() => void createDomain()}
+          maxLength={40}
+        />
+        <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>
+          分类给人整理条目用；入库自动打的标签会单独显示，不受影响。
+        </Typography.Paragraph>
+      </Modal>
+
+      <Modal
+        title="重命名分类"
+        open={renameTarget != null}
+        onCancel={() => {
+          setRenameTarget(null);
+          setRenameValue("");
+        }}
+        onOk={() => void saveRename()}
+        confirmLoading={domainSaving}
+        okText="保存"
+        destroyOnHidden
+      >
+        <Input
+          autoFocus
+          value={renameValue}
+          onChange={(e) => setRenameValue(e.target.value)}
+          onPressEnter={() => void saveRename()}
+          maxLength={40}
+        />
+      </Modal>
     </section>
   );
 }

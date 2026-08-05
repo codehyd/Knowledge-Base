@@ -10,7 +10,11 @@ from app.modules.knowledge.schemas import (
     AnnotationPromoteIn,
     AnnotationUpdate,
     BookshelfListOut,
+    CategoryCreate,
     CategoryListOut,
+    CategoryOut,
+    CategoryUpdate,
+    EntryCategoriesIn,
     EntryDetailOut,
     EntryListOut,
     EntryPreviewOut,
@@ -28,9 +32,48 @@ router = APIRouter(tags=["知识浏览"])
     "/categories",
     response_model=CategoryListOut,
     summary="分类列表（含条目计数）",
+    description="含人工分类（kind=domain）与自动标签（kind=tag）。domain.count 为直接挂靠该分类的条目数。",
 )
 async def list_categories(db: AsyncSession = Depends(get_db)) -> CategoryListOut:
     return await knowledge_service.list_categories(db)
+
+
+@router.post(
+    "/categories",
+    response_model=CategoryOut,
+    summary="创建用户顶级分类",
+)
+async def create_category(
+    payload: CategoryCreate, db: AsyncSession = Depends(get_db)
+) -> CategoryOut:
+    return await knowledge_service.create_domain(db, payload)
+
+
+@router.patch(
+    "/categories/{category_id}",
+    response_model=CategoryOut,
+    summary="更新分类",
+    description="可重命名；主题标签可设置 parent_id 挂到顶级域（null 取消挂靠）。",
+)
+async def update_category(
+    category_id: int,
+    payload: CategoryUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> CategoryOut:
+    return await knowledge_service.update_category(db, category_id, payload)
+
+
+@router.delete(
+    "/categories/{category_id}",
+    summary="删除用户顶级分类",
+    description="仅允许删除 kind=domain；其下主题标签会解除挂靠，不会删除。",
+    status_code=204,
+)
+async def delete_category(
+    category_id: int, db: AsyncSession = Depends(get_db)
+) -> Response:
+    await knowledge_service.delete_domain(db, category_id)
+    return Response(status_code=204)
 
 
 @router.get(
@@ -78,6 +121,20 @@ async def list_entries(
 )
 async def get_entry(entry_id: int, db: AsyncSession = Depends(get_db)) -> EntryDetailOut:
     return await knowledge_service.get_entry(db, entry_id)
+
+
+@router.put(
+    "/entries/{entry_id}/categories",
+    response_model=EntryDetailOut,
+    summary="设置条目的人工分类",
+    description="仅替换 kind=domain 的关联；自动标签（kind=tag）不会被改动。",
+)
+async def set_entry_categories(
+    entry_id: int,
+    payload: EntryCategoriesIn,
+    db: AsyncSession = Depends(get_db),
+) -> EntryDetailOut:
+    return await knowledge_service.set_entry_categories(db, entry_id, payload)
 
 
 @router.get(
