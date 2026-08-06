@@ -270,6 +270,12 @@ async def _ensure_source_book_columns(conn) -> None:
     await _add_column_if_missing(
         conn, "sources", "vault_path", "VARCHAR(1000) DEFAULT ''"
     )
+    await _add_column_if_missing(
+        conn, "sources", "collection_title", "VARCHAR(500) DEFAULT ''"
+    )
+    await _add_column_if_missing(
+        conn, "sources", "episode_no", "INTEGER DEFAULT 0"
+    )
     await conn.execute(
         text("CREATE INDEX IF NOT EXISTS ix_sources_provenance ON sources (provenance)")
     )

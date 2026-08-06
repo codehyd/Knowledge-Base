@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
-from sqlalchemy import desc, func, select
+from sqlalchemy import case, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -20,6 +20,7 @@ from app.modules.sources.classify import (
     suggest_tags_and_summary,
 )
 from app.modules.sources.extractors import (
+    _is_douyin_url,
     _resolve_cookie_file,
     extract_local_file,
     extract_media_file_transcript_sync,
@@ -30,6 +31,7 @@ from app.modules.sources.extractors import (
     looks_like_video_url,
     normalize_media_url,
     parse_share_input,
+    probe_playlist_sync,
     resolve_media_url_sync,
 )
 from app.modules.sources.cues import (
@@ -52,7 +54,9 @@ from app.modules.sources.schemas import (
     SourcePreviewOut,
     TimedCueOut,
     TranscriptIn,
+    UrlBatchIn,
     UrlIn,
+    UrlProbeOut,
 )
 
 SUMMARY_CHARS = 800
@@ -123,7 +127,7 @@ class SourcesService:
     def to_out(self, row: Source) -> SourceOut:
         return SourceOut.model_validate(row)
 
-    async def list_sources(self, db: AsyncSession, limit: int = 50) -> tuple[list[Source], int]:
+    async def list_sources(self, db: AsyncSession, limit: int = 200) -> tuple[list[Source], int]:
         # 笔记库手写笔记不进喂养队列：它们由「笔记」页管理，清队列不应波及
         vault_note = (Source.vault_path.is_not(None)) & (Source.vault_path != "")
         total = int(
@@ -133,11 +137,23 @@ class SourcesService:
                 )
             ).scalar_one()
         )
+        # 进行中优先，再等待 → 待入库 → 失败/待补贴；同档按更新时间新的在前
+        status_rank = case(
+            (Source.status.in_(["extracting", "processing"]), 0),
+            (Source.status == "pending", 1),
+            (Source.status == "ready", 2),
+            (Source.status.in_(["need_transcript", "failed"]), 3),
+            else_=4,
+        )
         result = await db.execute(
             select(Source)
             .where(~vault_note)
-            .order_by(desc(Source.created_at))
-            .limit(min(limit, 100))
+            .order_by(
+                status_rank.asc(),
+                desc(Source.updated_at),
+                desc(Source.created_at),
+            )
+            .limit(min(limit, 500))
         )
         return list(result.scalars().all()), total
 
@@ -350,6 +366,111 @@ class SourcesService:
         await db.refresh(row)
         return row
 
+    async def probe_url(self, payload: UrlIn) -> UrlProbeOut:
+        """探测链接是否为合集/分P（不落库）。仅视频链接有意义，网页直接返回非合集。"""
+        try:
+            url, _share_title = parse_share_input(payload.url)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not looks_like_video_url(url):
+            return UrlProbeOut()
+        info = await asyncio.to_thread(probe_playlist_sync, url)
+        raw_entries = list(info.get("entries") or [])
+        return UrlProbeOut(
+            is_playlist=bool(info.get("is_playlist")),
+            collection_title=(info.get("collection_title") or "")[:500],
+            total=int(info.get("total") or 0),
+            entries=[
+                {
+                    "episode_no": int(e.get("episode_no") or 0),
+                    "title": str(e.get("title") or ""),
+                }
+                for e in raw_entries
+                if int(e.get("episode_no") or 0) > 0
+            ],
+        )
+
+    async def create_url_batch(
+        self, db: AsyncSession, payload: UrlBatchIn
+    ) -> tuple[list[Source], int, str, int]:
+        """合集/分P 批量投递。返回 (新建行, 跳过数, 合集标题, 总集数)。
+
+        - import_all → 全部集数
+        - episode_nos → 仅导入所选集号
+        - limit → 前 limit 集
+        - 已存在的分集（按 source_uri 判重）跳过，可从试跑无损续到全量。
+        - 分集标题先落「合集名 P序号」占位，逐集解析时用平台元数据刷新。
+        """
+        try:
+            url, _share_title = parse_share_input(payload.url)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not looks_like_video_url(url):
+            raise HTTPException(status_code=400, detail="仅视频链接支持合集批量投递")
+
+        info = await asyncio.to_thread(probe_playlist_sync, url)
+        if not info.get("is_playlist"):
+            raise HTTPException(status_code=400, detail="未识别到合集/分P，请使用普通投递")
+        entries = list(info.get("entries") or [])
+        collection = (info.get("collection_title") or "视频合集").strip()[:500]
+        total = len(entries)
+        if payload.import_all:
+            pass
+        elif payload.episode_nos is not None:
+            wanted = {int(n) for n in payload.episode_nos if int(n) > 0}
+            if not wanted:
+                raise HTTPException(status_code=400, detail="请至少选择一集")
+            entries = [e for e in entries if int(e.get("episode_no") or 0) in wanted]
+            if not entries:
+                raise HTTPException(status_code=400, detail="所选集号不在该合集中")
+        elif payload.limit:
+            entries = entries[: payload.limit]
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="请指定要导入的分集（episode_nos）或 import_all",
+            )
+
+        # 已投递过的分集跳过（试跑 → 全量 续跑的关键）
+        ep_urls = [e["url"] for e in entries]
+        existing = await db.execute(
+            select(Source.source_uri).where(Source.source_uri.in_(ep_urls))
+        )
+        seen = {u for (u,) in existing.all()}
+
+        rows: list[Source] = []
+        skipped = 0
+        for e in entries:
+            if e["url"] in seen:
+                skipped += 1
+                continue
+            ep_no = int(e["episode_no"])
+            row = Source(
+                type="video_url",
+                title=f"{collection} P{ep_no}",
+                filename="",
+                source_uri=e["url"],
+                collection_title=collection,
+                episode_no=ep_no,
+                status="pending",
+                stage="queued",
+                progress=0,
+            )
+            db.add(row)
+            await db.commit()
+            await db.refresh(row)
+            folder = _data_root() / "uploads" / str(row.id)
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "source.url").write_text(e["url"], encoding="utf-8")
+            row.storage_path = str(
+                (folder / "source.url").relative_to(_data_root())
+            ).replace("\\", "/")
+            row.stage = "saved"
+            row.progress = 5
+            await db.commit()
+            rows.append(row)
+        return rows, skipped, collection, total
+
     async def attach_transcript(self, db: AsyncSession, source_id: int, payload: TranscriptIn) -> Source:
         row = await self.get(db, source_id)
         if row.type not in {"video_url", "video_file", "url"}:
@@ -376,13 +497,8 @@ class SourcesService:
             pass
         return row
 
-    async def clear_finished(self, db: AsyncSession) -> int:
-        # 只移出「待入库 / 失败」；已入库(committed)保留来源，供知识库/书架使用
-        result = await db.execute(
-            select(Source).where(Source.status.in_(["ready", "failed"]))
-        )
-        rows = list(result.scalars().all())
-        # 跳过笔记库手写笔记
+    async def _purge_sources(self, db: AsyncSession, rows: list[Source]) -> int:
+        """删除队列来源并清理 uploads / 书架索引；跳过笔记库手写笔记。"""
         rows = [row for row in rows if not (getattr(row, "vault_path", None) or "").strip()]
         ids = [row.id for row in rows]
         for row in rows:
@@ -394,6 +510,76 @@ class SourcesService:
                 shutil.rmtree(folder, ignore_errors=True)
             remove_source_from_library(sid)
         return len(ids)
+
+    async def clear_finished(self, db: AsyncSession) -> int:
+        # 只移出「待入库 / 失败」；已入库(committed)保留来源，供知识库/书架使用
+        result = await db.execute(
+            select(Source).where(Source.status.in_(["ready", "failed"]))
+        )
+        return await self._purge_sources(db, list(result.scalars().all()))
+
+    async def clear_failed_videos(self, db: AsyncSession) -> int:
+        """批量移出失败/待补贴的视频队列项（含合集批量失败）。"""
+        result = await db.execute(
+            select(Source).where(
+                Source.type.in_(["video_url", "video_file"]),
+                Source.status.in_(["failed", "need_transcript"]),
+            )
+        )
+        return await self._purge_sources(db, list(result.scalars().all()))
+
+    async def clear_queue(self, db: AsyncSession) -> int:
+        """清空喂养队列中所有未入库项（含进行中/失败/待入库）。
+
+        已入库 (committed) 与笔记库手写笔记保留，不影响知识库内容。
+        """
+        vault_note = (Source.vault_path.is_not(None)) & (Source.vault_path != "")
+        result = await db.execute(
+            select(Source).where(~vault_note, Source.status != "committed")
+        )
+        return await self._purge_sources(db, list(result.scalars().all()))
+
+    async def queue_control_status(self, db: AsyncSession) -> dict:
+        from app.modules.sources.extract_pool import extract_concurrency
+        from app.modules.sources.queue_control import is_queue_paused
+
+        vault_note = (Source.vault_path.is_not(None)) & (Source.vault_path != "")
+        pending = int(
+            (
+                await db.execute(
+                    select(func.count())
+                    .select_from(Source)
+                    .where(~vault_note, Source.status == "pending")
+                )
+            ).scalar_one()
+        )
+        running = int(
+            (
+                await db.execute(
+                    select(func.count())
+                    .select_from(Source)
+                    .where(
+                        ~vault_note,
+                        Source.status.in_(["extracting", "processing"]),
+                    )
+                )
+            ).scalar_one()
+        )
+        return {
+            "paused": is_queue_paused(),
+            "pending": pending,
+            "running": running,
+            "concurrency": extract_concurrency(),
+        }
+
+    async def list_pending_source_ids(self, db: AsyncSession) -> list[int]:
+        vault_note = (Source.vault_path.is_not(None)) & (Source.vault_path != "")
+        result = await db.execute(
+            select(Source.id)
+            .where(~vault_note, Source.status == "pending")
+            .order_by(Source.id.asc())
+        )
+        return [int(i) for (i,) in result.all()]
 
     async def delete_source(self, db: AsyncSession, source_id: int) -> None:
         row = await self.get(db, source_id)
@@ -682,9 +868,20 @@ class SourcesService:
         )
         db.add(entry)
         await db.flush()
+        linked_category_ids: set[int] = set()
         for tag in tags:
             category = await self._ensure_category(db, tag)
+            if category.id in linked_category_ids:
+                continue
+            linked_category_ids.add(category.id)
             db.add(EntryCategory(entry_id=entry.id, category_id=category.id))
+        # 合集分集：额外挂到「合集名」分类，知识页按合集收拢、对话可按合集限定检索
+        # 名称截断到 100（Category.name 上限）；勿经 is_good_tag，否则会长标题被侧栏清理误删
+        collection = (getattr(row, "collection_title", "") or "").strip()[:100]
+        if collection:
+            category = await self._ensure_category(db, collection)
+            if category.id not in linked_category_ids:
+                db.add(EntryCategory(entry_id=entry.id, category_id=category.id))
 
         row.status = "committed"
         row.stage = "committed"
@@ -822,24 +1019,45 @@ class SourcesService:
                     except OSError:
                         pass
                     await db.commit()
+                # 合集分集：用平台元数据把占位标题刷新为真实分集标题（如「p23 藏象学说-肝」）
+                if (getattr(row, "episode_no", 0) or 0) > 0:
+                    try:
+                        meta_title = await asyncio.to_thread(
+                            fetch_video_title_sync, video_url
+                        )
+                        if meta_title and meta_title != (row.title or ""):
+                            row.title = meta_title[:500]
+                            await db.commit()
+                    except Exception:  # noqa: BLE001
+                        pass
                 asr_cfg = await settings_ai_service.asr_config(db)
                 allow_local_audio = asr_cfg.get("allow_local_audio") == "1"
-                try:
-                    text, cues = await asyncio.to_thread(
-                        extract_video_subs_sync, video_url, work
+                # 抖音几乎必无外挂字幕，跳过字幕探测直接走 ASR，省一次 yt-dlp
+                skip_subs = _is_douyin_url(video_url)
+                sub_exc: ValueError | None = None
+                if skip_subs:
+                    sub_exc = ValueError(
+                        "该视频没有可下载字幕轨（抖音多数如此），将改用音轨语音转写。"
                     )
-                    # 仅在用户授权后下载音轨，供跟读播放（失败不阻断字幕路径）
-                    if allow_local_audio:
-                        try:
-                            audio_path = await asyncio.to_thread(
-                                download_audio_sync,
-                                video_url,
-                                audio_work,
-                                _resolve_cookie_file(),
-                            )
-                        except Exception:  # noqa: BLE001
-                            audio_path = None
-                except ValueError as sub_exc:
+                else:
+                    try:
+                        text, cues = await asyncio.to_thread(
+                            extract_video_subs_sync, video_url, work
+                        )
+                        # 仅在用户授权后下载音轨，供跟读播放（失败不阻断字幕路径）
+                        if allow_local_audio:
+                            try:
+                                audio_path = await asyncio.to_thread(
+                                    download_audio_sync,
+                                    video_url,
+                                    audio_work,
+                                    _resolve_cookie_file(),
+                                )
+                            except Exception:  # noqa: BLE001
+                                audio_path = None
+                    except ValueError as exc:
+                        sub_exc = exc
+                if sub_exc is not None:
                     # 无字幕 → 需音轨转写；未授权则不下载
                     if not allow_local_audio:
                         row.status = "need_transcript"

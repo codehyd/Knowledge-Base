@@ -7,6 +7,8 @@ export type DesktopConfig = {
   apiSpawnedByUs?: boolean;
   dataDir?: string;
   mediaCookiesReady?: boolean;
+  douyinCookiesReady?: boolean;
+  bilibiliCookiesReady?: boolean;
   mediaCookiesPath?: string;
 };
 
@@ -36,6 +38,11 @@ export type MediaCookiesExportResult = {
   path?: string;
   count?: number;
   loggedIn?: boolean;
+  site?: string;
+  douyinLoggedIn?: boolean;
+  bilibiliLoggedIn?: boolean;
+  douyinCount?: number;
+  bilibiliCount?: number;
   message?: string;
 };
 

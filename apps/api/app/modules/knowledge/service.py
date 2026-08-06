@@ -22,6 +22,8 @@ from app.modules.knowledge.schemas import (
     CategoryListOut,
     CategoryOut,
     CategoryUpdate,
+    CollectionListOut,
+    CollectionOut,
     EntryCategoriesIn,
     EntryDetailOut,
     EntryListItem,
@@ -87,8 +89,93 @@ class KnowledgeService:
             categories=list(lab.get("categories") or []),
             category_ids=list(lab.get("category_ids") or []),
             tags=list(lab.get("tags") or []),
+            collection_title=(getattr(src, "collection_title", None) or "").strip()
+            if src
+            else "",
+            episode_no=int(getattr(src, "episode_no", 0) or 0) if src else 0,
             created_at=row.created_at,
         )
+
+    async def _ensure_collection_category_links(self, db: AsyncSession) -> None:
+        """补齐合集名分类与分集挂靠（历史数据可能被低质量标签清理误删）。"""
+        rows = (
+            await db.execute(
+                select(Entry.id, Source.collection_title)
+                .join(Source, Source.id == Entry.source_id)
+                .where(
+                    Source.collection_title.is_not(None),
+                    Source.collection_title != "",
+                )
+            )
+        ).all()
+        if not rows:
+            return
+
+        titles = sorted({(t or "").strip()[:100] for _, t in rows if (t or "").strip()})
+        existing = {
+            (c.name or "").strip(): c
+            for c in (
+                await db.execute(select(Category).where(Category.name.in_(titles)))
+            ).scalars().all()
+        }
+        changed = False
+        for title in titles:
+            if title not in existing:
+                cat = Category(name=title, kind="tag", parent_id=None)
+                db.add(cat)
+                await db.flush()
+                existing[title] = cat
+                changed = True
+
+        for entry_id, raw_title in rows:
+            title = (raw_title or "").strip()[:100]
+            if not title:
+                continue
+            cat = existing.get(title)
+            if not cat:
+                continue
+            linked = await db.execute(
+                select(EntryCategory).where(
+                    EntryCategory.entry_id == int(entry_id),
+                    EntryCategory.category_id == int(cat.id),
+                )
+            )
+            if linked.scalar_one_or_none() is None:
+                db.add(EntryCategory(entry_id=int(entry_id), category_id=int(cat.id)))
+                changed = True
+        if changed:
+            await db.commit()
+
+    async def list_collections(self, db: AsyncSession) -> CollectionListOut:
+        """已入库视频合集：按 Source.collection_title 聚合，供侧栏文件夹展示。"""
+        await self._ensure_collection_category_links(db)
+        result = await db.execute(
+            select(
+                Source.collection_title,
+                func.count(Entry.id),
+                func.max(Source.episode_no),
+            )
+            .join(Entry, Entry.source_id == Source.id)
+            .where(
+                Source.collection_title.is_not(None),
+                Source.collection_title != "",
+            )
+            .group_by(Source.collection_title)
+            .order_by(Source.collection_title)
+        )
+        items: list[CollectionOut] = []
+        for title, count, max_ep in result.all():
+            name = (title or "").strip()
+            if not name:
+                continue
+            items.append(
+                CollectionOut(
+                    title=name,
+                    count=int(count or 0),
+                    episode_total=int(max_ep or 0),
+                )
+            )
+        return CollectionListOut(items=items)
 
     async def _labels_for_entries(
         self, db: AsyncSession, entry_ids: list[int]
@@ -254,15 +341,33 @@ class KnowledgeService:
         await db.delete(row)
         await db.commit()
 
+    async def _collection_titles(self, db: AsyncSession) -> set[str]:
+        result = await db.execute(
+            select(Source.collection_title)
+            .where(
+                Source.collection_title.is_not(None),
+                Source.collection_title != "",
+            )
+            .distinct()
+        )
+        return {(t or "").strip() for t in result.scalars().all() if (t or "").strip()}
+
     async def _prune_low_quality_categories(self, db: AsyncSession) -> None:
-        """拆除低质量标签挂靠并删除分类（书名英文切片、口号标题等）。"""
+        """拆除低质量标签挂靠并删除分类（书名英文切片、口号标题等）。
+
+        视频合集名通常很长、带括号，会误伤 is_good_tag；必须保留，否则合集芯片有数、列表为空。
+        """
+        protected = await self._collection_titles(db)
         result = await db.execute(select(Category))
         cats = list(result.scalars().all())
         removed = False
         for cat in cats:
             if self._cat_kind(cat) == "domain":
                 continue
-            if is_good_tag(cat.name or ""):
+            name = (cat.name or "").strip()
+            if name in protected:
+                continue
+            if is_good_tag(name):
                 continue
             links = await db.execute(
                 select(EntryCategory).where(EntryCategory.category_id == cat.id)
@@ -300,15 +405,18 @@ class KnowledgeService:
         page_size: int = 20,
     ) -> EntryListOut:
         page = max(1, page)
-        page_size = min(max(1, page_size), 100)
+        page_size = min(max(1, page_size), 200)
         kind_norm = (kind or "").strip().lower()
+        cat_name = category.strip()
 
         stmt = select(Entry)
         count_stmt = select(func.count()).select_from(Entry)
+        source_joined = False
 
         if kind_norm in {"book", "media", "note"}:
             stmt = stmt.join(Source, Source.id == Entry.source_id)
             count_stmt = count_stmt.join(Source, Source.id == Entry.source_id)
+            source_joined = True
             if kind_norm == "book":
                 stmt = stmt.where(Source.type.in_(BOOK_TYPES))
                 count_stmt = count_stmt.where(Source.type.in_(BOOK_TYPES))
@@ -319,9 +427,29 @@ class KnowledgeService:
                 stmt = stmt.where(Source.type == "note")
                 count_stmt = count_stmt.where(Source.type == "note")
 
-        if category.strip():
+        # 合集名可能因「低质量标签清理」丢掉 Category 挂靠；优先按 Source.collection_title 收拢
+        is_collection = False
+        if cat_name:
+            col_cnt = int(
+                (
+                    await db.execute(
+                        select(func.count())
+                        .select_from(Source)
+                        .where(Source.collection_title == cat_name)
+                    )
+                ).scalar_one()
+            )
+            is_collection = col_cnt > 0
+
+        if cat_name and is_collection:
+            if not source_joined:
+                stmt = stmt.join(Source, Source.id == Entry.source_id)
+                count_stmt = count_stmt.join(Source, Source.id == Entry.source_id)
+                source_joined = True
+            stmt = stmt.where(Source.collection_title == cat_name)
+            count_stmt = count_stmt.where(Source.collection_title == cat_name)
+        elif cat_name:
             # 按名过滤：domain / tag 均只匹配直接挂靠该 Category 的条目
-            cat_name = category.strip()
             cat_filter = (
                 select(EntryCategory.entry_id)
                 .join(Category, Category.id == EntryCategory.category_id)
@@ -338,8 +466,25 @@ class KnowledgeService:
             count_stmt = count_stmt.where(cond)
 
         total = int((await db.execute(count_stmt)).scalar_one())
+        # 合集分集：按 episode_no 升序，便于「文件夹」内按讲次浏览
+        if cat_name and is_collection:
+            if not source_joined:
+                stmt = stmt.join(Source, Source.id == Entry.source_id)
+            order = (
+                func.coalesce(Source.episode_no, 0).asc(),
+                desc(Entry.created_at),
+            )
+        elif cat_name:
+            if not source_joined:
+                stmt = stmt.outerjoin(Source, Source.id == Entry.source_id)
+            order = (
+                func.coalesce(Source.episode_no, 0).asc(),
+                desc(Entry.created_at),
+            )
+        else:
+            order = (desc(Entry.created_at),)
         result = await db.execute(
-            stmt.order_by(desc(Entry.created_at))
+            stmt.order_by(*order)
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
@@ -357,7 +502,11 @@ class KnowledgeService:
                 Source.type.in_(MEDIA_TYPES),
                 Source.status.in_(("ready", "committed")),
             )
-            .order_by(desc(Source.created_at))
+            .order_by(
+                Source.collection_title.asc(),
+                func.coalesce(Source.episode_no, 0).asc(),
+                desc(Source.created_at),
+            )
         )
         sources = list(result.scalars().all())
         if not sources:
@@ -390,6 +539,8 @@ class KnowledgeService:
                     status=src.status or "",
                     char_count=int(src.char_count or 0),
                     has_follow_along=sources_service.follow_along_ready(src.id),
+                    collection_title=(src.collection_title or "").strip(),
+                    episode_no=int(src.episode_no or 0),
                     created_at=src.created_at,
                 )
             )
@@ -649,12 +800,16 @@ class KnowledgeService:
         row = await db.get(Entry, entry_id)
         if not row:
             raise HTTPException(status_code=404, detail="条目不存在")
+        await self._delete_entry_row(db, row)
+        await db.commit()
+        await self._prune_empty_categories(db)
 
+    async def _delete_entry_row(self, db: AsyncSession, row: Entry) -> None:
+        """删除单条 Entry（不 commit），供批量删除复用。"""
         source_id = row.source_id
         source = await db.get(Source, source_id) if source_id else None
 
         # 笔记库中的手写笔记：与笔记页删除统一（来源 + 条目 + .md/.lake + uploads）
-        # 必须同时满足 type=note 且有 vault_path，避免误伤书籍/视频等
         if (
             source
             and (source.type or "") == "note"
@@ -663,11 +818,10 @@ class KnowledgeService:
             from app.modules.vault.service import vault_service
 
             await vault_service.delete_note(db, int(source.id))
-            await self._prune_empty_categories(db)
             return
 
         links = await db.execute(
-            select(EntryCategory).where(EntryCategory.entry_id == entry_id)
+            select(EntryCategory).where(EntryCategory.entry_id == row.id)
         )
         for link in links.scalars().all():
             await db.delete(link)
@@ -680,8 +834,42 @@ class KnowledgeService:
             source.progress = 100
             source.error_message = ""
 
-        await db.commit()
-        await self._prune_empty_categories(db)
+    async def delete_entries_batch(
+        self, db: AsyncSession, entry_ids: list[int]
+    ) -> int:
+        """批量删除知识条目；返回实际删除数。"""
+        seen: set[int] = set()
+        removed = 0
+        for raw_id in entry_ids:
+            eid = int(raw_id)
+            if eid <= 0 or eid in seen:
+                continue
+            seen.add(eid)
+            row = await db.get(Entry, eid)
+            if not row:
+                continue
+            await self._delete_entry_row(db, row)
+            removed += 1
+        if removed:
+            await db.commit()
+            await self._prune_empty_categories(db)
+        return removed
+
+    async def delete_collection(self, db: AsyncSession, title: str) -> int:
+        """删除合集下全部已入库分集条目。"""
+        name = (title or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="合集名不能为空")
+        result = await db.execute(
+            select(Entry.id)
+            .join(Source, Entry.source_id == Source.id)
+            .where(Source.collection_title == name)
+            .order_by(Entry.id.asc())
+        )
+        ids = [int(i) for (i,) in result.all()]
+        if not ids:
+            raise HTTPException(status_code=404, detail="未找到该合集的已入库分集")
+        return await self.delete_entries_batch(db, ids)
 
     def _ann_out(self, row: EntryAnnotation) -> AnnotationOut:
         kind = (getattr(row, "kind", None) or "").strip().lower()

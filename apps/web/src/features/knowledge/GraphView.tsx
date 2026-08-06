@@ -16,6 +16,8 @@ import styles from "./GraphView.module.css";
 type GraphNode = VaultGraphNode & {
   id: string;
   phantom?: boolean;
+  /** 双链连通分量（分类边不参与），用于散开无关节点 */
+  compId: number;
   x: number;
   y: number;
   vx: number;
@@ -105,23 +107,98 @@ class GraphErrorBoundary extends Component<
   }
 }
 
-function buildGraphData(raw: VaultGraph): { nodes: GraphNode[]; links: GraphLink[] } {
-  const nodes: GraphNode[] = raw.nodes.map((n, i) => {
-    const angle = (i / Math.max(raw.nodes.length, 1)) * Math.PI * 2;
-    const r = 80 + (i % 5) * 18;
-    return {
-      ...n,
-      id: n.id,
-      phantom: false,
-      x: Math.cos(angle) * r,
-      y: Math.sin(angle) * r,
-      vx: 0,
-      vy: 0,
-    };
+/** 并查集：仅双链（+断链附着）决定「是否关联」；分类边不粘合无关节点 */
+function assignComponents(nodes: GraphNode[], links: GraphLink[]) {
+  const parent = new Map<string, string>();
+  const find = (x: string): string => {
+    let p = parent.get(x) ?? x;
+    if (!parent.has(x)) parent.set(x, x);
+    while (p !== (parent.get(p) ?? p)) {
+      const gp = parent.get(p) ?? p;
+      parent.set(p, parent.get(gp) ?? gp);
+      p = parent.get(p) ?? p;
+    }
+    return p;
+  };
+  const union = (a: string, b: string) => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  };
+
+  for (const n of nodes) parent.set(n.id, n.id);
+  for (const l of links) {
+    if (l.kind === "in_category") continue;
+    if (l.resolved || l.target.startsWith("broken:")) {
+      union(l.source, l.target);
+    }
+  }
+
+  const rootIndex = new Map<string, number>();
+  let next = 0;
+  for (const n of nodes) {
+    const root = find(n.id);
+    if (!rootIndex.has(root)) rootIndex.set(root, next++);
+    n.compId = rootIndex.get(root)!;
+  }
+  return next;
+}
+
+/** Obsidian 风格初置：簇按圆周散开，孤立点落在更外圈 */
+function layoutLikeObsidian(nodes: GraphNode[]) {
+  const byComp = new Map<number, GraphNode[]>();
+  for (const n of nodes) {
+    const list = byComp.get(n.compId) || [];
+    list.push(n);
+    byComp.set(n.compId, list);
+  }
+  const comps = [...byComp.entries()].sort((a, b) => b[1].length - a[1].length);
+  const clusters = comps.filter(([, ns]) => ns.length > 1);
+  const isolates = comps.filter(([, ns]) => ns.length === 1);
+
+  const clusterOrbit = 260 + Math.max(0, clusters.length - 1) * 36;
+  clusters.forEach(([, ns], i) => {
+    const angle =
+      (i / Math.max(clusters.length, 1)) * Math.PI * 2 - Math.PI / 2;
+    const cx = Math.cos(angle) * clusterOrbit;
+    const cy = Math.sin(angle) * clusterOrbit;
+    const localR = 36 + Math.sqrt(ns.length) * 18;
+    ns.forEach((n, j) => {
+      const a2 = (j / Math.max(ns.length, 1)) * Math.PI * 2 + i * 0.35;
+      const jitter = 8 + (j % 3) * 6;
+      n.x = cx + Math.cos(a2) * (localR + jitter);
+      n.y = cy + Math.sin(a2) * (localR + jitter);
+      n.vx = 0;
+      n.vy = 0;
+    });
   });
+
+  const isoOrbit = clusterOrbit + 200 + Math.min(isolates.length, 24) * 4;
+  isolates.forEach(([, ns], i) => {
+    const angle =
+      (i / Math.max(isolates.length, 1)) * Math.PI * 2 + 0.4;
+    // 外圈再按层错开，避免孤立点叠成一圈粥
+    const ring = isoOrbit + (i % 3) * 48;
+    ns[0].x = Math.cos(angle) * ring;
+    ns[0].y = Math.sin(angle) * ring;
+    ns[0].vx = 0;
+    ns[0].vy = 0;
+  });
+}
+
+function buildGraphData(raw: VaultGraph): { nodes: GraphNode[]; links: GraphLink[] } {
+  const nodes: GraphNode[] = raw.nodes.map((n) => ({
+    ...n,
+    id: n.id,
+    phantom: false,
+    compId: 0,
+    x: 0,
+    y: 0,
+    vx: 0,
+    vy: 0,
+  }));
   const known = new Set(nodes.map((n) => n.id));
   const links: GraphLink[] = [];
-  let phantomIdx = 0;
 
   for (const e of raw.edges) {
     let targetId = e.target;
@@ -129,7 +206,6 @@ function buildGraphData(raw: VaultGraph): { nodes: GraphNode[]; links: GraphLink
       targetId = `broken:${e.source}::${e.target}`;
       if (!known.has(targetId)) {
         known.add(targetId);
-        const angle = phantomIdx++ * 0.9;
         nodes.push({
           id: targetId,
           title: e.label || e.target,
@@ -137,8 +213,9 @@ function buildGraphData(raw: VaultGraph): { nodes: GraphNode[]; links: GraphLink
           source_id: null,
           degree: 0,
           phantom: true,
-          x: Math.cos(angle) * 160,
-          y: Math.sin(angle) * 160,
+          compId: 0,
+          x: 0,
+          y: 0,
           vx: 0,
           vy: 0,
         });
@@ -153,24 +230,70 @@ function buildGraphData(raw: VaultGraph): { nodes: GraphNode[]; links: GraphLink
     });
   }
 
+  assignComponents(nodes, links);
+  layoutLikeObsidian(nodes);
   return { nodes, links };
 }
 
-function simStep(nodes: GraphNode[], links: GraphLink[], width: number, height: number) {
+function simStep(nodes: GraphNode[], links: GraphLink[], _width: number, _height: number) {
   const byId = new Map(nodes.map((n) => [n.id, n]));
-  const cx = width / 2;
-  const cy = height / 2;
 
-  // repulsion
+  // 分量质心
+  const centroids = new Map<number, { x: number; y: number; n: number }>();
+  for (const n of nodes) {
+    const c = centroids.get(n.compId) || { x: 0, y: 0, n: 0 };
+    c.x += n.x;
+    c.y += n.y;
+    c.n += 1;
+    centroids.set(n.compId, c);
+  }
+  for (const c of centroids.values()) {
+    c.x /= c.n;
+    c.y /= c.n;
+  }
+
+  // 簇与簇互相推开（Obsidian：无关子图分开）
+  const comps = [...centroids.entries()];
+  for (let i = 0; i < comps.length; i += 1) {
+    for (let j = i + 1; j < comps.length; j += 1) {
+      const [idA, ca] = comps[i];
+      const [idB, cb] = comps[j];
+      let dx = ca.x - cb.x;
+      let dy = ca.y - cb.y;
+      const dist2 = dx * dx + dy * dy || 0.01;
+      const dist = Math.sqrt(dist2);
+      const minDist = 220 + Math.min(ca.n, 12) * 8 + Math.min(cb.n, 12) * 8;
+      if (dist >= minDist) continue;
+      const push = ((minDist - dist) / minDist) * 0.35;
+      dx = (dx / dist) * push;
+      dy = (dy / dist) * push;
+      for (const n of nodes) {
+        if (n.compId === idA) {
+          n.vx += dx;
+          n.vy += dy;
+        } else if (n.compId === idB) {
+          n.vx -= dx;
+          n.vy -= dy;
+        }
+      }
+    }
+  }
+
+  // 点排斥：更强，并对不同分量额外加力
   for (let i = 0; i < nodes.length; i += 1) {
     for (let j = i + 1; j < nodes.length; j += 1) {
       const a = nodes[i];
       const b = nodes[j];
       let dx = a.x - b.x;
       let dy = a.y - b.y;
-      let dist2 = dx * dx + dy * dy || 0.01;
+      const dist2 = dx * dx + dy * dy || 0.01;
       const dist = Math.sqrt(dist2);
-      const force = 1200 / dist2;
+      const same = a.compId === b.compId;
+      const charge = same ? 2800 : 7200;
+      let force = charge / dist2;
+      if (force > 8) force = 8;
+      // 软碰撞：过近再顶开一点
+      if (dist < 28) force += (28 - dist) * 0.08;
       dx = (dx / dist) * force;
       dy = (dy / dist) * force;
       a.vx += dx;
@@ -180,7 +303,7 @@ function simStep(nodes: GraphNode[], links: GraphLink[], width: number, height: 
     }
   }
 
-  // springs
+  // 弹簧：双链紧、分类边很长很弱（只作视觉提示，不把无关点粘成一团）
   for (const link of links) {
     const a = byId.get(link.source);
     const b = byId.get(link.target);
@@ -188,8 +311,10 @@ function simStep(nodes: GraphNode[], links: GraphLink[], width: number, height: 
     const dx = b.x - a.x;
     const dy = b.y - a.y;
     const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
-    const ideal = link.resolved ? 110 : 140;
-    const f = (dist - ideal) * 0.02;
+    const isCat = link.kind === "in_category";
+    const ideal = isCat ? 240 : link.resolved ? 95 : 130;
+    const k = isCat ? 0.004 : 0.035;
+    const f = (dist - ideal) * k;
     const fx = (dx / dist) * f;
     const fy = (dy / dist) * f;
     a.vx += fx;
@@ -198,12 +323,19 @@ function simStep(nodes: GraphNode[], links: GraphLink[], width: number, height: 
     b.vy -= fy;
   }
 
-  // center gravity + integrate（世界坐标，不钳到画布，便于缩放后查看）
+  // 弱全局向心 + 分量内聚；孤立点几乎不向中心吸
   for (const n of nodes) {
-    n.vx += (cx - n.x) * 0.005;
-    n.vy += (cy - n.y) * 0.005;
-    n.vx *= 0.85;
-    n.vy *= 0.85;
+    const c = centroids.get(n.compId);
+    const size = c?.n ?? 1;
+    if (c && size > 1) {
+      n.vx += (c.x - n.x) * 0.018;
+      n.vy += (c.y - n.y) * 0.018;
+    }
+    const globalG = size === 1 ? 0.0002 : 0.0006;
+    n.vx += (0 - n.x) * globalG;
+    n.vy += (0 - n.y) * globalG;
+    n.vx *= 0.86;
+    n.vy *= 0.86;
     n.x += n.vx;
     n.y += n.vy;
   }
@@ -454,10 +586,10 @@ function CanvasGraph({
       const focus = focusRef.current;
       const focusing = Boolean(focus && sel);
       // 点选聚焦时暂停力导向，避免节点继续漂、随后又被二次 fit
-      if (ticks < 180 && !sel) {
+      if (ticks < 320 && !sel) {
         simStep(ns, ls, width, height);
         ticks += 1;
-      } else if (!didFit && ticks >= 180) {
+      } else if (!didFit && ticks >= 320) {
         didFit = true;
         if (!userViewRef.current && !focusSettledRef.current && !sel) {
           fitView(false, null);
@@ -871,7 +1003,7 @@ export function GraphView({ onOpenNode, onError }: GraphViewProps) {
                   刷新
                 </button>
                 <span className={styles.hudTip}>
-                  点击节点查看关联 · 滚轮缩放 · 拖空白平移
+                  无双链的节点会散开在外围 · 点击查看关联 · 滚轮缩放 · 拖空白平移
                 </span>
               </div>
             </div>

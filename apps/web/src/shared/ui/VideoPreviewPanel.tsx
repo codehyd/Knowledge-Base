@@ -59,7 +59,7 @@ export function VideoPreviewPanel({ title, url, compact = false }: Props) {
         </Typography.Text>
         {!compact ? (
           <Typography.Paragraph type="secondary" className={styles.hint}>
-            桌面端会使用与「抖音登录」相同的 Cookie 在应用内打开网页播放；B站/YouTube
+            桌面端会使用「抖音 / B站登录」同一会话在应用内打开网页播放；YouTube
             等也可尝试应用内播放或浏览器打开。
           </Typography.Paragraph>
         ) : null}

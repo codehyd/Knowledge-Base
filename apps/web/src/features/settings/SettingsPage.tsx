@@ -132,7 +132,10 @@ export function SettingsPage() {
           mirrorPresets={feed.mirrorPresets}
           mirrorSaving={feed.mirrorSaving}
           mediaCookiesReady={feed.mediaCookiesReady}
+          douyinCookiesReady={feed.douyinCookiesReady}
+          bilibiliCookiesReady={feed.bilibiliCookiesReady}
           mediaLoginBusy={feed.mediaLoginBusy}
+          bilibiliLoginBusy={feed.bilibiliLoginBusy}
           allowLocalAudio={ai.allowLocalAudio}
           asrMode={ai.asrMode}
           asrBaseUrl={ai.asrBaseUrl}
@@ -157,6 +160,7 @@ export function SettingsPage() {
           onClearCtextKey={feed.onClearCtextKey}
           onSaveMirror={feed.onSaveMirror}
           onLoginDouyin={feed.onLoginDouyin}
+          onLoginBilibili={feed.onLoginBilibili}
           onSaveMediaSettings={ai.onSaveMediaSettings}
         />
       ) : null}

@@ -4,6 +4,7 @@ import {
   ApartmentOutlined,
   BookOutlined,
   DeleteOutlined,
+  DownOutlined,
   EditOutlined,
   EyeOutlined,
   FolderOutlined,
@@ -14,12 +15,26 @@ import {
   SearchOutlined,
   TagsOutlined,
   UnorderedListOutlined,
+  UpOutlined,
   VideoCameraOutlined,
 } from "@ant-design/icons";
-import { App, Button, Dropdown, Empty, Input, Modal, Popconfirm, Select, Tag, Typography } from "antd";
+import {
+  App,
+  Button,
+  Checkbox,
+  Dropdown,
+  Empty,
+  Input,
+  Modal,
+  Popconfirm,
+  Select,
+  Tag,
+  Typography,
+} from "antd";
 import {
   api,
   type CategoryItem,
+  type CollectionItem,
   type EntryDetail,
   type EntryListItem,
 } from "@/shared/api/client";
@@ -33,6 +48,17 @@ import { MediaShelfModal } from "./MediaShelfModal";
 import styles from "./KnowledgePage.module.css";
 
 const ENTRY_DND_MIME = "text/kongku-entry";
+const CATS_EXPANDED_KEY = "kongku-knowledge-cats-below-expanded";
+
+function readCatsBelowExpanded(): boolean {
+  try {
+    const raw = localStorage.getItem(CATS_EXPANDED_KEY);
+    if (raw === null) return true;
+    return raw !== "0" && raw !== "false";
+  } catch {
+    return true;
+  }
+}
 
 function isPdfEntry(detail: EntryDetail | null) {
   const filename = (detail?.source_filename || "").toLowerCase();
@@ -107,10 +133,12 @@ function formatDate(value?: string | null) {
 }
 
 export function KnowledgePage() {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [categories, setCategories] = useState<CategoryItem[]>([]);
+  const [collections, setCollections] = useState<CollectionItem[]>([]);
+  const [catsBelowExpanded, setCatsBelowExpanded] = useState(readCatsBelowExpanded);
   const [totalEntries, setTotalEntries] = useState(0);
   const [items, setItems] = useState<EntryListItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -118,6 +146,11 @@ export function KnowledgePage() {
   const [q, setQ] = useState("");
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [batchIds, setBatchIds] = useState<number[]>([]);
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [detailInfoOpen, setDetailInfoOpen] = useState(false);
+  const [detailVideoOpen, setDetailVideoOpen] = useState(false);
+  const [detailTall, setDetailTall] = useState(false);
   const [detail, setDetail] = useState<EntryDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -134,6 +167,8 @@ export function KnowledgePage() {
   const [dropDomainId, setDropDomainId] = useState<number | null>(null);
   const [assigningEntry, setAssigningEntry] = useState(false);
   const entryDragMovedRef = useRef(false);
+  const listPaneRef = useRef<HTMLDivElement | null>(null);
+  const listItemRefs = useRef<Map<number, HTMLLIElement>>(new Map());
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewEntryId, setPreviewEntryId] = useState<number | null>(null);
   const [previewSourceId, setPreviewSourceId] = useState<number | null>(null);
@@ -201,15 +236,54 @@ export function KnowledgePage() {
   }, [searchParams, setSearchParams, selectEntryBySource]);
 
   const refreshCategories = useCallback(async () => {
-    const res = await api.listCategories();
-    setCategories(res.items);
-    setTotalEntries(res.total_entries);
+    const [catRes, colRes] = await Promise.all([
+      api.listCategories(),
+      api.listCollections().catch(() => ({ items: [] as CollectionItem[] })),
+    ]);
+    setCategories(catRes.items);
+    setTotalEntries(catRes.total_entries);
+    setCollections(colRes.items || []);
   }, []);
 
   const domains = useMemo(
     () => categories.filter((c) => (c.kind || "tag") === "domain"),
     [categories],
   );
+
+  const collectionTitleSet = useMemo(
+    () => new Set(collections.map((c) => c.title)),
+    [collections],
+  );
+
+  const activeCollection = collectionTitleSet.has(category) ? category : "";
+
+  useEffect(() => {
+    // 离开合集视图时清空多选
+    setBatchIds([]);
+  }, [activeCollection]);
+
+  useEffect(() => {
+    // 切换条目时默认收起次要块，把高度留给正文/跟读
+    setDetailInfoOpen(false);
+    setDetailVideoOpen(false);
+  }, [selectedId]);
+
+  const scrollListToEntry = useCallback((id: number) => {
+    setSelectedId(id);
+    // 等选中态渲染后再滚，避免 sticky 顶栏高度未就绪
+    window.requestAnimationFrame(() => {
+      const pane = listPaneRef.current;
+      const row = listItemRefs.current.get(id);
+      if (!pane || !row) return;
+      const sticky = pane.querySelector<HTMLElement>("[data-collection-sticky]");
+      const offset = (sticky?.offsetHeight ?? 0) + 8;
+      const top =
+        pane.scrollTop +
+        (row.getBoundingClientRect().top - pane.getBoundingClientRect().top) -
+        offset;
+      pane.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+    });
+  }, []);
 
   async function createDomain() {
     const name = domainName.trim();
@@ -328,7 +402,8 @@ export function KnowledgePage() {
         category,
         kind,
         page: 1,
-        page_size: 50,
+        // 合集内按讲次浏览，需要更大一页
+        page_size: category ? 200 : 50,
       });
       setItems(res.items);
       setTotal(res.total);
@@ -407,6 +482,7 @@ export function KnowledgePage() {
           : "已删除知识条目；来源可在喂养页重新入库",
       );
       setSelectedId((prev) => (prev === id ? null : prev));
+      setBatchIds((prev) => prev.filter((x) => x !== id));
       setDetail(null);
       setPreviewOpen(false);
       await refreshCategories();
@@ -414,6 +490,107 @@ export function KnowledgePage() {
     } catch (err) {
       message.error(formatError(err, "删除失败"));
     }
+  }
+
+  function toggleBatchId(id: number, on: boolean) {
+    setBatchIds((prev) => {
+      if (on) return prev.includes(id) ? prev : [...prev, id];
+      return prev.filter((x) => x !== id);
+    });
+  }
+
+  function selectAllInCollection() {
+    setBatchIds(items.map((i) => i.id));
+  }
+
+  async function onBatchDeleteSelected() {
+    if (batchIds.length === 0 || batchBusy) return;
+    modal.confirm({
+      title: `删除所选 ${batchIds.length} 集？`,
+      content: (
+        <div className={styles.deleteConfirmBody}>
+          <p className={styles.deleteConfirmLead}>将从知识库移除所选分集，不可恢复：</p>
+          <ul className={styles.deleteConfirmPoints}>
+            <li>知识库中的条目与检索切片</li>
+            <li>喂养来源恢复为「可重新入库」（不删原文件）</li>
+          </ul>
+        </div>
+      ),
+      okText: "删除所选",
+      okType: "danger",
+      cancelText: "取消",
+      onOk: async () => {
+        setBatchBusy(true);
+        try {
+          const ids = [...batchIds];
+          const res = await api.batchDeleteEntries(ids);
+          if (selectedId && ids.includes(selectedId)) {
+            setSelectedId(null);
+            setDetail(null);
+            setPreviewOpen(false);
+          }
+          setBatchIds([]);
+          await refreshCategories();
+          await refreshEntries();
+          message.success(
+            res.removed > 0
+              ? `已删除 ${res.removed} 集；来源可在喂养页重新入库`
+              : "没有可删除的条目",
+          );
+        } catch (err) {
+          message.error(formatError(err, "批量删除失败"));
+          throw err;
+        } finally {
+          setBatchBusy(false);
+        }
+      },
+    });
+  }
+
+  async function onDeleteWholeCollection() {
+    if (!activeCollection || batchBusy) return;
+    const count = total || items.length;
+    modal.confirm({
+      title: "删除整个合集？",
+      content: (
+        <div className={styles.deleteConfirmBody}>
+          <p className={styles.deleteConfirmLead}>
+            将删除「{activeCollection}」下全部 {count} 集已入库分集：
+          </p>
+          <ul className={styles.deleteConfirmPoints}>
+            <li>知识库中的条目与检索切片</li>
+            <li>喂养来源恢复为「可重新入库」（不删原文件）</li>
+          </ul>
+        </div>
+      ),
+      okText: "删除合集",
+      okType: "danger",
+      cancelText: "取消",
+      onOk: async () => {
+        setBatchBusy(true);
+        try {
+          const title = activeCollection;
+          const res = await api.deleteCollection(title);
+          setSelectedId(null);
+          setDetail(null);
+          setPreviewOpen(false);
+          setBatchIds([]);
+          setCategory("");
+          await refreshCategories();
+          await refreshEntries();
+          message.success(
+            res.removed > 0
+              ? `已删除合集（${res.removed} 集）；来源可在喂养页重新入库`
+              : "合集已为空",
+          );
+        } catch (err) {
+          message.error(formatError(err, "删除合集失败"));
+          throw err;
+        } finally {
+          setBatchBusy(false);
+        }
+      },
+    });
   }
 
   async function openPreview(entryId: number) {
@@ -661,125 +838,275 @@ export function KnowledgePage() {
 
       <div className={styles.layout}>
         <div className={styles.cats}>
-          <div className={styles.catScroll}>
-            <div className={styles.catHead}>
-              <span>分类</span>
-            </div>
-            <button
-              type="button"
-              className={`${styles.catItem}${category === "" ? ` ${styles.catActive}` : ""}`}
-              onClick={() => setCategory("")}
-            >
-              <span>全部</span>
-              <em>{totalEntries}</em>
-            </button>
-
-            {domains.map((domain) => (
-              <Dropdown
-                key={domain.id}
-                trigger={["contextMenu"]}
-                menu={{
-                  items: [
-                    {
-                      key: "rename",
-                      icon: <EditOutlined />,
-                      label: "重命名",
-                      onClick: () => {
-                        setRenameTarget(domain);
-                        setRenameValue(domain.name);
-                      },
-                    },
-                    {
-                      key: "delete",
-                      icon: <DeleteOutlined />,
-                      danger: true,
-                      label: "删除分类",
-                      onClick: () => {
-                        Modal.confirm({
-                          title: `删除「${domain.name}」？`,
-                          content: "删除后，已挂到该分类的条目会解除挂靠；自动标签不受影响。",
-                          okText: "删除",
-                          okType: "danger",
-                          onOk: () => removeDomain(domain),
-                        });
-                      },
-                    },
-                  ],
-                }}
+          <div className={styles.catsRow}>
+            <div className={styles.catScroll}>
+              <div className={styles.catHead}>
+                <span>分类</span>
+              </div>
+              <button
+                type="button"
+                className={`${styles.catItem}${
+                  category === "" ? ` ${styles.catActive}` : ""
+                }`}
+                onClick={() => setCategory("")}
               >
-                <div
-                  className={`${styles.domainRow}${
-                    dropDomainId === domain.id ? ` ${styles.domainDropOver}` : ""
-                  }`}
-                  title="左键筛选 · 右键管理 · 可拖入条目"
-                  onDragOver={(e) => {
-                    if (draggingEntryId == null) return;
-                    e.preventDefault();
-                    e.dataTransfer.dropEffect = "copy";
-                    setDropDomainId(domain.id);
-                  }}
-                  onDragLeave={(e) => {
-                    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
-                      setDropDomainId((cur) => (cur === domain.id ? null : cur));
-                    }
-                  }}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const raw =
-                      e.dataTransfer.getData(ENTRY_DND_MIME) ||
-                      e.dataTransfer.getData("text/plain");
-                    const id = Number(raw || draggingEntryId);
-                    if (Number.isFinite(id) && id > 0) {
-                      void assignEntryToDomain(id, domain);
-                    } else {
-                      setDropDomainId(null);
-                      setDraggingEntryId(null);
-                    }
+                <span>全部</span>
+                <em>{totalEntries}</em>
+              </button>
+
+              {domains.map((domain) => (
+                <Dropdown
+                  key={domain.id}
+                  trigger={["contextMenu"]}
+                  menu={{
+                    items: [
+                      {
+                        key: "rename",
+                        icon: <EditOutlined />,
+                        label: "重命名",
+                        onClick: () => {
+                          setRenameTarget(domain);
+                          setRenameValue(domain.name);
+                        },
+                      },
+                      {
+                        key: "delete",
+                        icon: <DeleteOutlined />,
+                        danger: true,
+                        label: "删除分类",
+                        onClick: () => {
+                          Modal.confirm({
+                            title: `删除「${domain.name}」？`,
+                            content:
+                              "删除后，已挂到该分类的条目会解除挂靠；自动标签不受影响。",
+                            okText: "删除",
+                            okType: "danger",
+                            onOk: () => removeDomain(domain),
+                          });
+                        },
+                      },
+                    ],
                   }}
                 >
-                  <button
-                    type="button"
-                    className={`${styles.catItem} ${styles.domainItem}${
-                      category === domain.name ? ` ${styles.catActive}` : ""
+                  <div
+                    className={`${styles.domainRow}${
+                      dropDomainId === domain.id ? ` ${styles.domainDropOver}` : ""
                     }`}
-                    onClick={() => setCategory(domain.name)}
+                    title="左键筛选 · 右键管理 · 可拖入条目"
+                    onDragOver={(e) => {
+                      if (draggingEntryId == null) return;
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "copy";
+                      setDropDomainId(domain.id);
+                    }}
+                    onDragLeave={(e) => {
+                      if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                        setDropDomainId((cur) => (cur === domain.id ? null : cur));
+                      }
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      const raw =
+                        e.dataTransfer.getData(ENTRY_DND_MIME) ||
+                        e.dataTransfer.getData("text/plain");
+                      const id = Number(raw || draggingEntryId);
+                      if (Number.isFinite(id) && id > 0) {
+                        void assignEntryToDomain(id, domain);
+                      } else {
+                        setDropDomainId(null);
+                        setDraggingEntryId(null);
+                      }
+                    }}
                   >
-                    <span>
-                      <FolderOutlined className={styles.catIcon} />
-                      {domain.name}
-                    </span>
-                    <em>{domain.count}</em>
-                  </button>
-                </div>
-              </Dropdown>
-            ))}
+                    <button
+                      type="button"
+                      className={`${styles.catItem} ${styles.domainItem}${
+                        category === domain.name ? ` ${styles.catActive}` : ""
+                      }`}
+                      onClick={() => setCategory(domain.name)}
+                    >
+                      <span>
+                        <FolderOutlined className={styles.catIcon} />
+                        {domain.name}
+                      </span>
+                      <em>{domain.count}</em>
+                    </button>
+                  </div>
+                </Dropdown>
+              ))}
 
-            {domains.length === 0 ? (
-              <p className={styles.catHint}>
-                新建分类后，可把下方条目拖到分类上。
-              </p>
-            ) : draggingEntryId != null ? (
-              <p className={styles.catHint}>拖到某个分类松开即可放入</p>
-            ) : null}
+              {domains.length === 0 ? (
+                <p className={styles.catHint}>
+                  新建分类后，可把下方条目拖到分类上。
+                </p>
+              ) : draggingEntryId != null ? (
+                <p className={styles.catHint}>拖到某个分类松开即可放入</p>
+              ) : null}
+            </div>
+
+            <div className={styles.catActions}>
+              <Button
+                type="text"
+                size="small"
+                className={styles.catAdd}
+                icon={<PlusOutlined />}
+                onClick={() => {
+                  setDomainName("");
+                  setDomainModalOpen(true);
+                }}
+                title="新建分类"
+              >
+                新建
+              </Button>
+              <Button
+                type="text"
+                size="small"
+                className={`${styles.catExpand}${
+                  catsBelowExpanded ? ` ${styles.catExpandOpen}` : ""
+                }`}
+                icon={<DownOutlined className={styles.catExpandIcon} />}
+                disabled={collections.length === 0}
+                title={
+                  collections.length === 0
+                    ? "暂无合集可展开"
+                    : catsBelowExpanded
+                      ? "收起下方合集"
+                      : "展开下方合集"
+                }
+                aria-expanded={catsBelowExpanded}
+                onClick={() => {
+                  setCatsBelowExpanded((prev) => {
+                    const next = !prev;
+                    try {
+                      localStorage.setItem(CATS_EXPANDED_KEY, next ? "1" : "0");
+                    } catch {
+                      /* ignore */
+                    }
+                    return next;
+                  });
+                }}
+              >
+                {catsBelowExpanded ? "收起" : "展开"}
+              </Button>
+            </div>
           </div>
 
-          <Button
-            type="text"
-            size="small"
-            className={styles.catAdd}
-            icon={<PlusOutlined />}
-            onClick={() => {
-              setDomainName("");
-              setDomainModalOpen(true);
-            }}
-            title="新建分类"
-          >
-            新建
-          </Button>
+          {collections.length > 0 ? (
+            <div
+              className={`${styles.collectionsWrap}${
+                catsBelowExpanded ? ` ${styles.collectionsWrapOpen}` : ""
+              }`}
+              aria-hidden={!catsBelowExpanded}
+            >
+              <div className={styles.collectionsWrapInner}>
+                <div className={`${styles.catsRow} ${styles.collectionsRow}`}>
+                  <div className={styles.catScroll}>
+                    <div className={styles.catHead}>
+                      <span>合集</span>
+                    </div>
+                    {collections.map((col) => {
+                      const active = category === col.title;
+                      return (
+                        <button
+                          key={col.title}
+                          type="button"
+                          className={`${styles.catItem} ${styles.collectionItem}${
+                            active ? ` ${styles.catActive}` : ""
+                          }`}
+                          title={`${col.title}（${col.count} 集）· 点击查看分集`}
+                          tabIndex={catsBelowExpanded ? 0 : -1}
+                          onClick={() => setCategory(col.title)}
+                        >
+                          <span>
+                            <FolderOutlined className={styles.catIcon} />
+                            {col.title}
+                          </span>
+                          <em>{col.count}</em>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </div>
 
-        <div className={styles.listPane}>
+        <div className={styles.listPane} ref={listPaneRef}>
+          {activeCollection ? (
+            <div className={styles.collectionPanel} data-collection-sticky>
+              <div className={styles.collectionHead}>
+                <div className={styles.collectionTitleBlock}>
+                  <FolderOutlined className={styles.collectionFolderIcon} />
+                  <div className={styles.collectionTitleText}>
+                    <strong title={activeCollection}>{activeCollection}</strong>
+                    <em>{total} 集</em>
+                  </div>
+                </div>
+                <div className={styles.collectionBatchBar} role="group" aria-label="合集批量操作">
+                  <button
+                    type="button"
+                    className={styles.collectionBatchLink}
+                    disabled={batchBusy || items.length === 0}
+                    onClick={selectAllInCollection}
+                  >
+                    全选
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.collectionBatchLink}
+                    disabled={batchBusy || batchIds.length === 0}
+                    onClick={() => setBatchIds([])}
+                  >
+                    清空
+                  </button>
+                  <span className={styles.collectionBatchSep} aria-hidden />
+                  <button
+                    type="button"
+                    className={`${styles.collectionBatchLink} ${styles.collectionBatchDanger}`}
+                    disabled={batchBusy || batchIds.length === 0}
+                    title={
+                      batchIds.length > 0
+                        ? `删除所选 ${batchIds.length} 集`
+                        : "删除所选"
+                    }
+                    onClick={() => void onBatchDeleteSelected()}
+                  >
+                    删所选{batchIds.length > 0 ? ` ${batchIds.length}` : ""}
+                  </button>
+                  <button
+                    type="button"
+                    className={`${styles.collectionBatchLink} ${styles.collectionBatchDanger}`}
+                    disabled={batchBusy || total === 0}
+                    title="删除整个合集"
+                    onClick={() => void onDeleteWholeCollection()}
+                  >
+                    删合集
+                  </button>
+                </div>
+              </div>
+              {items.length > 0 ? (
+                <div className={styles.episodeStrip} aria-label="合集分集快捷跳转">
+                  {items.map((ep) => (
+                    <button
+                      key={ep.id}
+                      type="button"
+                      className={`${styles.episodeChip}${
+                        selectedId === ep.id ? ` ${styles.episodeChipActive}` : ""
+                      }`}
+                      title={ep.title}
+                      onClick={() => scrollListToEntry(ep.id)}
+                    >
+                      {ep.episode_no && ep.episode_no > 0
+                        ? `P${ep.episode_no}`
+                        : ep.title.slice(0, 8)}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           {items.length === 0 ? (
             <div className={styles.emptyBox}>
               <Empty
@@ -801,10 +1128,14 @@ export function KnowledgePage() {
               {items.map((item) => (
                 <li
                   key={item.id}
+                  ref={(node) => {
+                    if (node) listItemRefs.current.set(item.id, node);
+                    else listItemRefs.current.delete(item.id);
+                  }}
                   className={`${styles.listRow}${
                     draggingEntryId === item.id ? ` ${styles.listDragging}` : ""
-                  }`}
-                  draggable={!assigningEntry}
+                  }${activeCollection ? ` ${styles.listRowBatch}` : ""}`}
+                  draggable={!assigningEntry && !activeCollection}
                   onDragStart={(e) => {
                     entryDragMovedRef.current = false;
                     setDraggingEntryId(item.id);
@@ -822,6 +1153,21 @@ export function KnowledgePage() {
                     setDropDomainId(null);
                   }}
                 >
+                  <div
+                    className={`${styles.listCard}${
+                      selectedId === item.id ? ` ${styles.listCardActive}` : ""
+                    }${batchIds.includes(item.id) ? ` ${styles.listCardChecked}` : ""}`}
+                  >
+                  {activeCollection ? (
+                    <label className={styles.listBatchCheckWrap}>
+                      <Checkbox
+                        checked={batchIds.includes(item.id)}
+                        disabled={batchBusy}
+                        onChange={(e) => toggleBatchId(item.id, e.target.checked)}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    </label>
+                  ) : null}
                   <button
                     type="button"
                     className={`${styles.listItem}${
@@ -835,9 +1181,15 @@ export function KnowledgePage() {
                       setSelectedId(item.id);
                     }}
                   >
-                    <strong title={item.title || `条目 #${item.id}`}>
-                      {item.title || `条目 #${item.id}`}
-                    </strong>
+                    <div
+                      className={styles.listTitleRow}
+                      title={item.title || `条目 #${item.id}`}
+                    >
+                      {item.episode_no && item.episode_no > 0 ? (
+                        <span className={styles.listEpisodeBadge}>P{item.episode_no}</span>
+                      ) : null}
+                      <strong>{item.title || `条目 #${item.id}`}</strong>
+                    </div>
                     <p title={item.summary || undefined}>{item.summary || "暂无摘要"}</p>
                     <div className={styles.listMeta}>
                       {sourceTypeLabel(item.source_type) ? (
@@ -854,7 +1206,13 @@ export function KnowledgePage() {
                       ) : null}
                       {(() => {
                         const cats = visibleTags(item.categories || []);
-                        const tags = visibleTags(item.tags || [], 3);
+                        // 合集名已在侧栏文件夹展示，列表里不再重复刷标签
+                        const tagNames = (item.tags || []).filter(
+                          (name) =>
+                            name !== (item.collection_title || "") &&
+                            !collectionTitleSet.has(name),
+                        );
+                        const tags = visibleTags(tagNames, 3);
                         return (
                           <>
                             {cats.shown.map((name) => (
@@ -869,6 +1227,18 @@ export function KnowledgePage() {
                               >
                                 +{cats.more}
                               </span>
+                            ) : null}
+                            {item.collection_title && category !== item.collection_title ? (
+                              <Tag
+                                color="geekblue"
+                                title="视频合集"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setCategory(item.collection_title || "");
+                                }}
+                              >
+                                {item.collection_title}
+                              </Tag>
                             ) : null}
                             {tags.shown.map((name) => (
                               <Tag
@@ -886,7 +1256,7 @@ export function KnowledgePage() {
                             {tags.more > 0 ? (
                               <span
                                 className={styles.listMetaMore}
-                                title={(item.tags || []).join("、")}
+                                title={tagNames.join("、")}
                               >
                                 +{tags.more}
                               </span>
@@ -915,13 +1285,16 @@ export function KnowledgePage() {
                       onClick={(e) => e.stopPropagation()}
                     />
                   </Popconfirm>
+                  </div>
                 </li>
               ))}
             </ul>
           )}
         </div>
 
-        <aside className={styles.detail}>
+        <aside
+          className={`${styles.detail}${detailTall ? ` ${styles.detailTall}` : ""}`}
+        >
           {!selectedId || (!detail && !detailLoading) ? (
             <div className={styles.detailEmpty}>
               <Empty description="选择左侧条目查看详情" />
@@ -931,67 +1304,108 @@ export function KnowledgePage() {
           ) : detail ? (
             <div className={styles.detailInner}>
               <div className={styles.detailHead}>
-                <h2 title={detail.title}>{detail.title}</h2>
-                <div className={styles.detailAssign}>
-                  <label className={styles.detailAssignLabel}>分类</label>
-                  <Select
-                    mode="multiple"
-                    allowClear
-                    placeholder={domains.length ? "选择要归入的分类" : "请先在左侧新建分类"}
-                    className={styles.detailDomainSelect}
-                    value={entryDomainIds}
-                    loading={entryDomainSaving}
-                    disabled={domains.length === 0 || entryDomainSaving}
-                    options={domains.map((d) => ({ value: d.id, label: d.name }))}
-                    onChange={(ids) => void saveEntryDomains(ids)}
-                    maxTagCount="responsive"
-                  />
+                <div className={styles.detailHeadTop}>
+                  <h2 title={detail.title}>{detail.title}</h2>
+                  <div className={styles.detailHeadToggles}>
+                    <button
+                      type="button"
+                      className={styles.detailToggle}
+                      onClick={() => setDetailInfoOpen((v) => !v)}
+                      aria-expanded={detailInfoOpen}
+                    >
+                      {detailInfoOpen ? <UpOutlined /> : <DownOutlined />}
+                      {detailInfoOpen ? "收起信息" : "分类标签"}
+                    </button>
+                    <button
+                      type="button"
+                      className={`${styles.detailToggle} ${styles.detailToggleWide}`}
+                      onClick={() => setDetailTall((v) => !v)}
+                      aria-expanded={detailTall}
+                      title={detailTall ? "收起详情高度" : "加高详情区"}
+                    >
+                      {detailTall ? "收起高度" : "加高"}
+                    </button>
+                  </div>
                 </div>
-                {(detail.tags || []).length > 0 ? (
-                  <div className={styles.detailTags}>
-                    <span className={styles.detailTagsLabel}>
-                      <TagsOutlined /> 标签
-                    </span>
-                    {(detail.tags || []).map((name) => (
-                      <Tag
-                        key={name}
-                        className={styles.listTagChip}
-                        title={`按标签筛选：${name}`}
-                        onClick={() => setCategory(name)}
-                      >
-                        {name}
-                      </Tag>
-                    ))}
+                {detailInfoOpen ? (
+                  <div className={styles.detailExtras}>
+                    <div className={styles.detailAssign}>
+                      <label className={styles.detailAssignLabel}>分类</label>
+                      <Select
+                        mode="multiple"
+                        allowClear
+                        placeholder={
+                          domains.length ? "选择要归入的分类" : "请先在左侧新建分类"
+                        }
+                        className={styles.detailDomainSelect}
+                        value={entryDomainIds}
+                        loading={entryDomainSaving}
+                        disabled={domains.length === 0 || entryDomainSaving}
+                        options={domains.map((d) => ({ value: d.id, label: d.name }))}
+                        onChange={(ids) => void saveEntryDomains(ids)}
+                        maxTagCount="responsive"
+                      />
+                    </div>
+                    {(detail.tags || []).length > 0 ? (
+                      <div className={styles.detailTags}>
+                        <span className={styles.detailTagsLabel}>
+                          <TagsOutlined /> 标签
+                        </span>
+                        {(detail.tags || []).map((name) => (
+                          <Tag
+                            key={name}
+                            className={styles.listTagChip}
+                            title={`按标签筛选：${name}`}
+                            onClick={() => setCategory(name)}
+                          >
+                            {name}
+                          </Tag>
+                        ))}
+                      </div>
+                    ) : null}
+                    <p className={styles.detailMeta}>
+                      {detail.source_type
+                        ? `类型：${sourceTypeLabel(detail.source_type)}`
+                        : ""}
+                      {detail.source_filename
+                        ? `${detail.source_type ? " · " : ""}来源：${detail.source_filename}`
+                        : ""}
+                      {detail.source_uri ? (
+                        <>
+                          {" · "}
+                          <a href={detail.source_uri} target="_blank" rel="noreferrer">
+                            原始链接
+                          </a>
+                        </>
+                      ) : null}
+                      {detail.created_at ? ` · ${formatDate(detail.created_at)}` : ""}
+                    </p>
                   </div>
                 ) : null}
-                <p className={styles.detailMeta}>
-                  {detail.source_type ? `类型：${sourceTypeLabel(detail.source_type)}` : ""}
-                  {detail.source_filename
-                    ? `${detail.source_type ? " · " : ""}来源：${detail.source_filename}`
-                    : ""}
-                  {detail.source_uri ? (
-                    <>
-                      {" · "}
-                      <a href={detail.source_uri} target="_blank" rel="noreferrer">
-                        原始链接
-                      </a>
-                    </>
-                  ) : null}
-                  {detail.created_at ? ` · ${formatDate(detail.created_at)}` : ""}
-                </p>
               </div>
 
               <div className={styles.detailScroll}>
                 {detail.source_type === "video_url" && detail.source_uri ? (
                   <div className={`${styles.detailSection} ${styles.detailSectionVideo}`}>
-                    <div className={styles.sectionHead}>
+                    <button
+                      type="button"
+                      className={styles.sectionHeadToggle}
+                      onClick={() => setDetailVideoOpen((v) => !v)}
+                      aria-expanded={detailVideoOpen}
+                    >
                       <h3>视频预览</h3>
-                    </div>
-                    <VideoPreviewPanel
-                      title={detail.title}
-                      url={detail.source_uri}
-                      compact
-                    />
+                      <span>
+                        {detailVideoOpen ? <UpOutlined /> : <DownOutlined />}
+                        {detailVideoOpen ? "收起" : "展开"}
+                      </span>
+                    </button>
+                    {detailVideoOpen ? (
+                      <VideoPreviewPanel
+                        title={detail.title}
+                        url={detail.source_uri}
+                        compact
+                      />
+                    ) : null}
                   </div>
                 ) : null}
 

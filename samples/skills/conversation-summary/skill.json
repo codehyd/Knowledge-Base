@@ -1,0 +1,12 @@
+{
+  "id": "conversation-summary",
+  "name": "对话总结",
+  "version": "1.0.0",
+  "description": "用简单易懂的口语化结构总结库内相关内容；事实仍只认检索到的资料片段。",
+  "type": "workflow",
+  "entry": "SKILL.md",
+  "permissions": ["chat.prompt"],
+  "knowledge_policy": "library_only",
+  "author": "空库",
+  "min_app_version": "0.1.0"
+}

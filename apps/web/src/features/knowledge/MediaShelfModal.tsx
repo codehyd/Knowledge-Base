@@ -1,6 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { LinkOutlined, PlayCircleOutlined, VideoCameraOutlined } from "@ant-design/icons";
+import {
+  FolderOutlined,
+  LinkOutlined,
+  PlayCircleOutlined,
+  VideoCameraOutlined,
+} from "@ant-design/icons";
 import { App, Button, Empty, Modal, Spin, Tag } from "antd";
 import { api, type MediaItem } from "@/shared/api/client";
 import { formatError } from "@/shared/ui/feedback";
@@ -13,6 +18,44 @@ function mediaLabel(item: MediaItem) {
   if (item.media_type === "video_url" || item.media_type === "video_file") return "视频";
   if (item.media_type === "url") return "网页";
   return "链接";
+}
+
+type MediaGroup = {
+  key: string;
+  title: string;
+  isCollection: boolean;
+  items: MediaItem[];
+};
+
+function groupMediaItems(items: MediaItem[]): MediaGroup[] {
+  const map = new Map<string, MediaGroup>();
+  const singles: MediaItem[] = [];
+  for (const item of items) {
+    const col = (item.collection_title || "").trim();
+    if (!col) {
+      singles.push(item);
+      continue;
+    }
+    let g = map.get(col);
+    if (!g) {
+      g = { key: col, title: col, isCollection: true, items: [] };
+      map.set(col, g);
+    }
+    g.items.push(item);
+  }
+  for (const g of map.values()) {
+    g.items.sort((a, b) => (a.episode_no || 0) - (b.episode_no || 0));
+  }
+  const groups = [...map.values()].sort((a, b) => a.title.localeCompare(b.title, "zh"));
+  if (singles.length) {
+    groups.push({
+      key: "__single__",
+      title: "单集 / 链接",
+      isCollection: false,
+      items: singles,
+    });
+  }
+  return groups;
 }
 
 type Props = {
@@ -32,6 +75,7 @@ export function MediaShelfModal({
   const { message } = App.useApp();
   const [loading, setLoading] = useState(false);
   const [items, setItems] = useState<MediaItem[]>([]);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [previewOpen, setPreviewOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [activeItem, setActiveItem] = useState<MediaItem | null>(null);
@@ -51,6 +95,8 @@ export function MediaShelfModal({
       setLoading(false);
     }
   }, [message]);
+
+  const groups = useMemo(() => groupMediaItems(items), [items]);
 
   useEffect(() => {
     if (!open) {
@@ -108,7 +154,7 @@ export function MediaShelfModal({
         }
       >
         <p className={styles.hint}>
-          展示抖音/B站等视频与网页链接的转写文案。已入库的可在左侧知识列表中按「视频与链接」筛选。
+          合集按文件夹分组；滚动时分组标题会吸顶（类似通讯录）。已入库的也可在知识页「合集」筛选。
         </p>
 
         {loading ? (
@@ -124,39 +170,80 @@ export function MediaShelfModal({
             </Empty>
           </div>
         ) : (
-          <ul className={styles.list}>
-            {items.map((item) => (
-              <li key={item.source_id}>
-                <button type="button" className={styles.card} onClick={() => openItem(item)}>
-                  <span className={styles.icon}>
-                    {item.media_type === "video_url" || item.media_type === "video_file" ? (
-                      <PlayCircleOutlined />
-                    ) : (
-                      <LinkOutlined />
-                    )}
-                  </span>
-                  <span className={styles.body}>
-                    <strong>{item.title}</strong>
-                    {item.source_uri ? (
-                      <span className={styles.uri}>{item.source_uri}</span>
-                    ) : null}
-                    <span className={styles.meta}>
-                      <Tag>{mediaLabel(item)}</Tag>
-                      {item.status === "committed" || item.entry_id ? (
-                        <Tag color="success">已入库</Tag>
-                      ) : (
-                        <Tag color="warning">待入库</Tag>
-                      )}
-                      {item.has_follow_along ? (
-                        <Tag color="processing">可跟读</Tag>
-                      ) : null}
-                      {item.char_count > 0 ? `${item.char_count} 字` : null}
+          <div className={styles.groups}>
+            {groups.map((group) => {
+              const isCollapsed = Boolean(collapsed[group.key]);
+              return (
+                <section key={group.key} className={styles.group}>
+                  <button
+                    type="button"
+                    className={styles.groupHead}
+                    onClick={() =>
+                      setCollapsed((prev) => ({
+                        ...prev,
+                        [group.key]: !prev[group.key],
+                      }))
+                    }
+                  >
+                    <FolderOutlined />
+                    <strong>{group.title}</strong>
+                    <em>
+                      {group.items.length}
+                      {group.isCollection ? " 集" : " 条"}
+                    </em>
+                    <span className={styles.groupToggle}>
+                      {isCollapsed ? "展开" : "收起"}
                     </span>
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
+                  </button>
+                  {isCollapsed ? null : (
+                    <ul className={styles.list}>
+                      {group.items.map((item) => (
+                        <li key={item.source_id}>
+                          <button
+                            type="button"
+                            className={styles.card}
+                            onClick={() => openItem(item)}
+                          >
+                            <span className={styles.icon}>
+                              {item.media_type === "video_url" ||
+                              item.media_type === "video_file" ? (
+                                <PlayCircleOutlined />
+                              ) : (
+                                <LinkOutlined />
+                              )}
+                            </span>
+                            <span className={styles.body}>
+                              <strong>
+                                {item.episode_no && item.episode_no > 0 ? (
+                                  <span className={styles.epBadge}>P{item.episode_no}</span>
+                                ) : null}
+                                {item.title}
+                              </strong>
+                              {item.source_uri ? (
+                                <span className={styles.uri}>{item.source_uri}</span>
+                              ) : null}
+                              <span className={styles.meta}>
+                                <Tag>{mediaLabel(item)}</Tag>
+                                {item.status === "committed" || item.entry_id ? (
+                                  <Tag color="success">已入库</Tag>
+                                ) : (
+                                  <Tag color="warning">待入库</Tag>
+                                )}
+                                {item.has_follow_along ? (
+                                  <Tag color="processing">可跟读</Tag>
+                                ) : null}
+                                {item.char_count > 0 ? `${item.char_count} 字` : null}
+                              </span>
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
+              );
+            })}
+          </div>
         )}
       </Modal>
 

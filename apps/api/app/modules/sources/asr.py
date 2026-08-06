@@ -5,14 +5,24 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 
 # 已是音轨 / 需抽轨的视频容器
 _AUDIO_SUFFIX = {".m4a", ".mp3", ".wav", ".aac", ".ogg", ".opus", ".flac", ".wma"}
 _MEDIA_SUFFIX = _AUDIO_SUFFIX | {".mp4", ".webm", ".mov", ".mkv", ".m4v", ".avi"}
+
+logger = logging.getLogger(__name__)
+
+# 进程内复用 Whisper，避免合集每集重新加载模型
+_whisper_lock = threading.Lock()
+# 本地推理互斥：多路抽取可并行下载/拉字幕，但 Whisper 同时只跑 1 路（最安全）
+_whisper_infer_lock = threading.Lock()
+_whisper_cache: dict[tuple[str, str, str], object] = {}
 
 
 def resolve_ffmpeg() -> str | None:
@@ -141,17 +151,51 @@ def _is_hub_download_error(exc: Exception) -> bool:
     )
 
 
-def load_whisper_model(model_size: str):
+def _cuda_available() -> bool:
+    try:
+        import ctranslate2
+
+        devices = ctranslate2.get_supported_devices() or []
+        if "cuda" in devices:
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import torch
+
+        return bool(torch.cuda.is_available())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _resolve_whisper_device() -> list[tuple[str, str]]:
+    """返回按优先级尝试的 (device, compute_type) 列表。
+
+    KONGKU_WHISPER_DEVICE=auto|cpu|cuda（默认 auto）。
+    """
+    pref = (os.environ.get("KONGKU_WHISPER_DEVICE") or "auto").strip().lower() or "auto"
+    if pref in {"cpu", "none"}:
+        return [("cpu", "int8")]
+    if pref in {"cuda", "gpu"}:
+        if _cuda_available():
+            return [("cuda", "float16"), ("cuda", "int8"), ("cpu", "int8")]
+        logger.warning("KONGKU_WHISPER_DEVICE=%s 但未检测到 CUDA，回退 CPU", pref)
+        return [("cpu", "int8")]
+    # auto
+    if _cuda_available():
+        return [("cuda", "float16"), ("cuda", "int8"), ("cpu", "int8")]
+    return [("cpu", "int8")]
+
+
+def _instantiate_whisper(size: str, device: str, compute_type: str, download_root: str):
     from faster_whisper import WhisperModel
 
-    size = (model_size or "base").strip() or "base"
-    download_root = str(_data_models_dir())
     configure_hf_hub()
     try:
         return WhisperModel(
             size,
-            device="cpu",
-            compute_type="int8",
+            device=device,
+            compute_type=compute_type,
             download_root=download_root,
         )
     except Exception as first_exc:  # noqa: BLE001
@@ -162,12 +206,49 @@ def load_whisper_model(model_size: str):
         try:
             return WhisperModel(
                 size,
-                device="cpu",
-                compute_type="int8",
+                device=device,
+                compute_type=compute_type,
                 download_root=download_root,
             )
         except Exception as second_exc:  # noqa: BLE001
             raise ValueError(_hub_error_hint(second_exc)) from second_exc
+
+
+def load_whisper_model(model_size: str):
+    """加载本地 Whisper；同进程按 (size, device, compute_type) 缓存。"""
+    size = (model_size or "base").strip() or "base"
+    download_root = str(_data_models_dir())
+    attempts = _resolve_whisper_device()
+
+    with _whisper_lock:
+        for device, compute_type in attempts:
+            key = (size, device, compute_type)
+            cached = _whisper_cache.get(key)
+            if cached is not None:
+                return cached
+            try:
+                model = _instantiate_whisper(size, device, compute_type, download_root)
+                _whisper_cache[key] = model
+                logger.info(
+                    "loaded whisper model size=%s device=%s compute_type=%s",
+                    size,
+                    device,
+                    compute_type,
+                )
+                return model
+            except ValueError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                # CUDA/精度失败则试下一档；Hub 错误已在 _instantiate 转成 ValueError
+                logger.warning(
+                    "whisper load failed size=%s device=%s compute_type=%s: %s",
+                    size,
+                    device,
+                    compute_type,
+                    exc,
+                )
+                continue
+        raise ValueError("本地转写模型加载失败，请改用云端转写或检查 faster-whisper 安装")
 
 
 def _download_via_desktop_bridge(url: str, work_dir: Path) -> Path | None:
@@ -229,6 +310,16 @@ def download_audio_sync(url: str, work_dir: Path, cookie_file: Path | None = Non
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     )
+    # Referer 按平台给：带错 Referer（如抖音）会被 B站 WAF 拦截，
+    # 表现为 403 / KeyError('bvid') 等误导性报错
+    url_low = url.lower()
+    is_bilibili = "bilibili" in url_low or "b23.tv" in url_low
+    req_headers = {"User-Agent": ua}
+    if "douyin" in url_low or "iesdouyin" in url_low:
+        req_headers["Referer"] = "https://www.douyin.com/"
+        req_headers["Origin"] = "https://www.douyin.com"
+    elif is_bilibili:
+        req_headers["Referer"] = "https://www.bilibili.com/"
     base: dict = {
         "outtmpl": outtmpl,
         "quiet": True,
@@ -237,30 +328,39 @@ def download_audio_sync(url: str, work_dir: Path, cookie_file: Path | None = Non
         "retries": 8,
         "fragment_retries": 8,
         "file_access_retries": 3,
-        "concurrent_fragment_downloads": 1,
-        "http_headers": {
-            "User-Agent": ua,
-            "Referer": "https://www.douyin.com/",
-            "Origin": "https://www.douyin.com",
-        },
+        "concurrent_fragment_downloads": 4,
+        "http_headers": req_headers,
     }
-    base = apply_ytdlp_network_opts(base)
+    base = apply_ytdlp_network_opts(base, url)
     if ffmpeg:
         # yt-dlp 接受二进制路径或目录；imageio-ffmpeg 无 ffprobe，故不做 ExtractAudio
         base["ffmpeg_location"] = ffmpeg
 
     # 多策略：抖音 CDN 偶发空块 / 仅音轨格式失效时，换格式或换 Cookie 再试
-    formats = (
+    formats: tuple[str, ...] = (
         "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best",
         "best[height<=720]/best",
         "best",
         "worst",
     )
+    if is_bilibili:
+        # B站近年多为 DASH 分离流（video-only + audio-only），没有「合并好的」
+        # progressive 格式。此时 yt-dlp 的 best/worst 会报
+        #「Requested format is not available」；必须显式 bv*+ba / bestaudio。
+        # 转写优先纯音轨（更小）；失败再拉低清视频由本地抽轨。
+        formats = (
+            "bestaudio/bestvideo[height<=480]+bestaudio/bestvideo+bestaudio/best",
+            "bv*[height<=480]+ba/bv*+ba/b",
+            "bestvideo+bestaudio/best",
+        )
+        base.setdefault("merge_output_format", "mp4")
     attempts: list[dict] = []
     for fmt in formats:
         if cookie_file is not None and cookie_file.is_file():
             attempts.append({**base, "format": fmt, "cookiefile": str(cookie_file)})
-        attempts.append({**base, "format": fmt})
+        # B站匿名常无可用清晰度，有 Cookie 时不必再盲试匿名（易触发风控）
+        if not is_bilibili or cookie_file is None or not cookie_file.is_file():
+            attempts.append({**base, "format": fmt})
 
     last_exc = ""
     for opts in attempts:
@@ -296,8 +396,20 @@ def download_audio_sync(url: str, work_dir: Path, cookie_file: Path | None = Non
     low = last_exc.lower()
     if any(k in low for k in ("proxy", "tunnel connection failed", "unable to connect to proxy")):
         tip = (
-            " 本机代理（Clash/VPN）拦截了抖音请求。"
+            " 本机代理（Clash/VPN）拦截了请求。"
             "请关闭系统/终端代理后重试。"
+        )
+    elif is_bilibili and (
+        "format is not available" in low or "no video formats" in low
+    ):
+        tip = (
+            " B站未返回可下载清晰度。请确认已「应用内登录B站」后重试；"
+            "合集批量时请稍候再试，并关闭 Clash 等代理。"
+        )
+    elif is_bilibili:
+        tip = (
+            " B站抓取失败。请确认：① 桌面端「应用内登录B站」；"
+            "② 稍候几分钟再「重试」；③ 关闭 Clash 等代理。"
         )
     elif any(
         k in low
@@ -315,7 +427,9 @@ def download_audio_sync(url: str, work_dir: Path, cookie_file: Path | None = Non
             " 抖音网页接口近年风控较严。请确认：① 用桌面端并已「应用内登录抖音」；"
             "② 关闭 Clash；③ 仍失败请「补贴文案」。"
         )
-    raise ValueError(f"下载音轨失败：{compact_tool_error(last_exc)}{tip}")
+    raise ValueError(
+        f"下载音轨失败：{compact_tool_error(last_exc, url=url)}{tip}"
+    )
 
 
 def transcribe_local_sync(
@@ -347,33 +461,35 @@ def transcribe_local_sync(
     size = (model_size or "base").strip() or "base"
     cues: list[TimedCue] = []
     try:
-        model = load_whisper_model(size)
-        segments, _info = model.transcribe(
-            str(audio_path),
-            language="zh",
-            vad_filter=True,
-            beam_size=1,
-        )
-        parts: list[str] = []
-        for seg in segments:
-            t = (seg.text or "").strip()
-            if not t:
-                continue
-            try:
-                from zhconv import convert
-
-                t = convert(t, "zh-cn")
-            except Exception:  # noqa: BLE001
-                pass
-            parts.append(t)
-            cues.append(
-                TimedCue(
-                    start=float(getattr(seg, "start", 0) or 0),
-                    end=float(getattr(seg, "end", 0) or 0),
-                    text=t,
-                )
+        # 推理全程持锁，避免两路 ctranslate2 抢同一 GPU/模型
+        with _whisper_infer_lock:
+            model = load_whisper_model(size)
+            segments, _info = model.transcribe(
+                str(audio_path),
+                language="zh",
+                vad_filter=True,
+                beam_size=1,
             )
-        text = "\n".join(parts).strip()
+            parts: list[str] = []
+            for seg in segments:
+                t = (seg.text or "").strip()
+                if not t:
+                    continue
+                try:
+                    from zhconv import convert
+
+                    t = convert(t, "zh-cn")
+                except Exception:  # noqa: BLE001
+                    pass
+                parts.append(t)
+                cues.append(
+                    TimedCue(
+                        start=float(getattr(seg, "start", 0) or 0),
+                        end=float(getattr(seg, "end", 0) or 0),
+                        text=t,
+                    )
+                )
+            text = "\n".join(parts).strip()
     except ValueError:
         raise
     except Exception as exc:  # noqa: BLE001

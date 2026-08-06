@@ -28,7 +28,10 @@ export function useFeedSettings(active: boolean) {
   >([]);
   const [mirrorSaving, setMirrorSaving] = useState(false);
   const [mediaCookiesReady, setMediaCookiesReady] = useState(false);
+  const [douyinCookiesReady, setDouyinCookiesReady] = useState(false);
+  const [bilibiliCookiesReady, setBilibiliCookiesReady] = useState(false);
   const [mediaLoginBusy, setMediaLoginBusy] = useState(false);
+  const [bilibiliLoginBusy, setBilibiliLoginBusy] = useState(false);
 
   const applyCtextSnapshot = useCallback(
     (feed: Awaited<ReturnType<typeof api.getOpenBookSettings>>) => {
@@ -94,19 +97,32 @@ export function useFeedSettings(active: boolean) {
     let cancelled = false;
     void desktop.getConfig().then((cfg) => {
       if (cancelled) return;
-      setMediaCookiesReady(Boolean(cfg.mediaCookiesReady));
+      const douyin = Boolean(cfg.douyinCookiesReady ?? cfg.mediaCookiesReady);
+      const bilibili = Boolean(cfg.bilibiliCookiesReady);
+      setDouyinCookiesReady(douyin);
+      setBilibiliCookiesReady(bilibili);
+      setMediaCookiesReady(douyin || bilibili || Boolean(cfg.mediaCookiesReady));
     });
     const off = desktop.onMediaCookiesExported?.((info) => {
-      if (info.ok && info.loggedIn) {
-        setMediaCookiesReady(true);
+      if (typeof info.douyinLoggedIn === "boolean") {
+        setDouyinCookiesReady(info.douyinLoggedIn);
+      }
+      if (typeof info.bilibiliLoggedIn === "boolean") {
+        setBilibiliCookiesReady(info.bilibiliLoggedIn);
+      }
+      const anyReady =
+        Boolean(info.douyinLoggedIn) || Boolean(info.bilibiliLoggedIn) || Boolean(info.loggedIn);
+      setMediaCookiesReady(anyReady);
+      if (info.ok && (info.loggedIn || info.douyinLoggedIn || info.bilibiliLoggedIn)) {
+        const siteLabel =
+          info.site === "bilibili" ? "B站" : info.site === "douyin" ? "抖音" : "平台";
         message.success(
           info.message ||
             (info.count
-              ? `已保存登录态（${info.count} 条 Cookie）`
-              : "已保存抖音登录态"),
+              ? `已保存${siteLabel}登录态（${info.count} 条 Cookie）`
+              : `已保存${siteLabel}登录态`),
         );
       } else if (info.ok === false || info.loggedIn === false) {
-        setMediaCookiesReady(false);
         if (info.message) message.warning(info.message);
       }
     });
@@ -199,6 +215,22 @@ export function useFeedSettings(active: boolean) {
     }
   }
 
+  async function onLoginBilibili() {
+    if (!desktop?.loginMediaSite) {
+      message.warning("请在空库桌面客户端（安装包）内使用，浏览器网页版无法应用内登录");
+      return;
+    }
+    setBilibiliLoginBusy(true);
+    try {
+      await desktop.loginMediaSite("bilibili");
+      message.info("请在弹出窗口登录 B站网页版，完成后关闭该窗口");
+    } catch (err) {
+      message.error(formatError(err, "打开登录窗口失败"));
+    } finally {
+      setBilibiliLoginBusy(false);
+    }
+  }
+
   return {
     desktop,
     feedLoading,
@@ -218,7 +250,10 @@ export function useFeedSettings(active: boolean) {
     mirrorPresets,
     mirrorSaving,
     mediaCookiesReady,
+    douyinCookiesReady,
+    bilibiliCookiesReady,
     mediaLoginBusy,
+    bilibiliLoginBusy,
     setDirectIngest,
     setCtextKey,
     setMirrorRepo,
@@ -228,5 +263,6 @@ export function useFeedSettings(active: boolean) {
     onClearCtextKey,
     onSaveMirror,
     onLoginDouyin,
+    onLoginBilibili,
   };
 }

@@ -14,6 +14,11 @@ from app.modules.knowledge.schemas import (
     CategoryListOut,
     CategoryOut,
     CategoryUpdate,
+    CollectionDeleteIn,
+    CollectionDeleteOut,
+    CollectionListOut,
+    EntryBatchDeleteIn,
+    EntryBatchDeleteOut,
     EntryCategoriesIn,
     EntryDetailOut,
     EntryListOut,
@@ -97,6 +102,43 @@ async def list_media(db: AsyncSession = Depends(get_db)) -> MediaListOut:
 
 
 @router.get(
+    "/collections",
+    response_model=CollectionListOut,
+    summary="已入库视频合集",
+    description="按合集名聚合已入库分集，供知识页侧栏以文件夹形式展开。",
+)
+async def list_collections(db: AsyncSession = Depends(get_db)) -> CollectionListOut:
+    return await knowledge_service.list_collections(db)
+
+
+@router.post(
+    "/collections/delete",
+    response_model=CollectionDeleteOut,
+    summary="删除整个合集的已入库分集",
+    description="按合集名删除全部已入库条目；对应喂养来源恢复为 ready，可再次入库。",
+)
+async def delete_collection(
+    payload: CollectionDeleteIn, db: AsyncSession = Depends(get_db)
+) -> CollectionDeleteOut:
+    removed = await knowledge_service.delete_collection(db, payload.title)
+    return CollectionDeleteOut(title=payload.title.strip(), removed=removed)
+
+
+@router.post(
+    "/entries/batch-delete",
+    response_model=EntryBatchDeleteOut,
+    summary="批量删除知识条目",
+)
+async def batch_delete_entries(
+    payload: EntryBatchDeleteIn, db: AsyncSession = Depends(get_db)
+) -> EntryBatchDeleteOut:
+    if not payload.entry_ids:
+        return EntryBatchDeleteOut(removed=0)
+    removed = await knowledge_service.delete_entries_batch(db, payload.entry_ids)
+    return EntryBatchDeleteOut(removed=removed)
+
+
+@router.get(
     "/entries",
     response_model=EntryListOut,
     summary="知识条目列表",
@@ -106,7 +148,7 @@ async def list_entries(
     category: str = Query("", description="按分类名过滤"),
     kind: str = Query("", description="类型：book | media | note"),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
 ) -> EntryListOut:
     return await knowledge_service.list_entries(

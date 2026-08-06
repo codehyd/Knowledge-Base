@@ -1,4 +1,8 @@
-"""把 uploads/{id}/ 同步成可读的 library/{分类}/{标题}/。"""
+"""把 uploads/{id}/ 同步成可读的 library 目录。
+
+单集：library/{分类}/{标题}/
+视频合集：library/视频/[合集]{合集名}/{分集标题}/
+"""
 
 from __future__ import annotations
 
@@ -24,6 +28,8 @@ from app.modules.library.schemas import (
 from app.modules.sources.models import Source
 
 META_NAME = ".kongku-source.json"
+# 视频合集：视频/[合集]{合集名}/{分集}/，前缀避免与单集同名冲突
+COLLECTION_PREFIX = "[合集]"
 
 CATEGORY_MAP: dict[str, tuple[str, str]] = {
     "ebook": ("books", "书籍"),
@@ -71,6 +77,18 @@ def safe_folder_name(title: str, source_id: int) -> str:
     if len(cleaned) > 80:
         cleaned = cleaned[:80].rstrip(" .")
     return cleaned
+
+
+def collection_folder_name(collection_title: str, source_id: int) -> str:
+    """合集目录名：`[合集]合集标题`，与单集标题目录区分。"""
+    base = safe_folder_name(collection_title, source_id)
+    if base.startswith(COLLECTION_PREFIX):
+        return base
+    # 前缀占 4 字，标题再留余量
+    max_base = 76
+    if len(base) > max_base:
+        base = base[:max_base].rstrip(" .")
+    return f"{COLLECTION_PREFIX}{base}"
 
 
 def _file_kind(name: str) -> str:
@@ -172,19 +190,53 @@ def _collect_upload_files(upload: Path) -> list[tuple[Path, str]]:
     return out
 
 
+def _prune_empty_parents(start: Path) -> None:
+    """从 start 向上删除空目录，止于 library 根（不含）。"""
+    try:
+        root = library_root().resolve()
+        cur = start.resolve()
+    except OSError:
+        return
+    while cur != root and root in cur.parents:
+        try:
+            if cur.is_dir() and not any(cur.iterdir()):
+                cur.rmdir()
+                cur = cur.parent
+                continue
+        except OSError:
+            pass
+        break
+
+
 def remove_source_from_library(source_id: int) -> bool:
     folder = _find_existing_folder(source_id)
     if not folder or not folder.exists():
         return False
-    shutil.rmtree(folder, ignore_errors=True)
-    # 清理空分类目录
     parent = folder.parent
-    try:
-        if parent.is_dir() and not any(parent.iterdir()):
-            parent.rmdir()
-    except OSError:
-        pass
+    shutil.rmtree(folder, ignore_errors=True)
+    _prune_empty_parents(parent)
     return True
+
+
+def _dest_for_source(
+    *,
+    source_id: int,
+    source_type: str,
+    title: str,
+    collection_title: str = "",
+) -> tuple[Path, str, str]:
+    """返回 (目标目录, 展示标题, 分集文件夹名)。"""
+    cat_label = category_for_type(source_type)[1]
+    display_title = (title or "").strip() or f"未命名-{source_id}"
+    folder_name = safe_folder_name(display_title, source_id)
+    cat_dir = library_root() / cat_label
+    collection = (collection_title or "").strip()
+    if collection and cat_label == "视频":
+        col_name = collection_folder_name(collection, source_id)
+        dest = cat_dir / col_name / folder_name
+    else:
+        dest = cat_dir / folder_name
+    return dest, display_title, folder_name
 
 
 def sync_source_files(
@@ -192,27 +244,35 @@ def sync_source_files(
     source_id: int,
     source_type: str,
     title: str,
+    collection_title: str = "",
 ) -> Path | None:
-    """把 uploads/{id} 同步到 library/{分类}/{标题}/。无源文件时返回 None。"""
+    """把 uploads/{id} 同步到 library。
+
+    单集：library/{分类}/{标题}/
+    视频合集：library/视频/[合集]{合集名}/{分集标题}/
+    无源文件时返回 None。
+    """
     upload = _data_root() / "uploads" / str(source_id)
     files = _collect_upload_files(upload)
     if not files:
         remove_source_from_library(source_id)
         return None
 
-    cat_label = category_for_type(source_type)[1]
-    display_title = (title or "").strip() or f"未命名-{source_id}"
-    folder_name = safe_folder_name(display_title, source_id)
-
-    cat_dir = library_root() / cat_label
-    cat_dir.mkdir(parents=True, exist_ok=True)
-    dest = cat_dir / folder_name
+    dest, display_title, folder_name = _dest_for_source(
+        source_id=source_id,
+        source_type=source_type,
+        title=title,
+        collection_title=collection_title,
+    )
+    dest.parent.mkdir(parents=True, exist_ok=True)
 
     existing = _find_existing_folder(source_id)
     if existing and existing.resolve() != dest.resolve():
+        old_parent = existing.parent
         shutil.rmtree(existing, ignore_errors=True)
+        _prune_empty_parents(old_parent)
 
-    # 同名但属于别的来源：加 id 后缀
+    # 同名但属于别的来源：加 id 后缀（仍落在同一父目录下）
     if dest.exists():
         meta_path = dest / META_NAME
         other_id = None
@@ -222,7 +282,7 @@ def sync_source_files(
             except (OSError, json.JSONDecodeError, TypeError, ValueError):
                 other_id = None
         if other_id not in (None, 0, source_id):
-            dest = cat_dir / f"{folder_name} ({source_id})"
+            dest = dest.parent / f"{folder_name} ({source_id})"
 
     dest.mkdir(parents=True, exist_ok=True)
 
@@ -270,6 +330,7 @@ class LibraryService:
             source_id=row.id,
             source_type=row.type or "",
             title=title,
+            collection_title=(getattr(row, "collection_title", None) or "").strip(),
         )
 
     async def delete_item(self, db: AsyncSession, source_id: int) -> LibraryDeleteOut:
@@ -344,6 +405,7 @@ class LibraryService:
                 source_id=row.id,
                 source_type=row.type or "",
                 title=title,
+                collection_title=(getattr(row, "collection_title", None) or "").strip(),
             )
             if path is not None:
                 synced += 1
@@ -369,14 +431,36 @@ class LibraryService:
             if (getattr(row, "vault_path", None) or "").strip():
                 continue
             upload = _data_root() / "uploads" / str(row.id)
-            if not upload.is_dir():
+            if not upload.is_dir() or not _collect_upload_files(upload):
                 continue
-            if _find_existing_folder(row.id) is None and _collect_upload_files(upload):
+            collection = (getattr(row, "collection_title", None) or "").strip()
+            existing = _find_existing_folder(row.id)
+            need_sync = existing is None
+            # 旧布局（扁平或 视频/合集/...）→ 视频/[合集]{合集名}/{分集}/
+            if (
+                not need_sync
+                and existing is not None
+                and collection
+                and category_for_type(row.type or "")[1] == "视频"
+            ):
+                try:
+                    rel_parts = existing.relative_to(library_root() / "视频").parts
+                    # 正确形态：视频/[合集]xxx/分集；旧「合集/」总夹或扁平都会重同步
+                    under_prefixed = (
+                        len(rel_parts) >= 2
+                        and rel_parts[0].startswith(COLLECTION_PREFIX)
+                    )
+                    if not under_prefixed:
+                        need_sync = True
+                except ValueError:
+                    need_sync = True
+            if need_sync:
                 title = await self._title_for(db, row)
                 sync_source_files(
                     source_id=row.id,
                     source_type=row.type or "",
                     title=title,
+                    collection_title=collection,
                 )
 
         root = library_root()
@@ -462,21 +546,29 @@ class LibraryService:
             nonlocal total
             items: list[LibraryItemOut] = []
             if path.is_dir():
-                for folder in sorted(path.iterdir(), key=lambda p: p.name.lower()):
+                # 以 .kongku-source.json 定位叶子目录，支持 视频/[合集]{合集}/{分集}/
+                meta_paths = sorted(
+                    path.rglob(META_NAME),
+                    key=lambda p: str(p.parent.relative_to(path)).lower(),
+                )
+                for meta_path in meta_paths:
+                    folder = meta_path.parent
                     if not folder.is_dir():
                         continue
-                    meta_path = folder / META_NAME
                     source_id = 0
+                    try:
+                        rel_name = str(folder.relative_to(path)).replace("\\", "/")
+                    except ValueError:
+                        rel_name = folder.name
                     title = folder.name
                     source_type = ""
-                    if meta_path.is_file():
-                        try:
-                            data = json.loads(meta_path.read_text(encoding="utf-8"))
-                            source_id = int(data.get("source_id") or 0)
-                            title = str(data.get("title") or title)
-                            source_type = str(data.get("type") or "")
-                        except (OSError, json.JSONDecodeError, TypeError, ValueError):
-                            pass
+                    try:
+                        data = json.loads(meta_path.read_text(encoding="utf-8"))
+                        source_id = int(data.get("source_id") or 0)
+                        title = str(data.get("title") or title)
+                        source_type = str(data.get("type") or "")
+                    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+                        pass
 
                     row = by_id.get(source_id)
                     files: list[LibraryFileOut] = []
@@ -497,7 +589,7 @@ class LibraryService:
                             source_id=source_id,
                             title=title,
                             category=label,
-                            folder_name=folder.name,
+                            folder_name=rel_name,
                             folder_path=str(folder.relative_to(_data_root())).replace("\\", "/"),
                             absolute_path=str(folder.resolve()),
                             type=source_type or (row.type if row else ""),

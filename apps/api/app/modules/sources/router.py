@@ -15,10 +15,15 @@ from app.modules.sources.schemas import (
     SourceOut,
     SourcePreviewOut,
     TranscriptIn,
+    UrlBatchIn,
+    UrlBatchOut,
     UrlIn,
+    UrlProbeIn,
+    UrlProbeOut,
 )
+from app.modules.sources.queue_control import set_queue_paused
 from app.modules.sources.service import sources_service
-from app.modules.sources.tasks import run_extract_job
+from app.modules.sources.tasks import schedule_extract
 
 router = APIRouter(prefix="/sources", tags=["喂养投递"])
 
@@ -40,6 +45,66 @@ async def list_sources(db: AsyncSession = Depends(get_db)) -> SourceListOut:
 async def clear_finished(db: AsyncSession = Depends(get_db)) -> dict:
     n = await sources_service.clear_finished(db)
     return {"removed": n}
+
+
+@router.delete(
+    "/queue/failed-videos",
+    summary="清空失败的视频队列项",
+)
+async def clear_failed_videos(db: AsyncSession = Depends(get_db)) -> dict:
+    n = await sources_service.clear_failed_videos(db)
+    return {"removed": n}
+
+
+@router.delete(
+    "/queue/all",
+    summary="清空整个喂养队列",
+    description=(
+        "移出所有未入库的队列项（等待中/解析中/待入库/失败等），并清理 uploads。"
+        "已入库来源与知识库条目、笔记库手写笔记不受影响。"
+    ),
+)
+async def clear_queue(db: AsyncSession = Depends(get_db)) -> dict:
+    n = await sources_service.clear_queue(db)
+    return {"removed": n}
+
+
+@router.get(
+    "/queue/control",
+    summary="解析队列运行状态",
+)
+async def get_queue_control(db: AsyncSession = Depends(get_db)) -> dict:
+    return await sources_service.queue_control_status(db)
+
+
+@router.post(
+    "/queue/pause",
+    summary="暂停解析队列",
+    description="已在进行中的任务会跑完；等待中的项暂不开始，直到点「开始」。",
+)
+async def pause_queue(db: AsyncSession = Depends(get_db)) -> dict:
+    set_queue_paused(True)
+    status = await sources_service.queue_control_status(db)
+    return {**status, "ok": True}
+
+
+@router.post(
+    "/queue/start",
+    summary="开始 / 继续解析队列",
+    description="取消暂停，并调度所有 status=pending 的来源开始解析。",
+)
+async def start_queue(
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    set_queue_paused(False)
+    ids = await sources_service.list_pending_source_ids(db)
+    started = 0
+    for sid in ids:
+        if schedule_extract(background_tasks, sid):
+            started += 1
+    status = await sources_service.queue_control_status(db)
+    return {**status, "ok": True, "started": started}
 
 
 @router.delete(
@@ -75,7 +140,7 @@ async def upload_source(
     db: AsyncSession = Depends(get_db),
 ) -> SourceOut:
     row = await sources_service.create_upload(db, file=file, source_type=type)
-    background_tasks.add_task(run_extract_job, row.id)
+    schedule_extract(background_tasks, row.id)
     return sources_service.to_out(row)
 
 
@@ -90,7 +155,7 @@ async def paste_source(
     db: AsyncSession = Depends(get_db),
 ) -> SourceOut:
     row = await sources_service.create_paste(db, payload)
-    background_tasks.add_task(run_extract_job, row.id)
+    schedule_extract(background_tasks, row.id)
     return sources_service.to_out(row)
 
 
@@ -106,8 +171,45 @@ async def url_source(
     db: AsyncSession = Depends(get_db),
 ) -> SourceOut:
     row = await sources_service.create_url(db, payload)
-    background_tasks.add_task(run_extract_job, row.id)
+    schedule_extract(background_tasks, row.id)
     return sources_service.to_out(row)
+
+
+@router.post(
+    "/url/probe",
+    response_model=UrlProbeOut,
+    summary="探测链接是否为合集/分P",
+    description="不落库。返回 is_playlist / collection_title / total / entries，供前端选集。",
+)
+async def probe_url(payload: UrlProbeIn) -> UrlProbeOut:
+    return await sources_service.probe_url(UrlIn(url=payload.url))
+
+
+@router.post(
+    "/url/batch",
+    response_model=UrlBatchOut,
+    summary="合集/分P 批量投递",
+    description=(
+        "import_all 导入全部；或 episode_nos 指定集号（可多选）；或 limit 前 N 集。"
+        "已投递过的分集自动跳过（可从试跑续到全量）。"
+        "后台任务按提交顺序串行解析，单集失败不影响其他集。"
+    ),
+)
+async def url_batch(
+    payload: UrlBatchIn,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+) -> UrlBatchOut:
+    rows, skipped, collection, total = await sources_service.create_url_batch(db, payload)
+    for row in rows:
+        schedule_extract(background_tasks, row.id)
+    return UrlBatchOut(
+        collection_title=collection,
+        total=total,
+        created=len(rows),
+        skipped=skipped,
+        source_ids=[r.id for r in rows],
+    )
 
 
 @router.get(
@@ -280,5 +382,5 @@ async def retry_source(
     row.error_message = ""
     await db.commit()
     await db.refresh(row)
-    background_tasks.add_task(run_extract_job, row.id)
+    schedule_extract(background_tasks, row.id)
     return sources_service.to_out(row)

@@ -28,6 +28,9 @@ class Source(Base):
     text_path = mapped_column(String(1000), default="")  # 抽取后的正文路径
     # 笔记库（data/library/笔记库）内相对路径，如 folder/note.md；非 vault 笔记为空
     vault_path = mapped_column(String(1000), default="", index=True)
+    # 合集/分P：合集标题（空 = 非合集分集）；分集序号（1 起，0 = 非分集）
+    collection_title = mapped_column(String(500), default="", index=True)
+    episode_no = mapped_column(Integer, default=0)
     char_count = mapped_column(Integer, default=0)
     created_at = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at = mapped_column(

@@ -8,6 +8,8 @@ module.exports = {
   mainWindow: null,
   /** @type {import('electron').BrowserWindow | null} */
   mediaLoginWindow: null,
+  /** @type {"douyin" | "bilibili" | "tiktok" | null} */
+  mediaLoginSite: null,
   /** @type {import('electron').BrowserWindow | null} */
   mediaPreviewWindow: null,
   /** @type {import('child_process').ChildProcess | null} */

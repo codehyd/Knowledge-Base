@@ -29,14 +29,102 @@
   padding: 32px 0;
 }
 
+.groups {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: min(60vh, 520px);
+  overflow: auto;
+  margin: 0 -4px;
+  padding: 0 4px;
+  border: 1px solid #eef1f3;
+  border-radius: 12px;
+  background: #fafbfc;
+}
+
+.groups::-webkit-scrollbar {
+  width: var(--scrollbar-size, 8px);
+}
+
+.groups::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb, #c5cdd3);
+  border-radius: 999px;
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.groupHead {
+  appearance: none;
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  border: none;
+  border-bottom: 1px solid #e2e8f0;
+  background: rgba(241, 245, 246, 0.96);
+  backdrop-filter: blur(8px);
+  border-radius: 0;
+  padding: 9px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  text-align: left;
+  color: #134e4a;
+  font-size: 13px;
+  box-shadow: 0 1px 0 rgba(31, 41, 51, 0.04);
+}
+
+.group:first-child .groupHead {
+  border-radius: 11px 11px 0 0;
+}
+
+.groupHead:hover {
+  background: rgba(231, 238, 240, 0.98);
+}
+
+.groupHead strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 650;
+}
+
+.groupHead em {
+  font-style: normal;
+  color: var(--color-muted);
+  flex-shrink: 0;
+}
+
+.groupToggle {
+  margin-left: auto;
+  color: #0f766e;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
 .list {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 8px 8px 12px;
   display: grid;
-  gap: 10px;
-  max-height: min(60vh, 520px);
-  overflow: auto;
+  gap: 8px;
+  background: #fff;
+}
+
+.epBadge {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(42, 111, 106, 0.12);
+  color: #0f766e;
+  font-size: 11px;
+  font-weight: 650;
 }
 
 .card {

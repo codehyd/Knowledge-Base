@@ -39,7 +39,10 @@ type FeedSettingsPanelProps = {
   mirrorPresets: { id: string; name: string; repo: string; ref: string; desc?: string }[];
   mirrorSaving: boolean;
   mediaCookiesReady: boolean;
+  douyinCookiesReady: boolean;
+  bilibiliCookiesReady: boolean;
   mediaLoginBusy: boolean;
+  bilibiliLoginBusy: boolean;
   allowLocalAudio: boolean;
   asrMode: string;
   asrBaseUrl: string;
@@ -64,6 +67,7 @@ type FeedSettingsPanelProps = {
   onClearCtextKey: () => void;
   onSaveMirror: () => void;
   onLoginDouyin: () => void;
+  onLoginBilibili: () => void;
   onSaveMediaSettings: () => void;
 };
 
@@ -88,7 +92,10 @@ export function FeedSettingsPanel({
   mirrorPresets,
   mirrorSaving,
   mediaCookiesReady,
+  douyinCookiesReady,
+  bilibiliCookiesReady,
   mediaLoginBusy,
+  bilibiliLoginBusy,
   allowLocalAudio,
   asrMode,
   asrBaseUrl,
@@ -113,6 +120,7 @@ export function FeedSettingsPanel({
   onClearCtextKey,
   onSaveMirror,
   onLoginDouyin,
+  onLoginBilibili,
   onSaveMediaSettings,
 }: FeedSettingsPanelProps) {
   return (
@@ -122,7 +130,7 @@ export function FeedSettingsPanel({
           <div>
             <h1>喂养</h1>
             <p className={styles.desc}>
-              公版书入库选项、书源镜像 / ctext Key，以及视频转写与抖音登录。
+              公版书入库选项、书源镜像 / ctext Key，以及视频转写与抖音 / B站登录。
             </p>
           </div>
           <Space size={8} wrap>
@@ -280,12 +288,12 @@ export function FeedSettingsPanel({
                     children: (
                       <Form layout="vertical" className={styles.form}>
                         <p className={styles.tabHint}>
-                          抖音等视频多数没有字幕轨。无字幕时需下载音轨做语音转写；跟读功能也会缓存音轨。
+                          抖音多数无字幕轨，B站有的有 CC/字幕、没有则走音轨转写。无字幕时需下载音轨做语音转写；跟读也会缓存音轨。
                           默认不下载，需你明确授权。Mac 首次本地转写还需下载 Whisper 模型。
                         </p>
                         <Form.Item
                           label="抖音登录（抓取用）"
-                          extra="桌面端会弹出网页窗口登录；登录态供 yt-dlp 抓取文案/字幕。也可在「喂养 → 视频链接」处登录。"
+                          extra="桌面端弹出网页窗口登录；登录态供抓取抖音文案。也可在「喂养 → 视频链接」处登录。"
                         >
                           <Space wrap>
                             <Button
@@ -296,10 +304,32 @@ export function FeedSettingsPanel({
                             >
                               应用内登录抖音
                             </Button>
-                            {mediaCookiesReady ? (
-                              <Tag color="success">已保存登录态</Tag>
+                            {douyinCookiesReady ? (
+                              <Tag color="success">抖音已登录</Tag>
                             ) : desktop?.loginMediaSite ? (
-                              <Tag>未登录</Tag>
+                              <Tag>抖音未登录</Tag>
+                            ) : (
+                              <Tag color="warning">仅桌面安装包可用</Tag>
+                            )}
+                          </Space>
+                        </Form.Item>
+                        <Form.Item
+                          label="B站登录（抓取用）"
+                          extra="B站匿名抓取易被风控（403）。应用内登录后可更稳地拉字幕/音轨；合集批量时尤其建议登录。"
+                        >
+                          <Space wrap>
+                            <Button
+                              type="primary"
+                              loading={bilibiliLoginBusy}
+                              disabled={!desktop?.loginMediaSite}
+                              onClick={() => void onLoginBilibili()}
+                            >
+                              应用内登录B站
+                            </Button>
+                            {bilibiliCookiesReady ? (
+                              <Tag color="success">B站已登录</Tag>
+                            ) : desktop?.loginMediaSite ? (
+                              <Tag>B站未登录</Tag>
                             ) : (
                               <Tag color="warning">仅桌面安装包可用</Tag>
                             )}
@@ -461,9 +491,13 @@ export function FeedSettingsPanel({
           <>
             <Card size="small" title={<><InfoCircleOutlined /> 视频转写</>}>
               <ul className={styles.checklist}>
+                <li>抖音 / B站登录态分开保存，互不影响</li>
                 <li>云端转写按音频时长计费，未授权音轨下载时不会发生</li>
                 <li>DeepSeek 对话 Key 不能用于转写</li>
                 <li>本地 Whisper 首次会下载模型到 data/models</li>
+                {!mediaCookiesReady ? (
+                  <li>尚未保存任何平台登录态时，部分站点抓取可能失败</li>
+                ) : null}
               </ul>
             </Card>
           </>

@@ -47,9 +47,41 @@ class EntryListItem(BaseModel):
     category_ids: list[int] = Field(default_factory=list)
     # 自动标签（kind=tag）
     tags: list[str] = Field(default_factory=list)
+    # 视频合集/分P（来自 Source）
+    collection_title: str = ""
+    episode_no: int = 0
     created_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
+
+
+class CollectionOut(BaseModel):
+    """已入库的视频合集（侧栏文件夹）。"""
+
+    title: str
+    count: int = 0
+    episode_total: int = 0
+
+
+class CollectionListOut(BaseModel):
+    items: list[CollectionOut]
+
+
+class CollectionDeleteIn(BaseModel):
+    title: str = Field(min_length=1, max_length=500)
+
+
+class CollectionDeleteOut(BaseModel):
+    title: str
+    removed: int
+
+
+class EntryBatchDeleteIn(BaseModel):
+    entry_ids: list[int] = Field(default_factory=list, max_length=500)
+
+
+class EntryBatchDeleteOut(BaseModel):
+    removed: int
 
 
 class EntryCategoriesIn(BaseModel):
@@ -289,6 +321,8 @@ class MediaItemOut(BaseModel):
     status: str = ""
     char_count: int = 0
     has_follow_along: bool = False
+    collection_title: str = ""
+    episode_no: int = 0
     created_at: Optional[datetime] = None
 
 

@@ -10,6 +10,7 @@ import {
   FormOutlined,
   InboxOutlined,
   LinkOutlined,
+  PauseCircleOutlined,
   PlayCircleOutlined,
   QuestionCircleOutlined,
   ReadOutlined,
@@ -18,15 +19,24 @@ import {
   Alert,
   App,
   Button,
+  Checkbox,
   Input,
   Modal,
   Progress,
   Space,
+  Switch,
   Tabs,
   Tag,
+  Tooltip,
   Typography,
 } from "antd";
-import { api, type OpenBookItem, type OpenBookSourceInfo, type SourceItem } from "@/shared/api/client";
+import {
+  api,
+  type OpenBookItem,
+  type OpenBookSourceInfo,
+  type SourceItem,
+  type UrlProbeEpisode,
+} from "@/shared/api/client";
 import { getDesktopBridge } from "@/shared/desktop";
 import { formatError } from "@/shared/ui/feedback";
 import { PdfPreviewModal } from "@/shared/ui/PdfPreviewModal";
@@ -37,6 +47,26 @@ const CTEXT_SETTINGS_HREF = "/settings?keys=books";
 const NEED_CTEXT_KEY = "NEED_CTEXT_KEY";
 
 const ACTIVE = new Set(["pending", "extracting", "processing"]);
+const DONE = new Set(["ready", "committed"]);
+const FAILED = new Set(["failed", "need_transcript"]);
+
+type QueueFilter = "all" | "active" | "done" | "failed";
+
+const QUEUE_FILTER_KEY = "kongku-feed-queue-filter";
+const PLAYLIST_MODE_KEY = "kongku-feed-playlist-mode";
+
+function readQueueFilter(): QueueFilter {
+  const raw = window.localStorage.getItem(QUEUE_FILTER_KEY);
+  if (raw === "active" || raw === "done" || raw === "failed" || raw === "all") return raw;
+  return "all";
+}
+
+type PlaylistProbe = {
+  url: string;
+  collectionTitle: string;
+  total: number;
+  entries: UrlProbeEpisode[];
+};
 
 function statusLabel(item: SourceItem): string {
   switch (item.status) {
@@ -70,6 +100,25 @@ export function FeedPage() {
   const [busy, setBusy] = useState(false);
   const [urlSubmitting, setUrlSubmitting] = useState(false);
   const [url, setUrl] = useState("");
+  // 合集/分P 批量导入：默认关，仅导入单集；选择记忆在本地
+  const [playlistMode, setPlaylistMode] = useState(
+    () => window.localStorage.getItem(PLAYLIST_MODE_KEY) === "1",
+  );
+  const [playlistProbe, setPlaylistProbe] = useState<PlaylistProbe | null>(null);
+  const [playlistSelected, setPlaylistSelected] = useState<number[]>([]);
+  const [playlistBatching, setPlaylistBatching] = useState(false);
+  const [queuePaused, setQueuePaused] = useState(false);
+  const [queueConcurrency, setQueueConcurrency] = useState(2);
+  const [queueControlBusy, setQueueControlBusy] = useState(false);
+  const [queueFilter, setQueueFilter] = useState<QueueFilter>(() => readQueueFilter());
+  const [ingestProgress, setIngestProgress] = useState<{
+    total: number;
+    done: number;
+    ok: number;
+    skipped: number;
+    failed: number;
+    current: string;
+  } | null>(null);
   const [bannerOpen, setBannerOpen] = useState(true);
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteTitle, setPasteTitle] = useState("");
@@ -98,7 +147,8 @@ export function FeedPage() {
   const [savingAsId, setSavingAsId] = useState<string | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<number>(0);
   const [downloadMessage, setDownloadMessage] = useState("");
-  const [mediaCookiesReady, setMediaCookiesReady] = useState(false);
+  const [douyinCookiesReady, setDouyinCookiesReady] = useState(false);
+  const [bilibiliCookiesReady, setBilibiliCookiesReady] = useState(false);
   const [allowLocalAudio, setAllowLocalAudio] = useState(false);
   const ebookRef = useRef<HTMLInputElement>(null);
   const noteRef = useRef<HTMLInputElement>(null);
@@ -107,12 +157,71 @@ export function FeedPage() {
 
   const refresh = useCallback(async () => {
     try {
-      const res = await api.listSources();
+      const [res, control] = await Promise.all([
+        api.listSources(),
+        api.getQueueControl().catch(() => null),
+      ]);
       setItems(res.items);
+      if (control) {
+        setQueuePaused(Boolean(control.paused));
+        if (typeof control.concurrency === "number" && control.concurrency > 0) {
+          setQueueConcurrency(control.concurrency);
+        }
+      }
     } catch (err) {
       message.error(formatError(err, "加载队列失败"));
     }
   }, [message]);
+
+  async function onQueueStart() {
+    if (queueControlBusy) return;
+    setQueueControlBusy(true);
+    try {
+      const res = await api.startQueue();
+      setQueuePaused(Boolean(res.paused));
+      if (typeof res.concurrency === "number" && res.concurrency > 0) {
+        setQueueConcurrency(res.concurrency);
+      }
+      await refresh();
+      message.success(
+        res.started > 0
+          ? `已开始解析（调度 ${res.started} 项）`
+          : "队列已在运行；暂无等待中的项",
+      );
+    } catch (err) {
+      message.error(formatError(err, "开始队列失败"));
+    } finally {
+      setQueueControlBusy(false);
+    }
+  }
+
+  async function onQueuePause() {
+    if (queueControlBusy) return;
+    setQueueControlBusy(true);
+    try {
+      const res = await api.pauseQueue();
+      setQueuePaused(Boolean(res.paused));
+      if (typeof res.concurrency === "number" && res.concurrency > 0) {
+        setQueueConcurrency(res.concurrency);
+      }
+      message.info(
+        res.running > 0
+          ? `已暂停；当前 ${res.running} 项会跑完，其后不再开始`
+          : "已暂停；新投递将等待开始后再解析",
+      );
+      await refresh();
+    } catch (err) {
+      message.error(formatError(err, "暂停队列失败"));
+    } finally {
+      setQueueControlBusy(false);
+    }
+  }
+
+  async function onQueueToggle() {
+    if (queueControlBusy) return;
+    if (queuePaused) await onQueueStart();
+    else await onQueuePause();
+  }
 
   useEffect(() => {
     void refresh();
@@ -122,21 +231,38 @@ export function FeedPage() {
     if (!desktop?.getConfig) return;
     let cancelled = false;
     void desktop.getConfig().then((cfg) => {
-      if (!cancelled) setMediaCookiesReady(Boolean(cfg.mediaCookiesReady));
+      if (cancelled) return;
+      setDouyinCookiesReady(Boolean(cfg.douyinCookiesReady ?? cfg.mediaCookiesReady));
+      setBilibiliCookiesReady(Boolean(cfg.bilibiliCookiesReady));
     });
     const off = desktop.onMediaCookiesExported?.((info) => {
-      if (info.ok && info.loggedIn !== false) {
-        setMediaCookiesReady(true);
+      if (typeof info.douyinLoggedIn === "boolean") {
+        setDouyinCookiesReady(info.douyinLoggedIn);
+      } else if (info.site === "douyin" || !info.site) {
+        if (info.ok && info.loggedIn) setDouyinCookiesReady(true);
+        else if (info.ok && info.loggedIn === false) setDouyinCookiesReady(false);
+      }
+      if (typeof info.bilibiliLoggedIn === "boolean") {
+        setBilibiliCookiesReady(info.bilibiliLoggedIn);
+      } else if (info.site === "bilibili") {
+        if (info.ok && info.loggedIn) setBilibiliCookiesReady(true);
+        else if (info.ok && info.loggedIn === false) setBilibiliCookiesReady(false);
+      }
+      if (info.ok && (info.loggedIn || info.douyinLoggedIn || info.bilibiliLoggedIn)) {
+        const siteLabel =
+          info.site === "bilibili" ? "B站" : info.site === "douyin" ? "抖音" : "平台";
         message.success(
           info.message ||
             (info.count
-              ? `已保存登录态（${info.count} 条 Cookie），可对失败项点「重试」`
-              : "已保存登录态，可对失败项点「重试」"),
+              ? `已保存${siteLabel}登录态（${info.count} 条 Cookie），可对失败项点「重试」`
+              : `已保存${siteLabel}登录态，可对失败项点「重试」`),
         );
       } else if (info.ok && info.loggedIn === false) {
-        setMediaCookiesReady(false);
         message.warning(
-          info.message || "未检测到抖音登录，请在弹窗内完成网页登录后再关闭",
+          info.message ||
+            (info.site === "bilibili"
+              ? "未检测到 B站登录，请在弹窗内完成网页登录后再关闭"
+              : "未检测到抖音登录，请在弹窗内完成网页登录后再关闭"),
         );
       } else if (info.message) {
         message.warning(info.message);
@@ -148,17 +274,32 @@ export function FeedPage() {
     };
   }, [desktop, message]);
 
-  async function onLoginDouyin() {
+  async function onLoginMedia(site: "douyin" | "bilibili") {
     if (!desktop?.loginMediaSite) {
-      message.info("请在桌面客户端使用「应用内登录抖音」");
+      message.info(
+        site === "bilibili"
+          ? "请在桌面客户端使用「应用内登录B站」"
+          : "请在桌面客户端使用「应用内登录抖音」",
+      );
       return;
     }
     try {
-      await desktop.loginMediaSite("douyin");
-      message.info("请在弹出窗口登录抖音，完成后关闭该窗口");
+      await desktop.loginMediaSite(site);
+      message.info(
+        site === "bilibili"
+          ? "请在弹出窗口登录 B站，完成后关闭该窗口"
+          : "请在弹出窗口登录抖音，完成后关闭该窗口",
+      );
     } catch (err) {
       message.error(formatError(err, "打开登录窗口失败"));
     }
+  }
+
+  function mediaPlatformOf(uri: string): "douyin" | "bilibili" | "other" {
+    const low = (uri || "").toLowerCase();
+    if (low.includes("bilibili") || low.includes("b23.tv")) return "bilibili";
+    if (low.includes("douyin") || low.includes("iesdouyin")) return "douyin";
+    return "other";
   }
   useEffect(() => {
     let cancelled = false;
@@ -230,6 +371,11 @@ export function FeedPage() {
     }, "笔记已投递");
   }
 
+  function onPlaylistModeChange(checked: boolean) {
+    setPlaylistMode(checked);
+    window.localStorage.setItem(PLAYLIST_MODE_KEY, checked ? "1" : "0");
+  }
+
   async function onUrlSubmit(e: FormEvent) {
     e.preventDefault();
     const raw = url.trim();
@@ -237,6 +383,28 @@ export function FeedPage() {
     setUrlSubmitting(true);
     setBusy(true);
     try {
+      if (playlistMode) {
+        // 合集模式：先探测，多集则弹选集确认
+        const probe = await api.probeUrl(raw);
+        if (probe.is_playlist && probe.total > 1) {
+          const entries =
+            probe.entries && probe.entries.length > 0
+              ? probe.entries
+              : Array.from({ length: probe.total }, (_, i) => ({
+                  episode_no: i + 1,
+                  title: "",
+                }));
+          setPlaylistProbe({
+            url: raw,
+            collectionTitle: probe.collection_title || "视频合集",
+            total: probe.total,
+            entries,
+          });
+          setPlaylistSelected([]);
+          return;
+        }
+        // 非合集：退回单集流程
+      }
       await api.urlSource(raw);
       setUrl("");
       await refresh();
@@ -245,6 +413,41 @@ export function FeedPage() {
       message.error(formatError(err, "添加链接失败"));
     } finally {
       setUrlSubmitting(false);
+      setBusy(false);
+    }
+  }
+
+  async function onPlaylistBatch(opts?: { all?: boolean; episode_nos?: number[] }) {
+    if (!playlistProbe || playlistBatching) return;
+    const episodeNos = opts?.all
+      ? undefined
+      : (opts?.episode_nos ?? playlistSelected).filter((n) => n > 0);
+    if (!opts?.all && (!episodeNos || episodeNos.length === 0)) {
+      message.warning("请至少选择一集");
+      return;
+    }
+    setPlaylistBatching(true);
+    setBusy(true);
+    try {
+      const res = await api.urlBatch(
+        playlistProbe.url,
+        opts?.all ? { import_all: true } : { episode_nos: episodeNos },
+      );
+      setPlaylistProbe(null);
+      setPlaylistSelected([]);
+      setUrl("");
+      await refresh();
+      if (res.created === 0 && res.skipped > 0) {
+        message.info(`这些分集都已在队列或已入库（跳过 ${res.skipped} 集），无需重复投递`);
+      } else {
+        message.success(
+          `已投递 ${res.created} 集${res.skipped ? `（跳过已有 ${res.skipped} 集）` : ""}，后台逐集解析；完成后到队列「已抽取」入库`,
+        );
+      }
+    } catch (err) {
+      message.error(formatError(err, "合集投递失败"));
+    } finally {
+      setPlaylistBatching(false);
       setBusy(false);
     }
   }
@@ -360,11 +563,52 @@ export function FeedPage() {
   }
 
   const readyCount = items.filter((i) => i.status === "ready").length;
+  const failedVideoCount = items.filter(
+    (i) =>
+      (i.type === "video_url" || i.type === "video_file") &&
+      (i.status === "failed" || i.status === "need_transcript"),
+  ).length;
   // 已入库的不再留在队列；历史页只看待入库 / 失败
-  const queueItems =
+  // 排序：进行中 → 等待 → 待入库 → 失败/待补贴
+  const queueRank = (status: string) => {
+    if (status === "extracting" || status === "processing") return 0;
+    if (status === "pending") return 1;
+    if (status === "ready") return 2;
+    if (status === "need_transcript" || status === "failed") return 3;
+    return 4;
+  };
+  const queueBaseItems = (
     tab === "history"
       ? items.filter((i) => i.status === "ready" || i.status === "failed")
-      : items.filter((i) => i.status !== "committed");
+      : items.filter((i) => i.status !== "committed")
+  )
+    .slice()
+    .sort((a, b) => {
+      const d = queueRank(a.status) - queueRank(b.status);
+      if (d !== 0) return d;
+      const ta = a.updated_at || a.created_at || "";
+      const tb = b.updated_at || b.created_at || "";
+      return tb.localeCompare(ta);
+    });
+  const queueFilterCounts = {
+    all: queueBaseItems.length,
+    active: queueBaseItems.filter((i) => ACTIVE.has(i.status)).length,
+    done: queueBaseItems.filter((i) => DONE.has(i.status)).length,
+    failed: queueBaseItems.filter((i) => FAILED.has(i.status)).length,
+  };
+  const queueItems =
+    queueFilter === "all"
+      ? queueBaseItems
+      : queueFilter === "active"
+        ? queueBaseItems.filter((i) => ACTIVE.has(i.status))
+        : queueFilter === "done"
+          ? queueBaseItems.filter((i) => DONE.has(i.status))
+          : queueBaseItems.filter((i) => FAILED.has(i.status));
+
+  function changeQueueFilter(next: QueueFilter) {
+    setQueueFilter(next);
+    window.localStorage.setItem(QUEUE_FILTER_KEY, next);
+  }
 
   async function openPreview(id: number) {
     const item = items.find((i) => i.id === id);
@@ -430,33 +674,77 @@ export function FeedPage() {
   }
 
   async function ingestAllReady() {
-    if (readyCount === 0) {
+    const readyItems = items.filter((i) => i.status === "ready");
+    if (readyItems.length === 0) {
       message.info("没有可入库的 ready 来源");
       return;
     }
     setBusy(true);
+    setIngestProgress({
+      total: readyItems.length,
+      done: 0,
+      ok: 0,
+      skipped: 0,
+      failed: 0,
+      current: readyItems[0]?.title || readyItems[0]?.filename || `#${readyItems[0]?.id}`,
+    });
+    let ok = 0;
+    let skipped = 0;
+    let failed = 0;
+    let firstFailDetail = "";
     try {
-      const res = await api.ingestReadySources();
+      for (let i = 0; i < readyItems.length; i++) {
+        const item = readyItems[i];
+        const label = item.title || item.filename || `#${item.id}`;
+        setIngestProgress({
+          total: readyItems.length,
+          done: i,
+          ok,
+          skipped,
+          failed,
+          current: label,
+        });
+        try {
+          await api.ingestSource(item.id);
+          ok += 1;
+        } catch (err) {
+          const detail = formatError(err, "入库失败");
+          if (/重复|已入库|409/.test(detail)) {
+            skipped += 1;
+          } else {
+            failed += 1;
+            if (!firstFailDetail) firstFailDetail = detail;
+          }
+        }
+        setIngestProgress({
+          total: readyItems.length,
+          done: i + 1,
+          ok,
+          skipped,
+          failed,
+          current: label,
+        });
+      }
       await refresh();
-      const n = res.ingested.length;
-      if (n > 0) {
+      if (ok > 0) {
         const tip =
-          res.skipped > 0
-            ? `已入库 ${n} 条，跳过重复 ${res.skipped} 条`
-            : `已入库 ${n} 条`;
+          skipped > 0 || failed > 0
+            ? `已入库 ${ok} 条${skipped > 0 ? `，跳过重复 ${skipped} 条` : ""}${
+                failed > 0 ? `，失败 ${failed} 条` : ""
+              }`
+            : `已入库 ${ok} 条`;
         message.success(tip);
         navigate("/knowledge");
-      } else if (res.skipped > 0) {
-        message.warning(`全部为重复内容，已跳过 ${res.skipped} 条`);
-      } else if (res.failed.length) {
-        message.error(res.failed[0]?.detail || "入库失败");
+      } else if (skipped > 0 && failed === 0) {
+        message.warning(`全部为重复内容，已跳过 ${skipped} 条`);
+      } else if (failed > 0) {
+        message.error(firstFailDetail || "入库失败");
       } else {
         message.info("没有可入库的来源");
       }
-    } catch (err) {
-      message.error(formatError(err, "入库失败"));
     } finally {
       setBusy(false);
+      setIngestProgress(null);
     }
   }
 
@@ -675,7 +963,7 @@ export function FeedPage() {
                     size="large"
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
-                    placeholder="粘贴视频链接，或抖音「复制分享」整段文案"
+                    placeholder="粘贴视频链接，或抖音 / B站「复制分享」整段文案"
                     required
                     disabled={urlSubmitting}
                   />
@@ -689,68 +977,79 @@ export function FeedPage() {
                     {urlSubmitting ? "识别中…" : "添加链接"}
                   </Button>
                 </form>
+                <div style={{ marginTop: 8 }}>
+                  <Space size={8}>
+                    <Switch
+                      size="small"
+                      checked={playlistMode}
+                      onChange={onPlaylistModeChange}
+                      disabled={urlSubmitting}
+                    />
+                    <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                      合集/分P：导入全部集数（关闭则仅导入第 1 集；课程、系列视频适用）
+                    </Typography.Text>
+                  </Space>
+                </div>
                 {urlSubmitting ? (
                   <p className={styles.urlLoading}>
                     正在解析链接并获取标题，视频站点可能需要几秒到十几秒，请稍候…
                   </p>
                 ) : null}
-                <Alert
-                  className={styles.urlAudioAlert}
-                  type={mediaCookiesReady ? "success" : "warning"}
-                  showIcon
-                  message={
-                    mediaCookiesReady
-                      ? "已保存抖音登录态，可抓取文案"
-                      : "抓取抖音前请先「应用内登录抖音」"
-                  }
-                  description={
-                    desktop?.loginMediaSite
-                      ? "点击下方按钮，在弹出窗口用网页版登录抖音，关闭窗口后即可对失败项点「重试」。"
-                      : "当前不是桌面客户端环境，无法应用内登录。请打开「空库」Windows/Mac 安装包使用。"
-                  }
-                  action={
-                    <Button
-                      size="small"
-                      type="primary"
-                      disabled={!desktop?.loginMediaSite}
-                      onClick={() => void onLoginDouyin()}
+                <div className={styles.mediaTipsRow}>
+                  <Space size={6} wrap>
+                    <Tooltip
+                      title={
+                        desktop?.loginMediaSite
+                          ? douyinCookiesReady
+                            ? "已保存抖音登录态，可抓取文案。点击可重新登录。"
+                            : "抓取抖音前请先登录。弹出窗口登录网页版，关闭后可对失败项点「重试」。"
+                          : "仅桌面安装包支持应用内登录。"
+                      }
                     >
-                      应用内登录抖音
-                    </Button>
-                  }
-                />
-                <Alert
-                  className={styles.urlAudioAlert}
-                  type={allowLocalAudio ? "success" : "info"}
-                  showIcon
-                  message={
-                    allowLocalAudio
-                      ? "已授权下载音轨到本机"
-                      : "默认不会下载视频音轨到本机"
-                  }
-                  description={
-                    allowLocalAudio ? (
-                      <>
-                        无字幕时会自动下载音轨做语音转写，并缓存供「文案跟读」。文件在本机
-                        data/uploads，删除来源会清理。可在{" "}
-                        <Link to="/settings">设置 → AI</Link> 关闭授权。
-                      </>
-                    ) : (
-                      <>
-                        当前仅尝试拉取字幕/网页正文。抖音多数无字幕，需要语音转写或跟读时，请先到{" "}
-                        <Link to="/settings">设置 → AI</Link>{" "}
-                        开启「允许下载音轨到本机」。也可在提取失败后「补贴文案」。
-                      </>
-                    )
-                  }
-                />
-                <Space wrap style={{ marginTop: 10 }}>
-                  {mediaCookiesReady ? (
-                    <Tag color="success">已保存应用内登录态</Tag>
-                  ) : (
-                    <Tag>未登录（抖音抓取可能失败）</Tag>
-                  )}
-                </Space>
+                      <Button
+                        size="small"
+                        type={douyinCookiesReady ? "default" : "primary"}
+                        disabled={!desktop?.loginMediaSite}
+                        onClick={() => void onLoginMedia("douyin")}
+                      >
+                        {douyinCookiesReady ? "抖音已登录" : "登录抖音"}
+                      </Button>
+                    </Tooltip>
+                    <Tooltip
+                      title={
+                        desktop?.loginMediaSite
+                          ? bilibiliCookiesReady
+                            ? "已保存 B站登录态，可抓取字幕/音轨。点击可重新登录。"
+                            : "B站匿名易 403，建议登录。合集批量时风控更严；登录后关闭窗口再「重试」。"
+                          : "仅桌面安装包支持应用内登录。"
+                      }
+                    >
+                      <Button
+                        size="small"
+                        type={bilibiliCookiesReady ? "default" : "primary"}
+                        disabled={!desktop?.loginMediaSite}
+                        onClick={() => void onLoginMedia("bilibili")}
+                      >
+                        {bilibiliCookiesReady ? "B站已登录" : "登录B站"}
+                      </Button>
+                    </Tooltip>
+                    <Tooltip
+                      title={
+                        allowLocalAudio
+                          ? "已授权下载音轨：无字幕时自动转写，并缓存供跟读。可在「设置 → 喂养 → 视频转写」关闭。"
+                          : "默认不下载音轨。抖音多数无字幕、B站也可能没有；需转写/跟读时请到「设置 → 喂养 → 视频转写」开启授权。"
+                      }
+                    >
+                      <Tag
+                        color={allowLocalAudio ? "success" : "default"}
+                        className={styles.mediaTipTag}
+                      >
+                        {allowLocalAudio ? "音轨已授权" : "音轨未授权"}
+                        <QuestionCircleOutlined className={styles.mediaTipIcon} />
+                      </Tag>
+                    </Tooltip>
+                  </Space>
+                </div>
                 <div className={styles.platforms}>
                   <Tag>YouTube</Tag>
                   <Tag>Bilibili</Tag>
@@ -758,7 +1057,7 @@ export function FeedPage() {
                   <Tag>抖音</Tag>
                 </div>
                 <p className={styles.urlHint}>
-                  抖音登录入口：本页上方提示条，或「设置 → 模型与 Key → 视频语音转写」。音轨下载需在设置中授权。
+                  悬停按钮可看说明；也可在「设置 → 喂养 → 视频转写」管理登录与音轨授权。
                 </p>
               </article>
 
@@ -779,13 +1078,88 @@ export function FeedPage() {
         </div>
 
         <aside
-          className={`${styles.queue}${queueItems.length === 0 ? ` ${styles.queueEmptyPanel}` : ""}`}
+          className={`${styles.queue}${queueBaseItems.length === 0 ? ` ${styles.queueEmptyPanel}` : ""}`}
         >
           <div className={styles.queueHead}>
-            <h2>解析队列 ({queueItems.length})</h2>
+            <div className={styles.queueHeadTitle}>
+              <h2>
+                解析队列 (
+                {queueFilter === "all"
+                  ? queueFilterCounts.all
+                  : `${queueItems.length}/${queueFilterCounts.all}`}
+                )
+              </h2>
+              <span
+                className={`${styles.queueRunBadge}${
+                  queuePaused ? ` ${styles.queueRunBadgePaused}` : ""
+                }`}
+              >
+                {queuePaused
+                  ? "已暂停"
+                  : queueConcurrency > 1
+                    ? `运行中 · ${queueConcurrency} 路`
+                    : "运行中"}
+              </span>
+            </div>
+            <div className={styles.queueRunControls}>
+              <button
+                type="button"
+                className={`${styles.queueRunBtn}${
+                  queuePaused ? ` ${styles.queueRunBtnPaused}` : ` ${styles.queueRunBtnActive}`
+                }`}
+                disabled={queueControlBusy}
+                onClick={() => void onQueueToggle()}
+                title={
+                  queuePaused
+                    ? "开始 / 继续解析等待中的项"
+                    : "暂停：进行中的会跑完，其后不再开始"
+                }
+              >
+                {queuePaused ? (
+                  <>
+                    <PlayCircleOutlined />
+                    开始
+                  </>
+                ) : (
+                  <>
+                    <PauseCircleOutlined />
+                    暂停
+                  </>
+                )}
+              </button>
+            </div>
           </div>
 
-          {queueItems.length === 0 ? (
+          <div className={styles.queueFilterTabs} role="tablist" aria-label="队列状态筛选">
+            {(
+              [
+                { key: "all", label: "全部" },
+                { key: "active", label: "未完成" },
+                { key: "done", label: "已完成" },
+                { key: "failed", label: "失败" },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.key}
+                type="button"
+                role="tab"
+                aria-selected={queueFilter === opt.key}
+                className={`${styles.queueFilterTab}${
+                  queueFilter === opt.key ? ` ${styles.queueFilterTabActive}` : ""
+                }${
+                  opt.key === "failed" && queueFilterCounts.failed > 0
+                    ? ` ${styles.queueFilterTabFailed}`
+                    : ""
+                }`}
+                onClick={() => changeQueueFilter(opt.key)}
+              >
+                {opt.label}
+                <span className={styles.queueFilterCount}>{queueFilterCounts[opt.key]}</span>
+              </button>
+            ))}
+          </div>
+
+          {queueBaseItems.length === 0 ? (
             <div className={styles.queueEmpty}>
               <div className={styles.skeletonList} aria-hidden>
                 {[0, 1, 2].map((i) => (
@@ -805,6 +1179,17 @@ export function FeedPage() {
                 <strong>暂无解析任务</strong>
                 <p>投递电子书、笔记或链接后，任务会出现在这里</p>
               </div>
+            </div>
+          ) : queueItems.length === 0 ? (
+            <div className={styles.queueFilterEmpty}>
+              <strong>
+                {queueFilter === "active"
+                  ? "没有未完成的任务"
+                  : queueFilter === "done"
+                    ? "没有已完成的任务"
+                    : "没有失败的任务"}
+              </strong>
+              <p>可切换上方状态查看其它队列项</p>
             </div>
           ) : (
             <ul className={styles.queueList}>
@@ -883,13 +1268,23 @@ export function FeedPage() {
                     )}
                     {item.status === "need_transcript" && (
                       <>
-                        <Button
-                          size="small"
-                          disabled={!desktop?.loginMediaSite}
-                          onClick={() => void onLoginDouyin()}
-                        >
-                          登录抖音后重试
-                        </Button>
+                        {mediaPlatformOf(item.source_uri) === "bilibili" ? (
+                          <Button
+                            size="small"
+                            disabled={!desktop?.loginMediaSite}
+                            onClick={() => void onLoginMedia("bilibili")}
+                          >
+                            登录B站后重试
+                          </Button>
+                        ) : mediaPlatformOf(item.source_uri) === "douyin" ? (
+                          <Button
+                            size="small"
+                            disabled={!desktop?.loginMediaSite}
+                            onClick={() => void onLoginMedia("douyin")}
+                          >
+                            登录抖音后重试
+                          </Button>
+                        ) : null}
                         <Button
                           size="small"
                           onClick={() => {
@@ -916,45 +1311,271 @@ export function FeedPage() {
           )}
 
           <div className={styles.queueActions}>
-            <Button
-              icon={<DeleteOutlined />}
-              disabled={busy || items.every((i) => ACTIVE.has(i.status) || i.status === "need_transcript")}
-              onClick={() =>
-                void (async () => {
-                  setBusy(true);
-                  try {
-                    const res = await api.clearFinishedSources();
-                    await refresh();
-                    message.success(
-                      res.removed > 0
-                        ? `已移出 ${res.removed} 条（待入库/失败项；已入库内容仍在知识库）`
-                        : "没有可移出的队列项",
-                    );
-                  } catch (err) {
-                    message.error(formatError(err, "移出失败"));
-                  } finally {
-                    setBusy(false);
-                  }
-                })()
-              }
-            >
-              移出已完成
-            </Button>
+            {ingestProgress && (
+              <div className={styles.ingestProgress} aria-live="polite">
+                <div className={styles.ingestProgressHead}>
+                  <strong>
+                    入库中 {ingestProgress.done}/{ingestProgress.total}
+                  </strong>
+                  <span>
+                    成功 {ingestProgress.ok}
+                    {ingestProgress.skipped > 0 ? ` · 跳过 ${ingestProgress.skipped}` : ""}
+                    {ingestProgress.failed > 0 ? ` · 失败 ${ingestProgress.failed}` : ""}
+                  </span>
+                </div>
+                <Progress
+                  percent={Math.round(
+                    (ingestProgress.done / Math.max(1, ingestProgress.total)) * 100,
+                  )}
+                  size="small"
+                  status="active"
+                  strokeColor="#2a6f6a"
+                />
+                <p className={styles.ingestProgressCurrent} title={ingestProgress.current}>
+                  正在处理：{ingestProgress.current}
+                </p>
+              </div>
+            )}
             <Button
               type="primary"
-              icon={<PlayCircleOutlined />}
+              className={styles.queueIngestBtn}
+              icon={<InboxOutlined />}
               block
+              loading={Boolean(ingestProgress)}
               disabled={busy || readyCount === 0}
               onClick={() => void ingestAllReady()}
             >
-              入库知识库{readyCount > 0 ? ` (${readyCount})` : ""}
+              {ingestProgress
+                ? `入库中 ${ingestProgress.done}/${ingestProgress.total}`
+                : `入库知识库${readyCount > 0 ? ` · ${readyCount}` : ""}`}
             </Button>
+            <div className={styles.queueTools} role="group" aria-label="队列清理">
+              <button
+                type="button"
+                className={styles.queueTool}
+                disabled={
+                  busy ||
+                  items.every((i) => ACTIVE.has(i.status) || i.status === "need_transcript")
+                }
+                onClick={() =>
+                  void (async () => {
+                    setBusy(true);
+                    try {
+                      const res = await api.clearFinishedSources();
+                      await refresh();
+                      message.success(
+                        res.removed > 0
+                          ? `已移出 ${res.removed} 条（待入库/失败项；已入库内容仍在知识库）`
+                          : "没有可移出的队列项",
+                      );
+                    } catch (err) {
+                      message.error(formatError(err, "移出失败"));
+                    } finally {
+                      setBusy(false);
+                    }
+                  })()
+                }
+              >
+                移出已完成
+              </button>
+              <button
+                type="button"
+                className={styles.queueTool}
+                disabled={busy || failedVideoCount === 0}
+                onClick={() =>
+                  modal.confirm({
+                    title: "清除失败的视频？",
+                    content: `将移出 ${failedVideoCount} 条失败/待补贴的视频（含合集批量失败项）。进行中与已抽取待入库的不受影响。`,
+                    okText: "清除失败视频",
+                    okType: "danger",
+                    cancelText: "取消",
+                    onOk: async () => {
+                      setBusy(true);
+                      try {
+                        const previewItem = items.find((i) => i.id === previewSourceId);
+                        const res = await api.clearFailedVideoSources();
+                        if (
+                          previewItem &&
+                          (previewItem.type === "video_url" ||
+                            previewItem.type === "video_file") &&
+                          (previewItem.status === "failed" ||
+                            previewItem.status === "need_transcript")
+                        ) {
+                          closePreviews();
+                        }
+                        await refresh();
+                        message.success(
+                          res.removed > 0
+                            ? `已移出 ${res.removed} 条失败视频`
+                            : "没有可移出的失败视频",
+                        );
+                      } catch (err) {
+                        message.error(formatError(err, "移出失败"));
+                        throw err;
+                      } finally {
+                        setBusy(false);
+                      }
+                    },
+                  })
+                }
+              >
+                清失败{failedVideoCount > 0 ? ` ${failedVideoCount}` : ""}
+              </button>
+              <button
+                type="button"
+                className={`${styles.queueTool} ${styles.queueToolDanger}`}
+                disabled={busy || queueBaseItems.length === 0}
+                onClick={() =>
+                  modal.confirm({
+                    title: "清空整个喂养队列？",
+                    content: `将移出当前队列中的 ${queueBaseItems.length} 条（含进行中、待入库、失败）。已入库的知识内容不受影响；进行中的任务会被中断。`,
+                    okText: "清空全部",
+                    okType: "danger",
+                    cancelText: "取消",
+                    onOk: async () => {
+                      setBusy(true);
+                      try {
+                        closePreviews();
+                        const res = await api.clearAllQueueSources();
+                        await refresh();
+                        message.success(
+                          res.removed > 0
+                            ? `已清空队列（移出 ${res.removed} 条）`
+                            : "队列已是空的",
+                        );
+                      } catch (err) {
+                        message.error(formatError(err, "清空队列失败"));
+                        throw err;
+                      } finally {
+                        setBusy(false);
+                      }
+                    },
+                  })
+                }
+              >
+                清空全部
+              </button>
+            </div>
           </div>
           <p className={styles.queueFoot}>
-            抽取完成后点「入库」；成功后会离开队列，可在知识页浏览
+            抽取完成后点「入库」；清理项仅移出队列，知识库已有内容保留
           </p>
         </aside>
       </div>
+
+      <Modal
+        title="检测到合集 / 分P 视频"
+        open={playlistProbe !== null}
+        onCancel={() => {
+          if (playlistBatching) return;
+          setPlaylistProbe(null);
+          setPlaylistSelected([]);
+        }}
+        footer={null}
+        width={560}
+        destroyOnHidden
+      >
+        {playlistProbe ? (
+          <div>
+            <Typography.Paragraph>
+              <Typography.Text strong>{playlistProbe.collectionTitle}</Typography.Text>
+            </Typography.Paragraph>
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
+              共 {playlistProbe.total} 集。勾选需要导入的分集；已投递过的会自动跳过。
+            </Typography.Paragraph>
+            <Space size="small" wrap style={{ marginBottom: 8 }}>
+              <Button
+                size="small"
+                disabled={playlistBatching}
+                onClick={() =>
+                  setPlaylistSelected(playlistProbe.entries.map((e) => e.episode_no))
+                }
+              >
+                全选
+              </Button>
+              <Button
+                size="small"
+                disabled={playlistBatching}
+                onClick={() => setPlaylistSelected([])}
+              >
+                清空
+              </Button>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                已选 {playlistSelected.length} 集
+              </Typography.Text>
+            </Space>
+            <div className={styles.playlistPicker}>
+              <div className={styles.playlistCheckboxList}>
+                {playlistProbe.entries.map((ep) => {
+                  const checked = playlistSelected.includes(ep.episode_no);
+                  return (
+                    <Checkbox
+                      key={ep.episode_no}
+                      checked={checked}
+                      disabled={playlistBatching}
+                      onChange={(e) => {
+                        const on = e.target.checked;
+                        setPlaylistSelected((prev) => {
+                          if (on) {
+                            return prev.includes(ep.episode_no)
+                              ? prev
+                              : [...prev, ep.episode_no].sort((a, b) => a - b);
+                          }
+                          return prev.filter((n) => n !== ep.episode_no);
+                        });
+                      }}
+                    >
+                      <span className={styles.playlistEpLabel}>
+                        <span className={styles.playlistEpNo}>P{ep.episode_no}</span>
+                        <span className={styles.playlistEpTitle}>
+                          {ep.title || `第 ${ep.episode_no} 集`}
+                        </span>
+                      </span>
+                    </Checkbox>
+                  );
+                })}
+              </div>
+            </div>
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="无字幕的视频需要语音转写"
+              description={
+                <>
+                  若该合集没有字幕，需先在 <Link to="/settings">设置 → AI</Link> 开启
+                  「允许下载音轨到本机」，单集 30 分钟约需转写几分钟。
+                </>
+              }
+            />
+            <Space wrap>
+              <Button
+                type="primary"
+                loading={playlistBatching}
+                disabled={playlistSelected.length === 0}
+                onClick={() => void onPlaylistBatch({ episode_nos: playlistSelected })}
+              >
+                导入所选（{playlistSelected.length}）
+              </Button>
+              <Button
+                loading={playlistBatching}
+                onClick={() => void onPlaylistBatch({ all: true })}
+              >
+                全部导入（{playlistProbe.total} 集）
+              </Button>
+              <Button
+                disabled={playlistBatching}
+                onClick={() => {
+                  setPlaylistProbe(null);
+                  setPlaylistSelected([]);
+                }}
+              >
+                取消
+              </Button>
+            </Space>
+          </div>
+        ) : null}
+      </Modal>
 
       <Modal
         title="搜索公版书"

@@ -244,7 +244,16 @@ def normalize_media_url(url: str) -> str:
         return urlunparse((p.scheme or "https", p.netloc, path, "", "", ""))
 
     if "bilibili.com" in host or "b23.tv" in host:
-        return urlunparse((p.scheme or "https", p.netloc, path.rstrip("/") or "/", "", "", ""))
+        # 分P 合集必须保留 p 参数，否则所有分集都回落到 P1
+        from urllib.parse import parse_qs, urlencode
+
+        qs = parse_qs(p.query, keep_blank_values=False)
+        keep = {}
+        if qs.get("p") and qs["p"][0].isdigit():
+            keep["p"] = qs["p"][0]
+        return urlunparse(
+            (p.scheme or "https", p.netloc, path.rstrip("/") or "/", "", urlencode(keep), "")
+        )
 
     if "youtube.com" in host or "youtu.be" in host:
         from urllib.parse import parse_qs, urlencode
@@ -268,8 +277,22 @@ def _ytdlp_proxy_opt() -> str:
     return (os.environ.get("KONGKU_YTDLP_PROXY") or "").strip()
 
 
-def apply_ytdlp_network_opts(opts: dict) -> dict:
-    """写入 proxy / UA 相关网络选项（原地修改并返回）。"""
+def _is_bilibili_url(url: str) -> bool:
+    low = (url or "").lower()
+    return "bilibili" in low or "b23.tv" in low
+
+
+def _is_douyin_url(url: str) -> bool:
+    low = (url or "").lower()
+    return "douyin" in low or "iesdouyin" in low
+
+
+def apply_ytdlp_network_opts(opts: dict, url: str = "") -> dict:
+    """写入 proxy / UA / Referer 相关网络选项（原地修改并返回）。
+
+    Referer 必须按平台给：B站 WAF 会校验 Referer，带抖音 Referer 请求 B站
+    会被拦（表现为 403 / KeyError('bvid') 等误导性报错）。
+    """
     opts = dict(opts)
     # 空字符串 = yt-dlp 明确不走代理，忽略环境变量里的 HTTP_PROXY
     opts["proxy"] = _ytdlp_proxy_opt()
@@ -279,15 +302,27 @@ def apply_ytdlp_network_opts(opts: dict) -> dict:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     )
-    headers.setdefault("Referer", "https://www.douyin.com/")
+    low = (url or "").lower()
+    if _is_bilibili_url(low):
+        headers.setdefault("Referer", "https://www.bilibili.com/")
+    elif "youtube" in low or "youtu.be" in low:
+        headers.setdefault("Referer", "https://www.youtube.com/")
+    elif _is_douyin_url(low) or not low:
+        headers.setdefault("Referer", "https://www.douyin.com/")
+    # 其它站点：不强制写死 Referer，避免误伤
     opts["http_headers"] = headers
     return opts
 
 
-def _httpx_client_kwargs(**extra) -> dict:
+def _httpx_client_kwargs(url: str = "", **extra) -> dict:
     """httpx：默认不信任环境代理，避免短链解析也走坏代理。"""
     import os
 
+    referer = "https://www.douyin.com/"
+    if _is_bilibili_url(url):
+        referer = "https://www.bilibili.com/"
+    elif "tiktok" in (url or "").lower():
+        referer = "https://www.tiktok.com/"
     kwargs = {
         "trust_env": False,
         "follow_redirects": True,
@@ -297,7 +332,7 @@ def _httpx_client_kwargs(**extra) -> dict:
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                 "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
             ),
-            "Referer": "https://www.douyin.com/",
+            "Referer": referer,
         },
     }
     proxy = _ytdlp_proxy_opt()
@@ -338,7 +373,7 @@ def resolve_media_url_sync(url: str) -> str:
     try:
         import httpx
 
-        with httpx.Client(**_httpx_client_kwargs()) as client:
+        with httpx.Client(**_httpx_client_kwargs(u)) as client:
             resp = client.get(u)
             final = str(resp.url)
             if final and final != u:
@@ -348,7 +383,7 @@ def resolve_media_url_sync(url: str) -> str:
     return u
 
 
-def compact_tool_error(err: str, limit: int = 180) -> str:
+def compact_tool_error(err: str, limit: int = 180, url: str = "") -> str:
     """压缩 yt-dlp 等长错误：优先 ERROR 行，去掉 URL，取头部而非尾巴。"""
     text = str(err or "").strip()
     if not text:
@@ -359,6 +394,7 @@ def compact_tool_error(err: str, limit: int = 180) -> str:
             text = s
             break
     low_full = text.lower()
+    is_bili = _is_bilibili_url(url) or "bilibili" in low_full
     if any(
         k in low_full
         for k in (
@@ -368,13 +404,16 @@ def compact_tool_error(err: str, limit: int = 180) -> str:
             "407 proxy",
         )
     ):
+        site = "B站" if is_bili else "抖音"
         return (
-            "访问抖音失败：本机代理（Clash/VPN 等）拦截了请求。"
+            f"访问{site}失败：本机代理（Clash/VPN 等）拦截了请求。"
             "请关闭系统/终端代理后重试，或设置环境变量 KONGKU_YTDLP_PROXY 指向可用代理。"
         )
     text = re.sub(r"https?://\S+", "[链接]", text)
     text = re.sub(r"\s+", " ", text).strip()
     if "unsupported url" in text.lower():
+        if is_bili:
+            return "无法识别该 B站链接。请粘贴完整 bilibili.com 或 b23.tv 链接后重试"
         return (
             "无法识别该链接。请粘贴完整抖音分享文案或 v.douyin.com 短链，"
             "并确认已「应用内登录抖音」后重试"
@@ -383,6 +422,16 @@ def compact_tool_error(err: str, limit: int = 180) -> str:
         return (
             "抖音网页接口风控（常被误报成 Cookie 问题）。"
             "请用桌面端并已登录后重试；系统会改走应用内会话下载。"
+        )
+    if is_bili and (
+        "403" in text
+        or "forbidden" in low_full
+        or "keyerror('bvid')" in low_full
+        or "keyerror(\"bvid\")" in low_full
+        or "unable to download json metadata" in low_full
+    ):
+        return (
+            "B站接口被拒（403/风控）。请在桌面端「应用内登录B站」后重试，并关闭 Clash 等代理。"
         )
     if re.fullmatch(r"[\w%.\-&=]+", text) and ("share_sign" in text or "from_aid" in text):
         return "平台返回异常（链接参数噪声），请重新粘贴分享链接或「应用内登录抖音」后重试"
@@ -489,7 +538,8 @@ def fetch_video_title_sync(url: str) -> str:
             "quiet": True,
             "no_warnings": True,
             "noprogress": True,
-        }
+        },
+        resolved or url,
     )
     attempts: list[dict] = []
     cookie_file = _resolve_cookie_file()
@@ -521,6 +571,98 @@ def fetch_video_title_sync(url: str) -> str:
             except Exception:  # noqa: BLE001
                 continue
     return ""
+
+
+def probe_playlist_sync(url: str) -> dict:
+    """探测视频链接是否为合集/分P：返回 {is_playlist, collection_title, total, entries}。
+
+    entries 为 [{episode_no, url}, ...]，按平台分集顺序（episode_no 为数字序号，
+    前端按数字排序，勿按字符串）。flat 模式拿不到分集标题，标题在逐集解析时补。
+    """
+    result: dict = {
+        "is_playlist": False,
+        "collection_title": "",
+        "total": 0,
+        "entries": [],
+    }
+    try:
+        import yt_dlp
+    except ImportError:
+        return result
+
+    resolved = resolve_media_url_sync(url)
+    base = apply_ytdlp_network_opts(
+        {
+            "skip_download": True,
+            "quiet": True,
+            "no_warnings": True,
+            "noprogress": True,
+            "extract_flat": True,
+        },
+        resolved or url,
+    )
+    cookie_file = _resolve_cookie_file()
+    attempts: list[dict] = []
+    if cookie_file is not None:
+        attempts.append({**base, "cookiefile": str(cookie_file)})
+    attempts.append(dict(base))
+
+    for target in (resolved, url):
+        if not target:
+            continue
+        for opts in attempts:
+            try:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(target, download=False)
+            except Exception:  # noqa: BLE001
+                continue
+            if not info:
+                continue
+            if info.get("_type") != "playlist" or not info.get("entries"):
+                # 单视频：is_playlist=False，调用方走普通单集流程
+                result["collection_title"] = (info.get("title") or "").strip()[:500]
+                return result
+            entries = []
+            for idx, e in enumerate(info["entries"]):
+                if not e:
+                    continue
+                ep_no = idx + 1
+                ep_url = (e.get("url") or e.get("webpage_url") or "").strip()
+                if not ep_url:
+                    ep_id = (e.get("id") or "").strip()
+                    if not ep_id:
+                        continue
+                    # B 站分P / 合集：flat 时常只有 id
+                    if ep_id.startswith(("BV", "av", "bv")):
+                        ep_url = f"https://www.bilibili.com/video/{ep_id}"
+                    else:
+                        ep_url = target.split("?")[0]
+                ep_title = (e.get("title") or e.get("alt_title") or "").strip()[:200]
+                entries.append(
+                    {
+                        "episode_no": ep_no,
+                        "url": ep_url,
+                        "title": ep_title,
+                    }
+                )
+            if len(entries) <= 1:
+                return result
+            # flat 探测时多集常共用同一 BV 链接；补 ?p= 保证分集可区分、可单集解析
+            seen_urls = {e["url"] for e in entries}
+            if len(seen_urls) < len(entries):
+                for e in entries:
+                    u = e["url"]
+                    if "p=" in u.lower():
+                        continue
+                    sep = "&" if "?" in u else "?"
+                    e["url"] = f"{u}{sep}p={e['episode_no']}"
+            result["is_playlist"] = True
+            result["collection_title"] = (info.get("title") or "").strip()[:500]
+            result["total"] = len(entries)
+            result["entries"] = entries
+            return result
+    return result
+
 
 async def extract_webpage(url: str) -> str:
     import httpx
@@ -594,17 +736,24 @@ def _is_dpapi_error(err: str) -> bool:
 
 
 def _cookies_needed(err: str) -> bool:
+    """是否值得换 Cookie / 下一组策略再试（含 B站 403 风控表象）。"""
     low = (err or "").lower()
     return (
         "cookie" in low
         or "登录" in (err or "")
         or "login" in low
+        or "403" in (err or "")
+        or "forbidden" in low
+        or "keyerror('bvid')" in low
+        or 'keyerror("bvid")' in low
+        or "unable to download json metadata" in low
         or _is_dpapi_error(err)
     )
 
 
 def _friendly_subs_error(err: str, url: str) -> str:
     low = (err or "").lower()
+    is_bili = _is_bilibili_url(url)
     if any(
         k in low
         for k in (
@@ -613,20 +762,32 @@ def _friendly_subs_error(err: str, url: str) -> str:
             "unable to connect to proxy",
         )
     ):
+        site = "B站" if is_bili else "抖音"
         return (
-            "访问抖音失败：本机代理（Clash/VPN 等）拦截了请求，常被误报成需要登录。"
+            f"访问{site}失败：本机代理（Clash/VPN 等）拦截了请求，常被误报成需要登录。"
             "请关闭系统代理后重试，或「补贴文案」。"
         )
     if _is_dpapi_error(err):
         return (
             "无法从系统 Chrome/Edge 读取 Cookie（Windows DPAPI）。"
-            "请在桌面端喂养页点「应用内登录抖音」，登录后关闭窗口，再点队列「重试」；"
+            "请在桌面端喂养页点「应用内登录」对应平台，登录后关闭窗口，再点队列「重试」；"
             "或直接「补贴文案」。"
         )
     if "fresh cookies" in low:
         return (
             "抖音网页抓取接口已升级风控（不一定是未登录）。"
             "桌面端会改用应用内登录会话下载；请确认已「应用内登录抖音」后重试，或「补贴文案」。"
+        )
+    if is_bili and (
+        "403" in (err or "")
+        or "forbidden" in low
+        or "keyerror('bvid')" in low
+        or 'keyerror("bvid")' in low
+        or "unable to download json metadata" in low
+    ):
+        return (
+            "B站接口被拒（403/风控）。请在桌面端点「应用内登录B站」后重试，"
+            "并关闭 Clash 等代理；仍失败可「补贴文案」。"
         )
     if _cookies_needed(err) and _is_cookie_gated_host(url):
         return (
@@ -638,13 +799,20 @@ def _friendly_subs_error(err: str, url: str) -> str:
     if (not msg) or "no subtitles" in low or "requested languages" in low:
         if _is_cookie_gated_host(url):
             return "该视频没有可下载字幕轨（抖音多数如此），将改用音轨语音转写。"
+        if is_bili:
+            return "该 B站视频没有可下载字幕，将改用音轨语音转写。"
         return "该视频没有可下载字幕，将改用音轨语音转写。"
     if "data blocks" in low:
+        if is_bili:
+            return (
+                "该视频没有可用字幕，且音轨拉取失败。"
+                "请关闭代理并「应用内登录B站」后重试，或「补贴文案」。"
+            )
         return (
             "该视频没有可用字幕，且音轨 CDN 拉取为空。"
             "请关闭代理并重新「应用内登录抖音」后重试，或「补贴文案」。"
         )
-    return f"未拿到字幕：{compact_tool_error(msg)}"
+    return f"未拿到字幕：{compact_tool_error(msg, url=url)}"
 
 
 def extract_video_audio_transcript_sync(
@@ -711,7 +879,7 @@ def _yt_dlp_option_sets(url: str) -> list[dict]:
         "quiet": True,
         "no_warnings": True,
     }
-    base = apply_ytdlp_network_opts(base)
+    base = apply_ytdlp_network_opts(base, url)
     sets: list[dict] = []
     cookie_file = _resolve_cookie_file()
     gated = _is_cookie_gated_host(url)

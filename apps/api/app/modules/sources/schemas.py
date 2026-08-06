@@ -18,6 +18,8 @@ class SourceOut(BaseModel):
     error_message: str
     char_count: int
     vault_path: str = ""
+    collection_title: str = ""
+    episode_no: int = 0
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -37,6 +39,46 @@ class PasteIn(BaseModel):
 class UrlIn(BaseModel):
     # 允许粘贴抖音等「复制分享」整段文案，后端会自动抽链
     url: str = Field(min_length=8, max_length=4000)
+
+
+class UrlProbeIn(BaseModel):
+    url: str = Field(min_length=8, max_length=4000)
+
+
+class UrlProbeEpisode(BaseModel):
+    episode_no: int
+    title: str = ""
+
+
+class UrlProbeOut(BaseModel):
+    is_playlist: bool = False
+    collection_title: str = ""
+    total: int = 0
+    # 分集清单（供前端选集多选）；flat 探测时 title 可能为空
+    entries: list[UrlProbeEpisode] = Field(default_factory=list)
+
+
+class UrlBatchIn(BaseModel):
+    """合集/分P 批量投递。
+
+    - import_all=True：导入全部集数
+    - episode_nos：指定集号（可多选）
+    - limit：仅前 N 集（兼容旧客户端）
+    三者必须有其一，避免漏传参数时误导入全量。
+    """
+
+    url: str = Field(min_length=8, max_length=4000)
+    import_all: bool = False
+    limit: Optional[int] = Field(default=None, ge=1, le=500)
+    episode_nos: Optional[list[int]] = Field(default=None, max_length=500)
+
+
+class UrlBatchOut(BaseModel):
+    collection_title: str = ""
+    total: int = 0
+    created: int = 0
+    skipped: int = 0
+    source_ids: list[int] = Field(default_factory=list)
 
 
 class TranscriptIn(BaseModel):

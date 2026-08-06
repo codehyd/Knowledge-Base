@@ -1,5 +1,5 @@
 /**
- * 媒体：抖音登录 Cookie、应用内视频预览窗口。
+ * 媒体：抖音 / B站登录 Cookie、应用内视频预览窗口。
  */
 
 const { BrowserWindow, session } = require("electron");
@@ -8,6 +8,24 @@ const path = require("path");
 
 const state = require("./state.cjs");
 const { ytDlpCookiesPath } = require("./paths.cjs");
+
+const SITE_PRESETS = {
+  douyin: {
+    startUrl: "https://www.douyin.com/?recommend=1",
+    title: "空库 · 请在网页登录抖音，完成后关闭本窗口",
+    label: "抖音",
+  },
+  bilibili: {
+    startUrl: "https://www.bilibili.com/",
+    title: "空库 · 请在网页登录B站，完成后关闭本窗口",
+    label: "B站",
+  },
+  tiktok: {
+    startUrl: "https://www.tiktok.com/login",
+    title: "空库 · 请在网页登录 TikTok，完成后关闭本窗口",
+    label: "TikTok",
+  },
+};
 
 function mediaSession() {
   return session.fromPartition("persist:kongku-media");
@@ -52,12 +70,24 @@ function isHttpUrl(url) {
   }
 }
 
+function isDouyinCookie(c) {
+  return /douyin|iesdouyin|snssdk|byte(?:dance)?|tiktok|capcut/i.test(
+    String(c.domain || ""),
+  );
+}
+
+function isBilibiliCookie(c) {
+  return /bilibili|bilivideo|b23\.tv/i.test(String(c.domain || ""));
+}
+
+function isMediaCookie(c) {
+  return isDouyinCookie(c) || isBilibiliCookie(c);
+}
+
 async function douyinLoginCookieStats() {
   const ses = mediaSession();
   const all = await ses.cookies.get({});
-  const related = all.filter((c) =>
-    /douyin|iesdouyin|snssdk|byte(?:dance)?/i.test(String(c.domain || "")),
-  );
+  const related = all.filter(isDouyinCookie);
   const names = new Set(related.map((c) => c.name));
   const loggedIn = [...names].some((n) =>
     /^(sessionid|sessionid_ss|sid_tt|sid_guard|uid_tt|uid_tt_ss|passport_csrf_token)$/i.test(
@@ -67,35 +97,67 @@ async function douyinLoginCookieStats() {
   return { count: related.length, loggedIn, names: [...names] };
 }
 
-async function exportMediaCookiesFile() {
+async function bilibiliLoginCookieStats() {
   const ses = mediaSession();
   const all = await ses.cookies.get({});
-  const preferred = all.filter((c) =>
-    /douyin|iesdouyin|tiktok|byte(?:dance)?|snssdk|capcut/i.test(
-      String(c.domain || ""),
-    ),
+  const related = all.filter(isBilibiliCookie);
+  const names = new Set(related.map((c) => c.name));
+  const loggedIn = [...names].some((n) =>
+    /^(SESSDATA|bili_jct|DedeUserID|DedeUserID__ckMd5)$/i.test(n),
   );
+  return { count: related.length, loggedIn, names: [...names] };
+}
+
+async function mediaLoginCookieStats(site = "douyin") {
+  if (site === "bilibili") return bilibiliLoginCookieStats();
+  return douyinLoginCookieStats();
+}
+
+async function exportMediaCookiesFile(siteHint = "") {
+  const ses = mediaSession();
+  const all = await ses.cookies.get({});
+  // 同时保留抖音 + B站域，避免登录一侧时冲掉另一侧
+  const preferred = all.filter(isMediaCookie);
   const use = preferred.length > 0 ? preferred : all;
   const out = ytDlpCookiesPath();
   fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.writeFileSync(out, cookiesToNetscape(use), "utf8");
-  const stats = await douyinLoginCookieStats();
+  const douyin = await douyinLoginCookieStats();
+  const bilibili = await bilibiliLoginCookieStats();
+  const hint = String(siteHint || "").toLowerCase();
+  const focus =
+    hint === "bilibili"
+      ? bilibili
+      : hint === "douyin" || hint === "tiktok"
+        ? douyin
+        : { loggedIn: douyin.loggedIn || bilibili.loggedIn, count: use.length };
   console.log(
     "[kongku] exported media cookies:",
     out,
     "count=",
     use.length,
-    "loggedIn=",
-    stats.loggedIn,
+    "douyinLoggedIn=",
+    douyin.loggedIn,
+    "bilibiliLoggedIn=",
+    bilibili.loggedIn,
   );
+  let message;
+  if (hint === "bilibili" && !bilibili.loggedIn) {
+    message = "未检测到 B站登录 Cookie，请确认已在弹窗中登录 B站网页版后再关闭";
+  } else if ((hint === "douyin" || hint === "tiktok") && !douyin.loggedIn) {
+    message = "未检测到登录 Cookie，请确认已在弹窗中登录抖音网页版后再关闭";
+  }
   return {
     ok: true,
     path: out,
     count: use.length,
-    loggedIn: stats.loggedIn,
-    message: stats.loggedIn
-      ? undefined
-      : "未检测到登录 Cookie，请确认已在弹窗中登录抖音网页版后再关闭",
+    loggedIn: Boolean(focus.loggedIn),
+    site: hint || undefined,
+    douyinLoggedIn: douyin.loggedIn,
+    bilibiliLoggedIn: bilibili.loggedIn,
+    douyinCount: douyin.count,
+    bilibiliCount: bilibili.count,
+    message,
   };
 }
 
@@ -148,17 +210,19 @@ function attachMediaLoginGuards(win) {
 }
 
 function openMediaLoginWindow(site = "douyin") {
-  const startUrl =
-    site === "tiktok"
-      ? "https://www.tiktok.com/login"
-      : "https://www.douyin.com/?recommend=1";
+  const key = SITE_PRESETS[site] ? site : "douyin";
+  const preset = SITE_PRESETS[key];
+  const startUrl = preset.startUrl;
 
   if (state.mediaLoginWindow && !state.mediaLoginWindow.isDestroyed()) {
+    state.mediaLoginWindow.setTitle(preset.title);
     state.mediaLoginWindow.focus();
     void state.mediaLoginWindow.loadURL(startUrl);
-    return { ok: true, reused: true };
+    state.mediaLoginSite = key;
+    return { ok: true, reused: true, site: key };
   }
 
+  state.mediaLoginSite = key;
   state.mediaLoginWindow = new BrowserWindow({
     width: 1080,
     height: 780,
@@ -168,7 +232,7 @@ function openMediaLoginWindow(site = "douyin") {
         : undefined,
     modal: false,
     autoHideMenuBar: true,
-    title: "空库 · 请在网页登录抖音，完成后关闭本窗口",
+    title: preset.title,
     webPreferences: {
       partition: "persist:kongku-media",
       contextIsolation: true,
@@ -191,14 +255,18 @@ function openMediaLoginWindow(site = "douyin") {
   loginPoll = setInterval(() => {
     void (async () => {
       try {
-        const stats = await douyinLoginCookieStats();
+        const currentSite = state.mediaLoginSite || key;
+        const stats = await mediaLoginCookieStats(currentSite);
         if (!stats.loggedIn) return;
         stopPoll();
-        const info = await exportMediaCookiesFile();
+        const info = await exportMediaCookiesFile(currentSite);
+        const label = SITE_PRESETS[currentSite]?.label || currentSite;
         state.mainWindow?.webContents.send("media:cookies-exported", {
           ...info,
+          site: currentSite,
           message:
-            "已检测到抖音登录，Cookie 已保存。可关闭登录窗口并对失败项点「重试」。",
+            info.message ||
+            `已检测到${label}登录，Cookie 已保存。可关闭登录窗口并对失败项点「重试」。`,
         });
       } catch (err) {
         console.warn("[kongku] login poll:", err);
@@ -207,21 +275,27 @@ function openMediaLoginWindow(site = "douyin") {
   }, 2000);
 
   state.mediaLoginWindow.on("closed", () => {
+    const closedSite = state.mediaLoginSite || key;
     stopPoll();
     state.mediaLoginWindow = null;
-    void exportMediaCookiesFile()
+    state.mediaLoginSite = null;
+    void exportMediaCookiesFile(closedSite)
       .then((info) => {
-        state.mainWindow?.webContents.send("media:cookies-exported", info);
+        state.mainWindow?.webContents.send("media:cookies-exported", {
+          ...info,
+          site: closedSite,
+        });
       })
       .catch((err) => {
         state.mainWindow?.webContents.send("media:cookies-exported", {
           ok: false,
+          site: closedSite,
           message: String(err?.message || err),
         });
       });
   });
 
-  return { ok: true, reused: false };
+  return { ok: true, reused: false, site: key };
 }
 
 function openVideoPreviewWindow(rawUrl, title = "") {
@@ -278,4 +352,6 @@ module.exports = {
   exportMediaCookiesFile,
   openMediaLoginWindow,
   openVideoPreviewWindow,
+  douyinLoginCookieStats,
+  bilibiliLoginCookieStats,
 };

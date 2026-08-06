@@ -30,7 +30,7 @@ from app.modules.skills.schemas import (
 from app.modules.sources.models import Source
 from app.modules.sources.schemas import PasteIn
 from app.modules.sources.service import sources_service
-from app.modules.sources.tasks import run_extract_job
+from app.modules.sources.tasks import schedule_extract
 
 # 导入附带材料时的标题前缀，便于卸载时成组清理
 _SKILL_TITLE_RE = re.compile(r"^\[Skill[·•.]([a-z0-9][a-z0-9-]{1,62}[a-z0-9])\]\s*")
@@ -288,7 +288,7 @@ class SkillsService:
                 PasteIn(title=f"[Skill·{skill_id}] {title}", content=text),
             )
             if background_tasks is not None:
-                background_tasks.add_task(run_extract_job, row.id)
+                schedule_extract(background_tasks, row.id)
             queued += 1
 
         if queued:

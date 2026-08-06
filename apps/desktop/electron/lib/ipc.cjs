@@ -11,6 +11,8 @@ const {
   exportMediaCookiesFile,
   openMediaLoginWindow,
   openVideoPreviewWindow,
+  douyinLoginCookieStats,
+  bilibiliLoginCookieStats,
 } = require("./media.cjs");
 const { API_ORIGIN, runtimeDataDir, ytDlpCookiesPath } = require("./paths.cjs");
 const { normalizeExternalUrl } = require("./external-url.cjs");
@@ -26,6 +28,20 @@ function registerIpcHandlers() {
     } catch {
       cookiesReady = false;
     }
+    let douyinCookiesReady = false;
+    let bilibiliCookiesReady = false;
+    try {
+      const [douyin, bilibili] = await Promise.all([
+        douyinLoginCookieStats(),
+        bilibiliLoginCookieStats(),
+      ]);
+      douyinCookiesReady = Boolean(douyin.loggedIn);
+      bilibiliCookiesReady = Boolean(bilibili.loggedIn);
+      // 兼容旧字段：任一平台已登录或 cookies 文件可用
+      cookiesReady = cookiesReady || douyinCookiesReady || bilibiliCookiesReady;
+    } catch {
+      /* session 未就绪时退回文件探测 */
+    }
     return {
       apiOrigin: API_ORIGIN,
       isPackaged: app.isPackaged,
@@ -35,6 +51,8 @@ function registerIpcHandlers() {
       apiSpawnedByUs: state.apiSpawnedByUs,
       dataDir: runtimeDataDir(),
       mediaCookiesReady: cookiesReady,
+      douyinCookiesReady,
+      bilibiliCookiesReady,
       mediaCookiesPath: cookiesPath,
     };
   });

@@ -162,10 +162,11 @@ export function LibrarySettingsPanel({
       <aside className={styles.tips}>
         <Card size="small" title={<><FolderOpenOutlined /> 目录说明</>}>
           <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
-            喂养镜像：data/library/分类/标题/；手写笔记：data/library/笔记库/（可多级文件夹）
+            喂养镜像：data/library/分类/标题/；视频合集：data/library/视频/[合集]合集名/分集/；手写笔记：data/library/笔记库/
           </Typography.Paragraph>
           <ul className={styles.checklist}>
             <li>笔记库 · Obsidian 式多级 .md，与书籍/视频同在资源根下，侧栏「笔记」编辑</li>
+            <li>视频合集 · 目录名带 [合集] 前缀，避免与单集同名冲突</li>
             <li>正文.txt · 抽取或转写文案</li>
             <li>音轨.* · 授权后下载的跟读音频</li>
             <li>时间轴.json · 跟读高亮</li>

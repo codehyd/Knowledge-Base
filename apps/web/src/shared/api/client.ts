@@ -87,8 +87,30 @@ export type SourceItem = {
   error_message: string;
   char_count: number;
   vault_path?: string;
+  collection_title?: string;
+  episode_no?: number;
   created_at?: string | null;
   updated_at?: string | null;
+};
+
+export type UrlProbeEpisode = {
+  episode_no: number;
+  title: string;
+};
+
+export type UrlProbeResult = {
+  is_playlist: boolean;
+  collection_title: string;
+  total: number;
+  entries?: UrlProbeEpisode[];
+};
+
+export type UrlBatchResult = {
+  collection_title: string;
+  total: number;
+  created: number;
+  skipped: number;
+  source_ids: number[];
 };
 
 export type VaultNode = {
@@ -220,7 +242,17 @@ export type EntryListItem = {
   category_ids?: number[];
   /** 自动标签名 */
   tags?: string[];
+  /** 视频合集名（分集入库时） */
+  collection_title?: string;
+  /** 分集序号，1 起；0 表示非分集 */
+  episode_no?: number;
   created_at?: string | null;
+};
+
+export type CollectionItem = {
+  title: string;
+  count: number;
+  episode_total: number;
 };
 
 export type EntryDetail = EntryListItem & {
@@ -306,6 +338,8 @@ export type MediaItem = {
   status: string;
   char_count: number;
   has_follow_along?: boolean;
+  collection_title?: string;
+  episode_no?: number;
   created_at?: string | null;
 };
 
@@ -767,6 +801,28 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ url }),
     }),
+  probeUrl: (url: string) =>
+    request<UrlProbeResult>("/api/sources/url/probe", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+  urlBatch: (
+    url: string,
+    opts?: { import_all?: boolean; limit?: number; episode_nos?: number[] },
+  ) =>
+    request<UrlBatchResult>("/api/sources/url/batch", {
+      method: "POST",
+      body: JSON.stringify({
+        url,
+        ...(opts?.import_all
+          ? { import_all: true }
+          : opts?.episode_nos
+            ? { episode_nos: opts.episode_nos }
+            : opts?.limit
+              ? { limit: opts.limit }
+              : { episode_nos: [] }),
+      }),
+    }),
   retrySource: (id: number) =>
     request<SourceItem>(`/api/sources/${id}/retry`, { method: "POST" }),
   attachTranscript: (id: number, content: string) =>
@@ -776,6 +832,36 @@ export const api = {
     }),
     clearFinishedSources: () =>
       request<{ removed: number }>("/api/sources/queue/finished", { method: "DELETE" }),
+    clearFailedVideoSources: () =>
+      request<{ removed: number }>("/api/sources/queue/failed-videos", {
+        method: "DELETE",
+      }),
+    clearAllQueueSources: () =>
+      request<{ removed: number }>("/api/sources/queue/all", { method: "DELETE" }),
+    getQueueControl: () =>
+      request<{
+        paused: boolean;
+        pending: number;
+        running: number;
+        concurrency?: number;
+      }>("/api/sources/queue/control"),
+    pauseQueue: () =>
+      request<{
+        ok: boolean;
+        paused: boolean;
+        pending: number;
+        running: number;
+        concurrency?: number;
+      }>("/api/sources/queue/pause", { method: "POST" }),
+    startQueue: () =>
+      request<{
+        ok: boolean;
+        paused: boolean;
+        pending: number;
+        running: number;
+        started: number;
+        concurrency?: number;
+      }>("/api/sources/queue/start", { method: "POST" }),
     deleteSource: (id: number) =>
       request<{ ok: boolean; id: number }>(`/api/sources/${id}`, { method: "DELETE" }),
     ingestSource: (id: number) =>
@@ -839,6 +925,8 @@ export const api = {
   listBookshelf: () =>
     request<{ items: BookshelfItem[]; total: number }>("/api/bookshelf"),
   listMedia: () => request<{ items: MediaItem[]; total: number }>("/api/media"),
+  listCollections: () =>
+    request<{ items: CollectionItem[] }>("/api/collections"),
   listEntries: (params?: {
     q?: string;
     category?: string;
@@ -936,6 +1024,16 @@ export const api = {
     request<void>(`/api/annotations/${annId}`, { method: "DELETE" }),
   deleteEntry: (id: number) =>
     request<void>(`/api/entries/${id}`, { method: "DELETE" }),
+  batchDeleteEntries: (entry_ids: number[]) =>
+    request<{ removed: number }>("/api/entries/batch-delete", {
+      method: "POST",
+      body: JSON.stringify({ entry_ids }),
+    }),
+  deleteCollection: (title: string) =>
+    request<{ title: string; removed: number }>("/api/collections/delete", {
+      method: "POST",
+      body: JSON.stringify({ title }),
+    }),
   getLibrary: () => request<LibraryOut>("/api/library"),
   rebuildLibrary: () =>
     request<LibraryRebuildOut>("/api/library/rebuild", { method: "POST" }),
