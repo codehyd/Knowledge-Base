@@ -19,6 +19,8 @@ from app.modules.knowledge.schemas import (
     CollectionListOut,
     EntryBatchDeleteIn,
     EntryBatchDeleteOut,
+    EntryBatchAddDomainIn,
+    EntryBatchAddDomainOut,
     EntryCategoriesIn,
     EntryDetailOut,
     EntryListOut,
@@ -138,6 +140,21 @@ async def batch_delete_entries(
     return EntryBatchDeleteOut(removed=removed)
 
 
+@router.post(
+    "/entries/batch-add-domain",
+    response_model=EntryBatchAddDomainOut,
+    summary="批量归入人工分类",
+    description=(
+        "给所选条目追加挂靠某个人工分类（kind=domain），不移除已有分类。"
+        "entry_ids 为空且提供 collection_title 时，作用于该合集全部已入库分集。"
+    ),
+)
+async def batch_add_domain(
+    payload: EntryBatchAddDomainIn, db: AsyncSession = Depends(get_db)
+) -> EntryBatchAddDomainOut:
+    return await knowledge_service.batch_add_domain(db, payload)
+
+
 @router.get(
     "/entries",
     response_model=EntryListOut,
@@ -148,7 +165,7 @@ async def list_entries(
     category: str = Query("", description="按分类名过滤"),
     kind: str = Query("", description="类型：book | media | note"),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=200),
+    page_size: int = Query(20, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
 ) -> EntryListOut:
     return await knowledge_service.list_entries(

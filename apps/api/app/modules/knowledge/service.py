@@ -24,6 +24,8 @@ from app.modules.knowledge.schemas import (
     CategoryUpdate,
     CollectionListOut,
     CollectionOut,
+    EntryBatchAddDomainIn,
+    EntryBatchAddDomainOut,
     EntryCategoriesIn,
     EntryDetailOut,
     EntryListItem,
@@ -98,6 +100,8 @@ class KnowledgeService:
 
     async def _ensure_collection_category_links(self, db: AsyncSession) -> None:
         """补齐合集名分类与分集挂靠（历史数据可能被低质量标签清理误删）。"""
+        # 先尝试把孤儿条目挂回同标题/同合集分集的已存在来源
+        await self._relink_orphan_entries(db)
         rows = (
             await db.execute(
                 select(Entry.id, Source.collection_title)
@@ -146,6 +150,53 @@ class KnowledgeService:
         if changed:
             await db.commit()
 
+    async def _relink_orphan_entries(self, db: AsyncSession) -> int:
+        """条目 source_id 已无对应来源时，按 title_key / 标题挂回仍存在的来源。"""
+        from app.modules.sources.classify import normalize_title_key
+
+        entries = (await db.execute(select(Entry).where(Entry.source_id.is_not(None)))).scalars().all()
+        fixed = 0
+        for entry in entries:
+            sid = entry.source_id
+            if sid is None:
+                continue
+            src = await db.get(Source, sid)
+            if src is not None:
+                continue
+            # 孤儿：优先按 title_key 找 ready/committed 来源
+            key = (entry.title_key or "").strip() or normalize_title_key(entry.title or "")
+            candidate = None
+            if key:
+                rows = (
+                    await db.execute(
+                        select(Source).where(
+                            Source.status.in_(["ready", "committed", "ingesting"])
+                        )
+                    )
+                ).scalars().all()
+                for s in rows:
+                    if normalize_title_key(s.title or s.filename or "") == key:
+                        # 该来源尚无条目才挂
+                        has = (
+                            await db.execute(
+                                select(Entry.id).where(Entry.source_id == s.id).limit(1)
+                            )
+                        ).scalar_one_or_none()
+                        if has is None:
+                            candidate = s
+                            break
+            if candidate is None:
+                continue
+            entry.source_id = candidate.id
+            if candidate.status != "committed":
+                candidate.status = "committed"
+                candidate.stage = "committed"
+                candidate.progress = 100
+                candidate.error_message = ""
+            fixed += 1
+        if fixed:
+            await db.commit()
+        return fixed
     async def list_collections(self, db: AsyncSession) -> CollectionListOut:
         """已入库视频合集：按 Source.collection_title 聚合，供侧栏文件夹展示。"""
         await self._ensure_collection_category_links(db)
@@ -405,7 +456,7 @@ class KnowledgeService:
         page_size: int = 20,
     ) -> EntryListOut:
         page = max(1, page)
-        page_size = min(max(1, page_size), 200)
+        page_size = min(max(1, page_size), 500)
         kind_norm = (kind or "").strip().lower()
         cat_name = category.strip()
 
@@ -690,6 +741,70 @@ class KnowledgeService:
 
         await db.commit()
         return await self.get_entry(db, entry_id)
+
+    async def batch_add_domain(
+        self, db: AsyncSession, payload: EntryBatchAddDomainIn
+    ) -> EntryBatchAddDomainOut:
+        """批量追加人工分类；已挂靠的跳过。"""
+        cat = await db.get(Category, int(payload.category_id))
+        if not cat:
+            raise HTTPException(status_code=404, detail="分类不存在")
+        if self._cat_kind(cat) != "domain":
+            raise HTTPException(
+                status_code=400, detail="只能挂靠人工分类，不能把自动标签当作分类"
+            )
+
+        ids = [int(x) for x in (payload.entry_ids or []) if int(x) > 0]
+        title = (payload.collection_title or "").strip()
+        if not ids and title:
+            rows = (
+                await db.execute(
+                    select(Entry.id)
+                    .join(Source, Entry.source_id == Source.id)
+                    .where(Source.collection_title == title)
+                    .order_by(Entry.id.asc())
+                )
+            ).all()
+            ids = [int(i) for (i,) in rows]
+        if not ids:
+            raise HTTPException(
+                status_code=400, detail="请选择条目，或提供有效的合集名"
+            )
+
+        # 去重保序
+        seen: set[int] = set()
+        ordered: list[int] = []
+        for eid in ids:
+            if eid in seen:
+                continue
+            seen.add(eid)
+            ordered.append(eid)
+
+        updated = 0
+        skipped = 0
+        for eid in ordered:
+            entry = await db.get(Entry, eid)
+            if not entry:
+                skipped += 1
+                continue
+            linked = (
+                await db.execute(
+                    select(EntryCategory).where(
+                        EntryCategory.entry_id == eid,
+                        EntryCategory.category_id == cat.id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if linked is not None:
+                skipped += 1
+                continue
+            db.add(EntryCategory(entry_id=eid, category_id=cat.id))
+            updated += 1
+        if updated:
+            await db.commit()
+        return EntryBatchAddDomainOut(
+            updated=updated, skipped=skipped, total=len(ordered)
+        )
 
     async def get_preview(
         self,

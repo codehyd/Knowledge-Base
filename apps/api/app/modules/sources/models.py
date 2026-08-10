@@ -19,7 +19,7 @@ class Source(Base):
     provenance = mapped_column(String(40), default="", index=True)
     # 书籍可信度：confirmed（上书架）| possible（可能为书，不上架）| ""
     book_kind = mapped_column(String(20), default="", index=True)
-    # pending | extracting | processing | ready | failed | need_transcript | committed
+    # pending | extracting | processing | ready | ingesting | failed | need_transcript | committed
     status = mapped_column(String(50), index=True, default="pending")
     stage = mapped_column(String(80), default="")  # 当前阶段文案/枚举
     progress = mapped_column(Float, default=0.0)

@@ -46,7 +46,7 @@ import styles from "./FeedPage.module.css";
 const CTEXT_SETTINGS_HREF = "/settings?keys=books";
 const NEED_CTEXT_KEY = "NEED_CTEXT_KEY";
 
-const ACTIVE = new Set(["pending", "extracting", "processing"]);
+const ACTIVE = new Set(["pending", "extracting", "processing", "ingesting"]);
 const DONE = new Set(["ready", "committed"]);
 const FAILED = new Set(["failed", "need_transcript"]);
 
@@ -78,6 +78,8 @@ function statusLabel(item: SourceItem): string {
       return "提取文案中…";
     case "processing":
       return "解析中…";
+    case "ingesting":
+      return "入库中…";
     case "ready":
       return "已抽取正文";
     case "committed":
@@ -153,6 +155,7 @@ export function FeedPage() {
   const ebookRef = useRef<HTMLInputElement>(null);
   const noteRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLInputElement>(null);
+  const ingestLockRef = useRef(false);
   const desktop = getDesktopBridge();
 
   const refresh = useCallback(async () => {
@@ -571,7 +574,7 @@ export function FeedPage() {
   // 已入库的不再留在队列；历史页只看待入库 / 失败
   // 排序：进行中 → 等待 → 待入库 → 失败/待补贴
   const queueRank = (status: string) => {
-    if (status === "extracting" || status === "processing") return 0;
+    if (status === "extracting" || status === "processing" || status === "ingesting") return 0;
     if (status === "pending") return 1;
     if (status === "ready") return 2;
     if (status === "need_transcript" || status === "failed") return 3;
@@ -631,6 +634,8 @@ export function FeedPage() {
   }
 
   async function ingestOne(id: number) {
+    if (ingestLockRef.current || busy) return;
+    ingestLockRef.current = true;
     setBusy(true);
     try {
       const res = await api.ingestSource(id);
@@ -642,6 +647,7 @@ export function FeedPage() {
     } catch (err) {
       message.error(formatError(err, "入库失败"));
     } finally {
+      ingestLockRef.current = false;
       setBusy(false);
     }
   }
@@ -674,11 +680,13 @@ export function FeedPage() {
   }
 
   async function ingestAllReady() {
+    if (ingestLockRef.current || busy) return;
     const readyItems = items.filter((i) => i.status === "ready");
     if (readyItems.length === 0) {
       message.info("没有可入库的 ready 来源");
       return;
     }
+    ingestLockRef.current = true;
     setBusy(true);
     setIngestProgress({
       total: readyItems.length,
@@ -709,7 +717,7 @@ export function FeedPage() {
           ok += 1;
         } catch (err) {
           const detail = formatError(err, "入库失败");
-          if (/重复|已入库|409/.test(detail)) {
+          if (/重复|已入库|正在入库|409/.test(detail)) {
             skipped += 1;
           } else {
             failed += 1;
@@ -743,6 +751,7 @@ export function FeedPage() {
         message.info("没有可入库的来源");
       }
     } finally {
+      ingestLockRef.current = false;
       setBusy(false);
       setIngestProgress(null);
     }

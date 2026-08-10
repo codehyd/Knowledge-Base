@@ -41,11 +41,12 @@ MAX_INJECT_PER_SKILL = 6_000
 SKILL_SYSTEM_PREAMBLE = """
 
 【已启用技能 · 仅约束流程与输出格式】
-下列技能说明用于组织回答结构、检查清单或整理步骤。
+下列技能说明用于组织回答结构、检查清单或整理步骤（按用户设定的顺序排列）。
 硬性约束：
 1. 事实结论只能来自上方【资料片段】；技能正文不是知识来源。
 2. 资料不足或无关时，仍须拒答；禁止根据技能说明编造领域事实、方剂、出处或未出现的结论。
 3. 若技能要求特定输出结构，在「有依据可答」时遵守；拒答时用简洁拒答即可。
+4. 多技能同时启用时：**越靠后的技能对最终成文格式优先级越高**。靠前的技能只做内心判断（如领域分流），不要在正文里输出「领域：」之类标签；靠后的总结/表达技能决定最终怎么写。
 """
 
 
@@ -305,6 +306,34 @@ class SkillsService:
         st["enabled"] = bool(enabled)
         _save_state(state)
         return _to_out(skill_id, _load_state())
+
+    def reorder(self, order: list[str]) -> SkillListOut:
+        """按传入 id 列表重排；未出现的已装技能追加到末尾。"""
+        state = _load_state()
+        root = _skills_root()
+        installed = {
+            p.name
+            for p in root.iterdir()
+            if p.is_dir() and (p / "skill.json").is_file()
+        }
+        seen: set[str] = set()
+        new_order: list[str] = []
+        for sid in order:
+            sid = (sid or "").strip()
+            if not sid or sid in seen or sid not in installed:
+                continue
+            seen.add(sid)
+            new_order.append(sid)
+        for sid in state.get("order", []):
+            if sid in installed and sid not in seen:
+                seen.add(sid)
+                new_order.append(sid)
+        for sid in sorted(installed):
+            if sid not in seen:
+                new_order.append(sid)
+        state["order"] = new_order
+        _save_state(state)
+        return self.list_skills()
 
     def _title_prefix(self, skill_id: str) -> str:
         return f"[Skill·{skill_id}]"

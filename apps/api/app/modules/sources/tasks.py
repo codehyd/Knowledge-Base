@@ -9,7 +9,7 @@ import random
 from fastapi import BackgroundTasks
 
 from app.core import database as db_mod
-from app.modules.sources.extract_pool import spawn_extract
+from app.modules.sources.extract_pool import enqueue_extract, set_extract_handler
 from app.modules.sources.extractors import _resolve_cookie_file
 from app.modules.sources.models import Source
 from app.modules.sources.queue_control import is_queue_paused
@@ -21,19 +21,22 @@ logger = logging.getLogger(__name__)
 def schedule_extract(
     background_tasks: BackgroundTasks | None, source_id: int
 ) -> bool:
-    """投递解析任务。
+    """把解析任务排进 FIFO 队列。
 
-    优先丢进事件循环并发池（最多 2 路）；无 running loop 时回退 BackgroundTasks。
-    队列暂停时不调度。
+    并发上限由 worker 数控制（默认最多 2 路）；重试也会排到队尾。
+    队列暂停时不入队。
     """
     if is_queue_paused():
         return False
 
-    if spawn_extract(lambda: _run_extract_pooled(source_id)):
+    set_extract_handler(_run_extract_queued)
+
+    if enqueue_extract(source_id):
         return True
 
+    # 无 running loop 时（极少）：退回 BackgroundTasks，到 loop 里再入队
     if background_tasks is not None:
-        background_tasks.add_task(_run_extract_pooled, source_id)
+        background_tasks.add_task(_enqueue_via_background, source_id)
         return True
     logger.warning(
         "schedule_extract: no event loop and no BackgroundTasks id=%s", source_id
@@ -41,8 +44,17 @@ def schedule_extract(
     return False
 
 
+async def _enqueue_via_background(source_id: int) -> None:
+    set_extract_handler(_run_extract_queued)
+    if is_queue_paused():
+        return
+    if not enqueue_extract(source_id):
+        # 仍无 loop（不应发生）：直接跑，保底不丢任务
+        await _run_extract_queued(source_id)
+
+
 async def _playlist_delay_if_needed(source_id: int) -> None:
-    """合集分集开跑前短暂间隔，不占用并发槽。"""
+    """合集分集开跑前短暂间隔（占用当前 worker，保证 FIFO 不插队）。"""
     factory = db_mod.SessionLocal
     if factory is None:
         db_mod.init_engine_from_config()
@@ -58,10 +70,8 @@ async def _playlist_delay_if_needed(source_id: int) -> None:
     await asyncio.sleep(delay)
 
 
-async def _run_extract_pooled(source_id: int) -> None:
-    """带并发槽的抽取：先延时，再进池执行。"""
-    from app.modules.sources.extract_pool import acquire_extract_slot
-
+async def _run_extract_queued(source_id: int) -> None:
+    """由 FIFO worker 调用：可选合集延时后执行抽取。"""
     try:
         if is_queue_paused():
             logger.info("queue paused, skip extract source_id=%s", source_id)
@@ -70,13 +80,7 @@ async def _run_extract_pooled(source_id: int) -> None:
         if is_queue_paused():
             logger.info("queue paused after delay, skip extract source_id=%s", source_id)
             return
-        async with acquire_extract_slot():
-            if is_queue_paused():
-                logger.info(
-                    "queue paused before work, skip extract source_id=%s", source_id
-                )
-                return
-            await run_extract_job(source_id)
+        await run_extract_job(source_id)
     except Exception:  # noqa: BLE001
         logger.exception("extract job failed source_id=%s", source_id)
 

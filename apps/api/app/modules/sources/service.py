@@ -540,7 +540,7 @@ class SourcesService:
         return await self._purge_sources(db, list(result.scalars().all()))
 
     async def queue_control_status(self, db: AsyncSession) -> dict:
-        from app.modules.sources.extract_pool import extract_concurrency
+        from app.modules.sources.extract_pool import extract_concurrency, queue_snapshot
         from app.modules.sources.queue_control import is_queue_paused
 
         vault_note = (Source.vault_path.is_not(None)) & (Source.vault_path != "")
@@ -560,16 +560,19 @@ class SourcesService:
                     .select_from(Source)
                     .where(
                         ~vault_note,
-                        Source.status.in_(["extracting", "processing"]),
+                        Source.status.in_(["extracting", "processing", "ingesting"]),
                     )
                 )
             ).scalar_one()
         )
+        snap = queue_snapshot()
         return {
             "paused": is_queue_paused(),
             "pending": pending,
             "running": running,
             "concurrency": extract_concurrency(),
+            "queued": snap["queued"],
+            "active": snap["active"],
         }
 
     async def list_pending_source_ids(self, db: AsyncSession) -> list[int]:
@@ -588,6 +591,15 @@ class SourcesService:
                 status_code=400,
                 detail="该条目属于笔记库手写笔记，不会出现在喂养队列操作中；请到「笔记」页管理",
             )
+        if row.status == "committed":
+            raise HTTPException(
+                status_code=400,
+                detail="该来源已入库，请到知识库删除条目；勿从喂养队列移出，以免留下搜得到但合集对不上的孤儿条目",
+            )
+        # 若仍有条目（异常残留），一并清掉，避免「搜索有、合集无」
+        existing = await db.execute(select(Entry).where(Entry.source_id == source_id))
+        for entry in existing.scalars().all():
+            await self._remove_entry_tree(db, entry)
         sid = row.id
         await db.delete(row)
         await db.commit()
@@ -597,7 +609,9 @@ class SourcesService:
         remove_source_from_library(sid)
 
     async def _remove_entry_tree(self, db: AsyncSession, entry: Entry) -> None:
-        """删除条目及其分类/切片，不改动来源状态（用于清理残留条目）。"""
+        """删除条目及其分类/切片/批注，不改动来源状态（用于清理残留条目）。"""
+        from app.modules.knowledge.models import EntryAnnotation
+
         links = await db.execute(
             select(EntryCategory).where(EntryCategory.entry_id == entry.id)
         )
@@ -606,8 +620,43 @@ class SourcesService:
         chunks = await db.execute(select(Chunk).where(Chunk.entry_id == entry.id))
         for chunk in chunks.scalars().all():
             await db.delete(chunk)
+        anns = await db.execute(
+            select(EntryAnnotation).where(EntryAnnotation.entry_id == entry.id)
+        )
+        for ann in anns.scalars().all():
+            await db.delete(ann)
         await db.delete(entry)
         await db.flush()
+
+    async def dedupe_entries_by_source(self, db: AsyncSession) -> int:
+        """同一 source_id 多条 Entry 时保留最小 id，删掉其余（不改来源状态）。"""
+        rows = (
+            await db.execute(
+                select(Entry.source_id, func.count(Entry.id))
+                .where(Entry.source_id.is_not(None))
+                .group_by(Entry.source_id)
+                .having(func.count(Entry.id) > 1)
+            )
+        ).all()
+        removed = 0
+        for source_id, _cnt in rows:
+            if source_id is None:
+                continue
+            entries = (
+                await db.execute(
+                    select(Entry)
+                    .where(Entry.source_id == int(source_id))
+                    .order_by(Entry.id.asc())
+                )
+            ).scalars().all()
+            if len(entries) < 2:
+                continue
+            for extra in entries[1:]:
+                await self._remove_entry_tree(db, extra)
+                removed += 1
+        if removed:
+            await db.commit()
+        return removed
 
     async def _ensure_category(self, db: AsyncSession, name: str) -> Category:
         result = await db.execute(select(Category).where(Category.name == name))
@@ -750,48 +799,146 @@ class SourcesService:
             query=q, total=total, offset=offset, limit=limit, hits=hits
         )
 
+    async def _reclaim_or_clear_conflict_entry(
+        self,
+        db: AsyncSession,
+        *,
+        row: Source,
+        entry: Entry,
+    ) -> IngestOut | None:
+        """冲突条目可合并时挂回当前来源；否则返回 None。"""
+        old_sid = entry.source_id
+        old_src = await db.get(Source, old_sid) if old_sid else None
+        same_uri = bool(
+            old_src
+            and (row.source_uri or "").strip()
+            and (old_src.source_uri or "").strip()
+            and (row.source_uri or "").strip() == (old_src.source_uri or "").strip()
+        )
+        same_episode = bool(
+            old_src
+            and (getattr(row, "collection_title", "") or "").strip()
+            and (getattr(row, "collection_title", "") or "").strip()
+            == (getattr(old_src, "collection_title", "") or "").strip()
+            and (getattr(row, "episode_no", 0) or 0) > 0
+            and int(getattr(row, "episode_no", 0) or 0)
+            == int(getattr(old_src, "episode_no", 0) or 0)
+        )
+        if old_src is None or same_uri or same_episode:
+            entry.source_id = row.id
+            if not (entry.title_key or "").strip():
+                entry.title_key = normalize_title_key(
+                    entry.title or row.title or row.filename or ""
+                )
+            row.status = "committed"
+            row.stage = "committed"
+            row.progress = 100
+            row.error_message = ""
+            collection = (getattr(row, "collection_title", "") or "").strip()[:100]
+            if collection:
+                category = await self._ensure_category(db, collection)
+                linked = await db.execute(
+                    select(EntryCategory).where(
+                        EntryCategory.entry_id == entry.id,
+                        EntryCategory.category_id == category.id,
+                    )
+                )
+                if linked.scalar_one_or_none() is None:
+                    db.add(
+                        EntryCategory(entry_id=entry.id, category_id=category.id)
+                    )
+            await db.commit()
+            await db.refresh(entry)
+            try:
+                await index_entry(db, entry.id, with_embed=False)
+            except Exception:  # noqa: BLE001
+                pass
+            return IngestOut(
+                source_id=row.id,
+                entry_id=entry.id,
+                title=entry.title,
+                category="未命名主题",
+                categories=["未命名主题"],
+            )
+        return None
+
     async def _assert_not_duplicate(
         self,
         db: AsyncSession,
         *,
+        row: Source,
         title: str,
         filename: str,
         content_hash: str,
-        source_id: int,
-    ) -> None:
+    ) -> IngestOut | None:
+        """查重；可自动合并孤儿/同分集时返回 IngestOut，硬冲突抛 409。"""
         title_key = normalize_title_key(title)
         file_key = normalize_title_key(filename) if filename else ""
+        source_id = int(row.id)
+        is_media = (row.type or "") in {"video_url", "video_file", "url"}
+        collection = (getattr(row, "collection_title", "") or "").strip()
+        episode_no = int(getattr(row, "episode_no", 0) or 0)
+
+        async def _handle_hit(entry: Entry) -> IngestOut:
+            reclaimed = await self._reclaim_or_clear_conflict_entry(
+                db, row=row, entry=entry
+            )
+            if reclaimed is not None:
+                return reclaimed
+            raise HTTPException(status_code=409, detail="相同内容已入库，请勿重复添加")
 
         if content_hash:
-            hit = await db.execute(
-                select(Entry).where(Entry.content_hash == content_hash).limit(1)
-            )
-            if hit.scalar_one_or_none():
-                raise HTTPException(status_code=409, detail="相同正文已入库，请勿重复添加")
+            hit = (
+                await db.execute(
+                    select(Entry).where(Entry.content_hash == content_hash).limit(1)
+                )
+            ).scalar_one_or_none()
+            if hit is not None:
+                other = await db.get(Source, hit.source_id) if hit.source_id else None
+                other_ep = int(getattr(other, "episode_no", 0) or 0) if other else 0
+                other_col = (
+                    (getattr(other, "collection_title", "") or "").strip() if other else ""
+                )
+                # 合集内不同分集：正文指纹碰巧相同不拦截（ASR/错贴文案常见）
+                cross_episode = bool(
+                    is_media
+                    and collection
+                    and episode_no > 0
+                    and other is not None
+                    and other_col == collection
+                    and other_ep > 0
+                    and other_ep != episode_no
+                )
+                if not cross_episode:
+                    return await _handle_hit(hit)
 
         if title_key:
-            hit = await db.execute(
-                select(Entry).where(Entry.title_key == title_key).limit(1)
-            )
-            if hit.scalar_one_or_none():
-                raise HTTPException(status_code=409, detail="相同标题已入库，请勿重复添加")
+            hit = (
+                await db.execute(
+                    select(Entry).where(Entry.title_key == title_key).limit(1)
+                )
+            ).scalar_one_or_none()
+            if hit is not None:
+                return await _handle_hit(hit)
 
-        # 兼容旧数据：尚未写 title_key / content_hash 时，用规范化比较兜底
         legacy = await db.execute(select(Entry.id, Entry.title, Entry.source_id))
         for eid, etitle, esid in legacy.all():
             if esid == source_id:
                 src = await db.get(Source, source_id)
                 if src and src.status == "committed":
-                    raise HTTPException(status_code=409, detail="该来源已有对应条目，请勿重复入库")
+                    raise HTTPException(
+                        status_code=409, detail="该来源已有对应条目，请勿重复入库"
+                    )
                 stale = await db.get(Entry, eid)
                 if stale:
                     await self._remove_entry_tree(db, stale)
                 break
             if title_key and normalize_title_key(etitle or "") == title_key:
-                raise HTTPException(status_code=409, detail="相同标题已入库，请勿重复添加")
+                stale = await db.get(Entry, eid)
+                if stale:
+                    return await _handle_hit(stale)
 
-        # 其它已入库来源：同文件名视为同一本书
-        if file_key:
+        if file_key and not is_media:
             sources = await db.execute(
                 select(Source).where(
                     Source.status == "committed",
@@ -807,6 +954,7 @@ class SourcesService:
                     raise HTTPException(
                         status_code=409, detail="相同标题已入库，请勿重复添加"
                     )
+        return None
 
     async def _llm_creds(self, db: AsyncSession) -> dict[str, str] | None:
         row = await settings_ai_service._get_or_create(db)
@@ -820,75 +968,134 @@ class SourcesService:
         }
 
     async def ingest(self, db: AsyncSession, source_id: int) -> IngestOut:
+        from sqlalchemy import update
+
         row = await self.get(db, source_id)
         if row.status == "committed":
             raise HTTPException(status_code=409, detail="该来源已入库，请勿重复操作")
+        if row.status == "ingesting":
+            raise HTTPException(status_code=409, detail="该来源正在入库，请稍候")
         if row.status != "ready":
             raise HTTPException(
                 status_code=400,
                 detail=f"仅 ready 状态可入库，当前为 {row.status}",
             )
 
-        existing = await db.execute(select(Entry).where(Entry.source_id == source_id).limit(1))
-        stale_entry = existing.scalar_one_or_none()
-        if stale_entry:
+        # 原子占用：并发/双击时只有一路能把 ready → ingesting
+        claimed = await db.execute(
+            update(Source)
+            .where(Source.id == source_id, Source.status == "ready")
+            .values(status="ingesting", stage="ingesting", progress=95, error_message="")
+        )
+        await db.commit()
+        if claimed.rowcount != 1:
+            row = await self.get(db, source_id)
             if row.status == "committed":
                 raise HTTPException(status_code=409, detail="该来源已入库，请勿重复操作")
-            # 喂养队列删来源后条目可能残留，或来源 id 被复用时会出现「条目在、来源 ready」
-            await self._remove_entry_tree(db, stale_entry)
+            if row.status == "ingesting":
+                raise HTTPException(status_code=409, detail="该来源正在入库，请稍候")
+            raise HTTPException(
+                status_code=400,
+                detail=f"仅 ready 状态可入库，当前为 {row.status}",
+            )
 
-        text = self._read_extracted_text(row).strip()
-        if not text:
-            raise HTTPException(status_code=400, detail="正文为空，无法入库")
+        row = await self.get(db, source_id)
+        try:
+            existing = await db.execute(
+                select(Entry).where(Entry.source_id == source_id).limit(1)
+            )
+            stale_entry = existing.scalar_one_or_none()
+            if stale_entry:
+                # 喂养队列删来源后条目可能残留，或来源 id 被复用时会出现「条目在、来源未 committed」
+                await self._remove_entry_tree(db, stale_entry)
 
-        title = (row.title or row.filename or f"来源 #{row.id}").strip()[:500]
-        digest = content_fingerprint(text)
-        await self._assert_not_duplicate(
-            db,
-            title=title,
-            filename=row.filename or "",
-            content_hash=digest,
-            source_id=row.id,
-        )
+            text = self._read_extracted_text(row).strip()
+            if not text:
+                raise HTTPException(status_code=400, detail="正文为空，无法入库")
 
-        llm = await self._llm_creds(db)
-        tags, summary = await suggest_tags_and_summary(title=title, text=text, llm=llm)
-        if not tags:
-            tags = ["未命名主题"]
-        summary = (summary or text[:SUMMARY_CHARS]).strip()
-        if len(summary) > SUMMARY_CHARS:
-            summary = summary[:SUMMARY_CHARS].rstrip() + "…"
+            title = (row.title or row.filename or f"来源 #{row.id}").strip()[:500]
+            digest = content_fingerprint(text)
+            reclaimed = await self._assert_not_duplicate(
+                db,
+                row=row,
+                title=title,
+                filename=row.filename or "",
+                content_hash=digest,
+            )
+            if reclaimed is not None:
+                return reclaimed
 
-        entry = Entry(
-            title=title,
-            summary=summary,
-            source_id=row.id,
-            title_key=normalize_title_key(title),
-            content_hash=digest,
-        )
-        db.add(entry)
-        await db.flush()
-        linked_category_ids: set[int] = set()
-        for tag in tags:
-            category = await self._ensure_category(db, tag)
-            if category.id in linked_category_ids:
-                continue
-            linked_category_ids.add(category.id)
-            db.add(EntryCategory(entry_id=entry.id, category_id=category.id))
-        # 合集分集：额外挂到「合集名」分类，知识页按合集收拢、对话可按合集限定检索
-        # 名称截断到 100（Category.name 上限）；勿经 is_good_tag，否则会长标题被侧栏清理误删
-        collection = (getattr(row, "collection_title", "") or "").strip()[:100]
-        if collection:
-            category = await self._ensure_category(db, collection)
-            if category.id not in linked_category_ids:
+            llm = await self._llm_creds(db)
+            tags, summary = await suggest_tags_and_summary(title=title, text=text, llm=llm)
+            if not tags:
+                tags = ["未命名主题"]
+            summary = (summary or text[:SUMMARY_CHARS]).strip()
+            if len(summary) > SUMMARY_CHARS:
+                summary = summary[:SUMMARY_CHARS].rstrip() + "…"
+
+            entry = Entry(
+                title=title,
+                summary=summary,
+                source_id=row.id,
+                title_key=normalize_title_key(title),
+                content_hash=digest,
+            )
+            db.add(entry)
+            await db.flush()
+            linked_category_ids: set[int] = set()
+            for tag in tags:
+                category = await self._ensure_category(db, tag)
+                if category.id in linked_category_ids:
+                    continue
+                linked_category_ids.add(category.id)
                 db.add(EntryCategory(entry_id=entry.id, category_id=category.id))
+            # 合集分集：额外挂到「合集名」分类，知识页按合集收拢、对话可按合集限定检索
+            # 名称截断到 100（Category.name 上限）；勿经 is_good_tag，否则会长标题被侧栏清理误删
+            collection = (getattr(row, "collection_title", "") or "").strip()[:100]
+            if collection:
+                category = await self._ensure_category(db, collection)
+                if category.id not in linked_category_ids:
+                    db.add(EntryCategory(entry_id=entry.id, category_id=category.id))
 
-        row.status = "committed"
-        row.stage = "committed"
-        row.progress = 100
-        row.error_message = ""
-        await db.commit()
-        await db.refresh(entry)
+            row.status = "committed"
+            row.stage = "committed"
+            row.progress = 100
+            row.error_message = ""
+            await db.commit()
+            await db.refresh(entry)
+        except HTTPException:
+            try:
+                await db.rollback()
+                failed = await self.get(db, source_id)
+                if failed.status == "ingesting":
+                    failed.status = "ready"
+                    failed.stage = "extracted"
+                    failed.progress = 100
+                    failed.error_message = ""
+                    await db.commit()
+            except Exception:  # noqa: BLE001
+                pass
+            raise
+        except Exception as exc:
+            # 占用后失败：释放回 ready，避免卡在 ingesting
+            try:
+                await db.rollback()
+                failed = await self.get(db, source_id)
+                if failed.status == "ingesting":
+                    failed.status = "ready"
+                    failed.stage = "extracted"
+                    failed.progress = 100
+                    failed.error_message = ""
+                    await db.commit()
+            except Exception:  # noqa: BLE001
+                pass
+            from sqlalchemy.exc import IntegrityError
+
+            if isinstance(exc, IntegrityError):
+                raise HTTPException(
+                    status_code=409, detail="该来源已有对应条目，请勿重复入库"
+                ) from exc
+            raise
 
         # 入库后建立对话检索切片（embedding 失败则仅存文本，聊天时走关键词）
         try:

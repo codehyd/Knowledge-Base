@@ -28,6 +28,7 @@ import {
   Modal,
   Popconfirm,
   Select,
+  Spin,
   Tag,
   Typography,
 } from "antd";
@@ -48,17 +49,17 @@ import { MediaShelfModal } from "./MediaShelfModal";
 import styles from "./KnowledgePage.module.css";
 
 const ENTRY_DND_MIME = "text/kongku-entry";
-const CATS_EXPANDED_KEY = "kongku-knowledge-cats-below-expanded";
+const COLLECTION_DND_MIME = "text/kongku-collection";
 
-function readCatsBelowExpanded(): boolean {
-  try {
-    const raw = localStorage.getItem(CATS_EXPANDED_KEY);
-    if (raw === null) return true;
-    return raw !== "0" && raw !== "false";
-  } catch {
-    return true;
-  }
-}
+type KnowledgeListRow =
+  | { kind: "entry"; item: EntryListItem }
+  | {
+      kind: "collection";
+      title: string;
+      count: number;
+      sample: EntryListItem;
+      maxEpisode: number;
+    };
 
 function isPdfEntry(detail: EntryDetail | null) {
   const filename = (detail?.source_filename || "").toLowerCase();
@@ -138,7 +139,6 @@ export function KnowledgePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [categories, setCategories] = useState<CategoryItem[]>([]);
   const [collections, setCollections] = useState<CollectionItem[]>([]);
-  const [catsBelowExpanded, setCatsBelowExpanded] = useState(readCatsBelowExpanded);
   const [totalEntries, setTotalEntries] = useState(0);
   const [items, setItems] = useState<EntryListItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -164,9 +164,13 @@ export function KnowledgePage() {
   const [entryDomainIds, setEntryDomainIds] = useState<number[]>([]);
   const [entryDomainSaving, setEntryDomainSaving] = useState(false);
   const [draggingEntryId, setDraggingEntryId] = useState<number | null>(null);
+  const [draggingCollectionTitle, setDraggingCollectionTitle] = useState<string | null>(
+    null,
+  );
   const [dropDomainId, setDropDomainId] = useState<number | null>(null);
   const [assigningEntry, setAssigningEntry] = useState(false);
   const entryDragMovedRef = useRef(false);
+  const collectionDragMovedRef = useRef(false);
   const listPaneRef = useRef<HTMLDivElement | null>(null);
   const listItemRefs = useRef<Map<number, HTMLLIElement>>(new Map());
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -256,6 +260,46 @@ export function KnowledgePage() {
   );
 
   const activeCollection = collectionTitleSet.has(category) ? category : "";
+
+  /** 非合集视图：同一合集的分集收成一行，点击进入合集 */
+  const listRows = useMemo((): KnowledgeListRow[] => {
+    if (activeCollection) {
+      return items.map((item) => ({ kind: "entry" as const, item }));
+    }
+    const byTitle = new Map<string, EntryListItem[]>();
+    for (const item of items) {
+      const title = (item.collection_title || "").trim();
+      if (!title) continue;
+      const bucket = byTitle.get(title);
+      if (bucket) bucket.push(item);
+      else byTitle.set(title, [item]);
+    }
+    const rows: KnowledgeListRow[] = [];
+    const seen = new Set<string>();
+    for (const item of items) {
+      const title = (item.collection_title || "").trim();
+      if (title) {
+        if (seen.has(title)) continue;
+        seen.add(title);
+        const members = byTitle.get(title) || [item];
+        let maxEpisode = 0;
+        for (const m of members) {
+          const n = m.episode_no || 0;
+          if (n > maxEpisode) maxEpisode = n;
+        }
+        rows.push({
+          kind: "collection",
+          title,
+          count: members.length,
+          sample: members[0],
+          maxEpisode,
+        });
+      } else {
+        rows.push({ kind: "entry", item });
+      }
+    }
+    return rows;
+  }, [items, activeCollection]);
 
   useEffect(() => {
     // 离开合集视图时清空多选
@@ -397,20 +441,38 @@ export function KnowledgePage() {
   const refreshEntries = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.listEntries({
+      // 非合集视图会把分集折叠成合集行，必须拉全量，否则只看到前 N 条里的合集
+      const pageSize = 200;
+      const first = await api.listEntries({
         q: search,
         category,
         kind,
         page: 1,
-        // 合集内按讲次浏览，需要更大一页
-        page_size: category ? 200 : 50,
+        page_size: pageSize,
       });
-      setItems(res.items);
-      setTotal(res.total);
+      const all = [...first.items];
+      const total = first.total;
+      let page = 1;
+      while (all.length < total) {
+        page += 1;
+        if (page > 40) break;
+        const next = await api.listEntries({
+          q: search,
+          category,
+          kind,
+          page,
+          page_size: pageSize,
+        });
+        if (!next.items.length) break;
+        all.push(...next.items);
+        if (next.items.length < pageSize) break;
+      }
+      setItems(all);
+      setTotal(total);
       setSelectedId((prev) => {
-        if (res.items.length === 0) return null;
-        if (prev != null && res.items.some((i) => i.id === prev)) return prev;
-        return res.items[0].id;
+        if (all.length === 0) return null;
+        if (prev != null && all.some((i) => i.id === prev)) return prev;
+        return all[0].id;
       });
     } finally {
       setLoading(false);
@@ -446,10 +508,14 @@ export function KnowledgePage() {
     if (selectedId == null) {
       setDetail(null);
       setEntryDomainIds([]);
+      setDetailLoading(false);
       return;
     }
     let cancelled = false;
     setDetailLoading(true);
+    // 切换时先清掉旧详情，避免「看起来像卡住」且内容不对
+    setDetail((prev) => (prev?.id === selectedId ? prev : null));
+    setEntryDomainIds([]);
     void (async () => {
       try {
         const res = await api.getEntry(selectedId);
@@ -501,6 +567,75 @@ export function KnowledgePage() {
 
   function selectAllInCollection() {
     setBatchIds(items.map((i) => i.id));
+  }
+
+  async function onBatchAssignDomain(domain: CategoryItem) {
+    if (!activeCollection || batchBusy) return;
+    const selected = batchIds.length > 0;
+    const scopeLabel = selected
+      ? `所选 ${batchIds.length} 集`
+      : `整部合集（${total} 集）`;
+    modal.confirm({
+      title: `归入「${domain.name}」？`,
+      content: selected
+        ? `将把${scopeLabel}追加到分类「${domain.name}」（已在该分类中的会跳过）。`
+        : `未勾选分集时，将把${scopeLabel}全部追加到「${domain.name}」。已在该分类中的会跳过。`,
+      okText: "归入分类",
+      cancelText: "取消",
+      onOk: async () => {
+        await runBatchAssignDomain(domain, {
+          entryIds: selected ? [...batchIds] : undefined,
+          collectionTitle: selected ? undefined : activeCollection,
+        });
+      },
+    });
+  }
+
+  async function runBatchAssignDomain(
+    domain: CategoryItem,
+    opts: { entryIds?: number[]; collectionTitle?: string },
+  ) {
+    if (batchBusy) return;
+    setBatchBusy(true);
+    try {
+      const res = await api.batchAddDomain(
+        opts.entryIds && opts.entryIds.length > 0
+          ? { category_id: domain.id, entry_ids: opts.entryIds }
+          : {
+              category_id: domain.id,
+              collection_title: opts.collectionTitle || "",
+            },
+      );
+      await refreshCategories();
+      await refreshEntries();
+      if (detail) {
+        const touch =
+          opts.entryIds && opts.entryIds.length > 0
+            ? opts.entryIds.includes(detail.id)
+            : true;
+        if (touch) {
+          try {
+            const fresh = await api.getEntry(detail.id);
+            setDetail(fresh);
+            setEntryDomainIds(fresh.category_ids || []);
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+      message.success(
+        res.updated > 0
+          ? `已归入 ${res.updated} 集${res.skipped ? `，跳过 ${res.skipped} 集` : ""}`
+          : res.skipped > 0
+            ? `所选均已在「${domain.name}」中`
+            : "没有可归入的条目",
+      );
+    } catch (err) {
+      message.error(formatError(err, "归入分类失败"));
+      throw err;
+    } finally {
+      setBatchBusy(false);
+    }
   }
 
   async function onBatchDeleteSelected() {
@@ -779,6 +914,13 @@ export function KnowledgePage() {
   }
 
   return (
+    <>
+      <Spin
+        spinning={detailLoading || loading}
+        fullscreen
+        size="large"
+        tip={detailLoading ? "加载知识点…" : "加载列表…"}
+      />
     <section className={styles.page}>
       <header className={styles.header}>
         <div>
@@ -892,9 +1034,9 @@ export function KnowledgePage() {
                     className={`${styles.domainRow}${
                       dropDomainId === domain.id ? ` ${styles.domainDropOver}` : ""
                     }`}
-                    title="左键筛选 · 右键管理 · 可拖入条目"
+                    title="左键筛选 · 右键管理 · 可拖入条目或合集"
                     onDragOver={(e) => {
-                      if (draggingEntryId == null) return;
+                      if (draggingEntryId == null && !draggingCollectionTitle) return;
                       e.preventDefault();
                       e.dataTransfer.dropEffect = "copy";
                       setDropDomainId(domain.id);
@@ -907,6 +1049,21 @@ export function KnowledgePage() {
                     onDrop={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
+                      const collectionTitle = (
+                        e.dataTransfer.getData(COLLECTION_DND_MIME) ||
+                        draggingCollectionTitle ||
+                        ""
+                      ).trim();
+                      if (collectionTitle) {
+                        void runBatchAssignDomain(domain, {
+                          collectionTitle,
+                        }).finally(() => {
+                          setDropDomainId(null);
+                          setDraggingCollectionTitle(null);
+                          setDraggingEntryId(null);
+                        });
+                        return;
+                      }
                       const raw =
                         e.dataTransfer.getData(ENTRY_DND_MIME) ||
                         e.dataTransfer.getData("text/plain");
@@ -916,6 +1073,7 @@ export function KnowledgePage() {
                       } else {
                         setDropDomainId(null);
                         setDraggingEntryId(null);
+                        setDraggingCollectionTitle(null);
                       }
                     }}
                   >
@@ -938,8 +1096,10 @@ export function KnowledgePage() {
 
               {domains.length === 0 ? (
                 <p className={styles.catHint}>
-                  新建分类后，可把下方条目拖到分类上。
+                  新建分类后，可把条目或合集拖到分类上。
                 </p>
+              ) : draggingCollectionTitle ? (
+                <p className={styles.catHint}>松开即可将合集归入该分类</p>
               ) : draggingEntryId != null ? (
                 <p className={styles.catHint}>拖到某个分类松开即可放入</p>
               ) : null}
@@ -959,45 +1119,13 @@ export function KnowledgePage() {
               >
                 新建
               </Button>
-              <Button
-                type="text"
-                size="small"
-                className={`${styles.catExpand}${
-                  catsBelowExpanded ? ` ${styles.catExpandOpen}` : ""
-                }`}
-                icon={<DownOutlined className={styles.catExpandIcon} />}
-                disabled={collections.length === 0}
-                title={
-                  collections.length === 0
-                    ? "暂无合集可展开"
-                    : catsBelowExpanded
-                      ? "收起下方合集"
-                      : "展开下方合集"
-                }
-                aria-expanded={catsBelowExpanded}
-                onClick={() => {
-                  setCatsBelowExpanded((prev) => {
-                    const next = !prev;
-                    try {
-                      localStorage.setItem(CATS_EXPANDED_KEY, next ? "1" : "0");
-                    } catch {
-                      /* ignore */
-                    }
-                    return next;
-                  });
-                }}
-              >
-                {catsBelowExpanded ? "收起" : "展开"}
-              </Button>
             </div>
           </div>
 
           {collections.length > 0 ? (
             <div
-              className={`${styles.collectionsWrap}${
-                catsBelowExpanded ? ` ${styles.collectionsWrapOpen}` : ""
-              }`}
-              aria-hidden={!catsBelowExpanded}
+              className={`${styles.collectionsWrap} ${styles.collectionsWrapOpen}`}
+              aria-hidden={false}
             >
               <div className={styles.collectionsWrapInner}>
                 <div className={`${styles.catsRow} ${styles.collectionsRow}`}>
@@ -1007,16 +1135,37 @@ export function KnowledgePage() {
                     </div>
                     {collections.map((col) => {
                       const active = category === col.title;
+                      const dragging = draggingCollectionTitle === col.title;
                       return (
                         <button
                           key={col.title}
                           type="button"
+                          draggable={!batchBusy && !assigningEntry}
                           className={`${styles.catItem} ${styles.collectionItem}${
                             active ? ` ${styles.catActive}` : ""
-                          }`}
-                          title={`${col.title}（${col.count} 集）· 点击查看分集`}
-                          tabIndex={catsBelowExpanded ? 0 : -1}
-                          onClick={() => setCategory(col.title)}
+                          }${dragging ? ` ${styles.collectionDragging}` : ""}`}
+                          title={`${col.title}（${col.count} 集）· 点击查看 · 拖到上方分类可整部归入`}
+                          onDragStart={(e) => {
+                            collectionDragMovedRef.current = false;
+                            setDraggingCollectionTitle(col.title);
+                            e.dataTransfer.effectAllowed = "copy";
+                            e.dataTransfer.setData(COLLECTION_DND_MIME, col.title);
+                            e.dataTransfer.setData("text/plain", col.title);
+                          }}
+                          onDrag={() => {
+                            collectionDragMovedRef.current = true;
+                          }}
+                          onDragEnd={() => {
+                            setDraggingCollectionTitle(null);
+                            setDropDomainId(null);
+                          }}
+                          onClick={() => {
+                            if (collectionDragMovedRef.current) {
+                              collectionDragMovedRef.current = false;
+                              return;
+                            }
+                            setCategory(col.title);
+                          }}
                         >
                           <span>
                             <FolderOutlined className={styles.catIcon} />
@@ -1037,11 +1186,33 @@ export function KnowledgePage() {
           {activeCollection ? (
             <div className={styles.collectionPanel} data-collection-sticky>
               <div className={styles.collectionHead}>
-                <div className={styles.collectionTitleBlock}>
+                <div
+                  className={`${styles.collectionTitleBlock}${
+                    draggingCollectionTitle === activeCollection
+                      ? ` ${styles.collectionDragging}`
+                      : ""
+                  }`}
+                  draggable={!batchBusy && !assigningEntry}
+                  title="拖到上方分类，可将整部合集归入"
+                  onDragStart={(e) => {
+                    collectionDragMovedRef.current = false;
+                    setDraggingCollectionTitle(activeCollection);
+                    e.dataTransfer.effectAllowed = "copy";
+                    e.dataTransfer.setData(COLLECTION_DND_MIME, activeCollection);
+                    e.dataTransfer.setData("text/plain", activeCollection);
+                  }}
+                  onDrag={() => {
+                    collectionDragMovedRef.current = true;
+                  }}
+                  onDragEnd={() => {
+                    setDraggingCollectionTitle(null);
+                    setDropDomainId(null);
+                  }}
+                >
                   <FolderOutlined className={styles.collectionFolderIcon} />
                   <div className={styles.collectionTitleText}>
                     <strong title={activeCollection}>{activeCollection}</strong>
-                    <em>{total} 集</em>
+                    <em>{total} 集 · 可拖到分类</em>
                   </div>
                 </div>
                 <div className={styles.collectionBatchBar} role="group" aria-label="合集批量操作">
@@ -1061,6 +1232,38 @@ export function KnowledgePage() {
                   >
                     清空
                   </button>
+                  <span className={styles.collectionBatchSep} aria-hidden />
+                  <Dropdown
+                    disabled={batchBusy || total === 0 || domains.length === 0}
+                    menu={{
+                      items:
+                        domains.length === 0
+                          ? [{ key: "empty", label: "请先新建分类", disabled: true }]
+                          : domains.map((d) => ({
+                              key: String(d.id),
+                              label: d.name,
+                              onClick: () => void onBatchAssignDomain(d),
+                            })),
+                    }}
+                    trigger={["click"]}
+                  >
+                    <button
+                      type="button"
+                      className={styles.collectionBatchLink}
+                      disabled={batchBusy || total === 0 || domains.length === 0}
+                      title={
+                        domains.length === 0
+                          ? "请先在上方新建分类"
+                          : batchIds.length > 0
+                            ? `将所选 ${batchIds.length} 集归入分类`
+                            : "将整部合集归入分类"
+                      }
+                    >
+                      归入分类
+                      {batchIds.length > 0 ? ` ${batchIds.length}` : "·全部"}
+                      <DownOutlined style={{ fontSize: 10, marginLeft: 4 }} />
+                    </button>
+                  </Dropdown>
                   <span className={styles.collectionBatchSep} aria-hidden />
                   <button
                     type="button"
@@ -1125,7 +1328,70 @@ export function KnowledgePage() {
             </div>
           ) : (
             <ul className={styles.list}>
-              {items.map((item) => (
+              {listRows.map((row) => {
+                if (row.kind === "collection") {
+                  const dragging = draggingCollectionTitle === row.title;
+                  return (
+                    <li
+                      key={`col:${row.title}`}
+                      className={`${styles.listRow}${
+                        dragging ? ` ${styles.listDragging}` : ""
+                      }`}
+                      draggable={!assigningEntry && !batchBusy}
+                      onDragStart={(e) => {
+                        collectionDragMovedRef.current = false;
+                        setDraggingCollectionTitle(row.title);
+                        e.dataTransfer.effectAllowed = "copy";
+                        e.dataTransfer.setData(COLLECTION_DND_MIME, row.title);
+                        e.dataTransfer.setData("text/plain", row.title);
+                      }}
+                      onDrag={() => {
+                        collectionDragMovedRef.current = true;
+                      }}
+                      onDragEnd={() => {
+                        setDraggingCollectionTitle(null);
+                        setDropDomainId(null);
+                      }}
+                    >
+                      <div className={styles.listCard}>
+                        <button
+                          type="button"
+                          className={`${styles.listItem} ${styles.listCollectionItem}`}
+                          title={`打开合集「${row.title}」`}
+                          onClick={() => {
+                            if (collectionDragMovedRef.current) {
+                              collectionDragMovedRef.current = false;
+                              return;
+                            }
+                            setCategory(row.title);
+                          }}
+                        >
+                          <div
+                            className={styles.listTitleRow}
+                            title={row.title}
+                          >
+                            <FolderOutlined className={styles.listCollectionIcon} />
+                            <strong>{row.title}</strong>
+                          </div>
+                          <p>
+                            合集 · 本分类内 {row.count} 集
+                            {row.maxEpisode > 0 ? `（至 P${row.maxEpisode}）` : ""}
+                            · 点击查看全部分集
+                          </p>
+                          <div className={styles.listMeta}>
+                            <Tag color="geekblue" icon={<FolderOutlined />}>
+                              视频合集
+                            </Tag>
+                            <Tag>{row.count} 集</Tag>
+                          </div>
+                        </button>
+                      </div>
+                    </li>
+                  );
+                }
+
+                const item = row.item;
+                return (
                 <li
                   key={item.id}
                   ref={(node) => {
@@ -1135,7 +1401,7 @@ export function KnowledgePage() {
                   className={`${styles.listRow}${
                     draggingEntryId === item.id ? ` ${styles.listDragging}` : ""
                   }${activeCollection ? ` ${styles.listRowBatch}` : ""}`}
-                  draggable={!assigningEntry && !activeCollection}
+                  draggable={!assigningEntry && !batchBusy}
                   onDragStart={(e) => {
                     entryDragMovedRef.current = false;
                     setDraggingEntryId(item.id);
@@ -1287,7 +1553,8 @@ export function KnowledgePage() {
                   </Popconfirm>
                   </div>
                 </li>
-              ))}
+                );
+              })}
             </ul>
           )}
         </div>
@@ -1300,7 +1567,9 @@ export function KnowledgePage() {
               <Empty description="选择左侧条目查看详情" />
             </div>
           ) : detailLoading && !detail ? (
-            <p className={styles.detailHint}>加载中…</p>
+            <div className={styles.detailEmpty}>
+              <Spin tip="加载知识点…" />
+            </div>
           ) : detail ? (
             <div className={styles.detailInner}>
               <div className={styles.detailHead}>
@@ -1610,5 +1879,6 @@ export function KnowledgePage() {
         />
       </Modal>
     </section>
+    </>
   );
 }

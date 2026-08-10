@@ -212,6 +212,99 @@ async def _ensure_entry_columns(conn) -> None:
     await conn.execute(
         text("CREATE INDEX IF NOT EXISTS ix_entries_content_hash ON entries (content_hash)")
     )
+    # 同一来源只允许一条知识条目（防并发入库重复）
+    # SQLite 不允许直接 DELETE … WHERE id NOT IN (同表聚合)；外包一层派生表
+    await conn.execute(
+        text(
+            """
+            DELETE FROM entry_categories
+            WHERE entry_id IN (
+              SELECT id FROM (
+                SELECT e.id AS id FROM entries e
+                WHERE e.source_id IS NOT NULL
+                  AND e.id NOT IN (
+                    SELECT MIN(id) FROM entries
+                    WHERE source_id IS NOT NULL
+                    GROUP BY source_id
+                  )
+              )
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            DELETE FROM chunks
+            WHERE entry_id IN (
+              SELECT id FROM (
+                SELECT e.id AS id FROM entries e
+                WHERE e.source_id IS NOT NULL
+                  AND e.id NOT IN (
+                    SELECT MIN(id) FROM entries
+                    WHERE source_id IS NOT NULL
+                    GROUP BY source_id
+                  )
+              )
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            DELETE FROM entry_annotations
+            WHERE entry_id IN (
+              SELECT id FROM (
+                SELECT e.id AS id FROM entries e
+                WHERE e.source_id IS NOT NULL
+                  AND e.id NOT IN (
+                    SELECT MIN(id) FROM entries
+                    WHERE source_id IS NOT NULL
+                    GROUP BY source_id
+                  )
+              )
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            DELETE FROM entries
+            WHERE id IN (
+              SELECT id FROM (
+                SELECT e.id AS id FROM entries e
+                WHERE e.source_id IS NOT NULL
+                  AND e.id NOT IN (
+                    SELECT MIN(id) FROM entries
+                    WHERE source_id IS NOT NULL
+                    GROUP BY source_id
+                  )
+              )
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_entries_source_id
+            ON entries (source_id)
+            WHERE source_id IS NOT NULL
+            """
+        )
+    )
+    # 进程崩溃可能留下 ingesting；启动时释放回 ready
+    await conn.execute(
+        text(
+            """
+            UPDATE sources
+            SET status = 'ready', stage = 'extracted', progress = 100, error_message = ''
+            WHERE status = 'ingesting'
+            """
+        )
+    )
     await _add_column_if_missing(
         conn, "entry_annotations", "kind", "VARCHAR(20) DEFAULT 'note'"
     )

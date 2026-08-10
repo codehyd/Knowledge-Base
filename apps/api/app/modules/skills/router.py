@@ -11,6 +11,7 @@ from app.modules.skills.schemas import (
     SkillOut,
     SkillPurgeIn,
     SkillPurgeOut,
+    SkillReorderIn,
     SkillUninstallOut,
 )
 from app.modules.skills.service import skills_service
@@ -25,6 +26,16 @@ router = APIRouter(prefix="/skills", tags=["技能 Skill"])
 )
 async def list_skills() -> SkillListOut:
     return skills_service.list_skills()
+
+
+@router.put(
+    "/order",
+    response_model=SkillListOut,
+    summary="调整技能注入顺序",
+    description="列表顺序即对话注入顺序；越靠后的技能对最终输出格式优先级越高。",
+)
+async def reorder_skills(payload: SkillReorderIn) -> SkillListOut:
+    return skills_service.reorder(payload.order)
 
 
 @router.get(

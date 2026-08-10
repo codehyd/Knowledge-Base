@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import {
   DeleteOutlined,
   EyeOutlined,
+  HolderOutlined,
   ImportOutlined,
   ThunderboltOutlined,
   UploadOutlined,
@@ -36,6 +37,12 @@ export function SkillsPage() {
   const [detailTab, setDetailTab] = useState("skill");
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [purging, setPurging] = useState(false);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState<{
+    id: string;
+    side: "before" | "after";
+  } | null>(null);
+  const reorderingRef = useRef(false);
 
   const refresh = useCallback(async () => {
     const list = await api.listSkills();
@@ -100,6 +107,108 @@ export function SkillsPage() {
       message.error(formatError(err));
     }
   }
+
+  function clearDrag() {
+    setDraggingId(null);
+    setDragOver(null);
+    const active = document.activeElement;
+    if (active instanceof HTMLElement) active.blur();
+  }
+
+  function resolveDropTarget(
+    clientY: number,
+    listEl: HTMLElement,
+  ): { id: string; side: "before" | "after" } | null {
+    if (!draggingId) return null;
+    // 用原始顺序节点算落点，拖动中不挪 DOM，避免 dragend 丢失导致样式卡住
+    const nodes = Array.from(
+      listEl.querySelectorAll<HTMLElement>("[data-skill-id]"),
+    ).filter((n) => n.dataset.skillId && n.dataset.skillId !== draggingId);
+    if (nodes.length === 0) return null;
+    let insertAt = nodes.length;
+    for (let i = 0; i < nodes.length; i += 1) {
+      const rect = nodes[i].getBoundingClientRect();
+      if (clientY < rect.top + rect.height / 2) {
+        insertAt = i;
+        break;
+      }
+    }
+    if (insertAt >= nodes.length) {
+      return { id: nodes[nodes.length - 1].dataset.skillId!, side: "after" };
+    }
+    return { id: nodes[insertAt].dataset.skillId!, side: "before" };
+  }
+
+  function buildOrder(
+    fromId: string,
+    toId: string,
+    side: "before" | "after",
+    ids: string[] = skills.map((s) => s.id),
+  ): string[] | null {
+    if (!fromId || !toId || fromId === toId) return null;
+    const from = ids.indexOf(fromId);
+    const to = ids.indexOf(toId);
+    if (from < 0 || to < 0) return null;
+    const next = [...ids];
+    next.splice(from, 1);
+    let insertAt = next.indexOf(toId);
+    if (insertAt < 0) return null;
+    if (side === "after") insertAt += 1;
+    next.splice(insertAt, 0, fromId);
+    if (next.join("\0") === ids.join("\0")) return null;
+    return next;
+  }
+
+  async function commitOrder(fromId: string, toId: string, side: "before" | "after") {
+    if (reorderingRef.current) {
+      clearDrag();
+      return;
+    }
+    const next = buildOrder(fromId, toId, side);
+    if (!next) {
+      clearDrag();
+      return;
+    }
+    const prev = skills;
+    setSkills(next.map((id) => prev.find((s) => s.id === id)!).filter(Boolean));
+    clearDrag();
+    reorderingRef.current = true;
+    try {
+      const list = await api.reorderSkills(next);
+      setSkills(list.items);
+    } catch (err) {
+      message.error(formatError(err));
+      await refresh();
+    } finally {
+      reorderingRef.current = false;
+    }
+  }
+
+  const sorting = Boolean(draggingId);
+  const placeholderIndex = (() => {
+    if (!draggingId || !dragOver) return null;
+    const from = skills.findIndex((s) => s.id === draggingId);
+    let insertAt = skills.findIndex((s) => s.id === dragOver.id);
+    if (from < 0 || insertAt < 0) return null;
+    if (dragOver.side === "after") insertAt += 1;
+    // 落点相对当前位置没有变化
+    if (insertAt === from || insertAt === from + 1) return null;
+    return insertAt;
+  })();
+
+  useEffect(() => {
+    if (!draggingId) return;
+    const onEnd = () => clearDrag();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onEnd();
+    };
+    window.addEventListener("dragend", onEnd, true);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("dragend", onEnd, true);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, [draggingId]);
 
   async function showDetail(id: string) {
     try {
@@ -183,7 +292,7 @@ export function SkillsPage() {
           </h1>
           <p className={styles.desc}>
             像装编辑器插件一样安装 Skill：改变「怎么整理、怎么提问」，不改变「库里有什么」。
-            空库时库外问题仍会拒答。
+            空库时库外问题仍会拒答。可拖动排序：越靠后的技能对最终成文格式优先级越高（建议总结类放最后）。
           </p>
         </div>
         <div className={styles.actions}>
@@ -257,15 +366,96 @@ export function SkillsPage() {
 
       <div className={styles.section}>
         <h2 className={styles.sectionTitle}>已安装</h2>
+        {skills.length > 1 ? (
+          <p className={styles.hint}>
+            按左侧「拖动」把手排序；蓝色条表示将放到的位置。靠后的技能决定最终怎么写。
+          </p>
+        ) : null}
         {skills.length === 0 ? (
           <div className={styles.empty}>尚未安装技能。请上传符合规范的 .zip 技能包。</div>
         ) : (
-          <div className={styles.cardList}>
-            {skills.map((item) => (
-              <article key={item.id} className={styles.card}>
+          <div
+            className={`${styles.cardList}${sorting ? ` ${styles.cardListSorting}` : ""}`}
+            onDragOver={(e) => {
+              if (!draggingId) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              const next = resolveDropTarget(e.clientY, e.currentTarget);
+              if (!next) return;
+              setDragOver((prev) =>
+                prev?.id === next.id && prev.side === next.side ? prev : next,
+              );
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              const fromId =
+                e.dataTransfer.getData("text/kongku-skill") || draggingId || "";
+              const target =
+                dragOver || resolveDropTarget(e.clientY, e.currentTarget);
+              if (fromId && target) {
+                void commitOrder(fromId, target.id, target.side);
+              } else {
+                clearDrag();
+              }
+            }}
+            onDragLeave={(e) => {
+              if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                setDragOver(null);
+              }
+            }}
+          >
+            {skills.map((item, index) => {
+              const isDragging = draggingId === item.id;
+              return (
+              <Fragment key={item.id}>
+              {placeholderIndex === index ? (
+                <div className={styles.dropSlot} aria-hidden>
+                  <span>放到这里</span>
+                </div>
+              ) : null}
+              <article
+                data-skill-id={item.id}
+                className={`${styles.card}${sorting ? ` ${styles.cardSortMode}` : ""}${
+                  isDragging ? ` ${styles.cardDragging}` : ""
+                }`}
+              >
                 <div className={styles.cardTop}>
-                  <div>
-                    <h3 className={styles.cardTitle}>{item.name}</h3>
+                  <div className={styles.cardHead}>
+                    {skills.length > 1 ? (
+                      <button
+                        type="button"
+                        className={`${styles.dragHandle}${
+                          isDragging ? ` ${styles.dragHandleActive}` : ""
+                        }`}
+                        title="按住拖动排序"
+                        aria-label={`拖动调整「${item.name}」顺序`}
+                        draggable
+                        onDragStart={(e) => {
+                          setDraggingId(item.id);
+                          e.dataTransfer.effectAllowed = "move";
+                          e.dataTransfer.setData("text/kongku-skill", item.id);
+                          e.dataTransfer.setData("text/plain", item.id);
+                          const card = e.currentTarget.closest("article");
+                          if (card instanceof HTMLElement) {
+                            const rect = card.getBoundingClientRect();
+                            e.dataTransfer.setDragImage(
+                              card,
+                              Math.min(36, e.clientX - rect.left),
+                              Math.min(28, e.clientY - rect.top),
+                            );
+                          }
+                        }}
+                        onDragEnd={() => clearDrag()}
+                      >
+                        <HolderOutlined className={styles.dragHandleIcon} />
+                        <span className={styles.dragHandleHint}>拖动</span>
+                      </button>
+                    ) : null}
+                    <div>
+                    <h3 className={styles.cardTitle}>
+                      <span className={styles.orderBadge}>{index + 1}</span>
+                      {item.name}
+                    </h3>
                     <div className={styles.meta}>
                       <Tag>{item.id}</Tag>
                       <Tag color="blue">v{item.version}</Tag>
@@ -280,6 +470,7 @@ export function SkillsPage() {
                           {item.knowledge_imported ? "附带材料已导过" : "含附带材料"}
                         </Tag>
                       ) : null}
+                    </div>
                     </div>
                   </div>
                   <Space>
@@ -320,7 +511,14 @@ export function SkillsPage() {
                   </Button>
                 </div>
               </article>
-            ))}
+              </Fragment>
+              );
+            })}
+            {placeholderIndex === skills.length ? (
+              <div className={styles.dropSlot} aria-hidden>
+                <span>放到这里</span>
+              </div>
+            ) : null}
           </div>
         )}
       </div>

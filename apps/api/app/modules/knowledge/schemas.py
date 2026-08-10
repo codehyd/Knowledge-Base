@@ -84,6 +84,21 @@ class EntryBatchDeleteOut(BaseModel):
     removed: int
 
 
+class EntryBatchAddDomainIn(BaseModel):
+    """批量把条目挂到某个人工分类（追加，不移除已有分类）。"""
+
+    category_id: int = Field(gt=0)
+    entry_ids: list[int] = Field(default_factory=list, max_length=500)
+    # entry_ids 为空时，可按合集名应用到该合集全部已入库分集
+    collection_title: str = ""
+
+
+class EntryBatchAddDomainOut(BaseModel):
+    updated: int
+    skipped: int
+    total: int
+
+
 class EntryCategoriesIn(BaseModel):
     """设置条目的人工分类（仅替换 domain 关联，不触碰自动标签）。"""
 

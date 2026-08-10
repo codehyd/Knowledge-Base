@@ -64,6 +64,15 @@
   gap: 12px;
 }
 
+.cardListSorting {
+  gap: 10px;
+  padding: 10px;
+  margin: -10px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #f4f7fb 0%, #eef3f8 100%);
+  outline: 1px dashed #b7c5d6;
+}
+
 .card {
   border: 1px solid #e8ecef;
   border-radius: 12px;
@@ -71,6 +80,115 @@
   display: grid;
   gap: 10px;
   background: #fafbfc;
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease,
+    border-color 0.18s ease,
+    background 0.18s ease,
+    opacity 0.18s ease;
+}
+
+.cardSortMode {
+  background: #fff;
+  border-color: #d7dee6;
+}
+
+.cardDragging {
+  opacity: 0.4;
+  background: #f3f6f9;
+  border-style: dashed;
+  border-color: #9eb6d1;
+  box-shadow: none;
+  transform: none;
+}
+
+.dropSlot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  border-radius: 10px;
+  border: 2px dashed #1677ff;
+  background: rgba(22, 119, 255, 0.08);
+  color: #1677ff;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  animation: dropSlotPulse 1s ease-in-out infinite;
+}
+
+@keyframes dropSlotPulse {
+  0%,
+  100% {
+    background: rgba(22, 119, 255, 0.06);
+  }
+  50% {
+    background: rgba(22, 119, 255, 0.14);
+  }
+}
+
+.cardHead {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.dragHandle {
+  flex: none;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 40px;
+  min-height: 52px;
+  margin: -4px 0 0 -4px;
+  padding: 6px 4px;
+  border: 1px solid #d9e1ea;
+  border-radius: 10px;
+  background: #f0f4f8;
+  color: #5a6570;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.dragHandleIcon {
+  font-size: 16px;
+}
+
+.dragHandleHint {
+  font-size: 10px;
+  line-height: 1;
+  color: #8b949e;
+  letter-spacing: 0.04em;
+}
+
+.dragHandle:hover {
+  background: #e4ebf3;
+  border-color: #b7c5d6;
+  color: #2f3a45;
+}
+
+.dragHandle:hover .dragHandleHint {
+  color: #5a6570;
+}
+
+.dragHandle:active {
+  cursor: grabbing;
+}
+
+.dragHandleActive {
+  cursor: grabbing;
+  background: #1677ff;
+  border-color: #1677ff;
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(22, 119, 255, 0.28);
+}
+
+.dragHandleActive .dragHandleHint {
+  color: rgba(255, 255, 255, 0.88);
 }
 
 .cardTop {
@@ -83,6 +201,23 @@
 .cardTitle {
   margin: 0;
   font-size: 16px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.orderBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: #e8ecef;
+  color: #5a6570;
+  font-size: 12px;
   font-weight: 600;
 }
 

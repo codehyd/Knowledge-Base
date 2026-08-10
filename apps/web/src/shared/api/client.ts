@@ -1029,6 +1029,18 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ entry_ids }),
     }),
+  batchAddDomain: (body: {
+    category_id: number;
+    entry_ids?: number[];
+    collection_title?: string;
+  }) =>
+    request<{ updated: number; skipped: number; total: number }>(
+      "/api/entries/batch-add-domain",
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+    ),
   deleteCollection: (title: string) =>
     request<{ title: string; removed: number }>("/api/collections/delete", {
       method: "POST",
@@ -1068,6 +1080,11 @@ export const api = {
     ),
 
   listSkills: () => request<{ items: SkillItem[]; total: number }>("/api/skills"),
+  reorderSkills: (order: string[]) =>
+    request<{ items: SkillItem[]; total: number }>("/api/skills/order", {
+      method: "PUT",
+      body: JSON.stringify({ order }),
+    }),
   getSkill: (id: string) => request<SkillDetail>(`/api/skills/${encodeURIComponent(id)}`),
   installSkillZip: (file: File, importKnowledge = false, overwrite = true) => {
     const form = new FormData();

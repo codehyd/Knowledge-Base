@@ -47,6 +47,9 @@ TOP_K = 6
 KEYWORD_MIN_SCORE = 1.5
 VECTOR_MIN_SCORE = 0.28
 SNIPPET_CHARS = 220
+# 大分类时先按条目标题收窄，再对候选条目的切片打分（避免全库切片线性扫）
+ENTRY_CANDIDATE_K = 24
+CHUNK_CONTEXT_CHARS = 700
 
 _BOLD_CONCEPT_RE = re.compile(r"\*\*([^*，。；\n]{2,40}?)\*\*")
 _NUM_ITEM_RE = re.compile(
@@ -1147,7 +1150,9 @@ class ChatService:
                 full = fulltext_cache[entry.id]
                 char_offset = locate_text_offset(full, chunk_text) if full else -1
 
-                context_blocks.append(f"[{i}] 《{title}》\n{chunk.text}")
+                context_blocks.append(
+                    f"[{i}] 《{title}》\n{_clip_context(chunk_text)}"
+                )
                 citations.append(
                     ChatCitation(
                         entry_id=entry.id,
@@ -1286,21 +1291,41 @@ class ChatService:
         *,
         category_id: int | None,
     ) -> tuple[list[tuple[Chunk, Entry, float]], str]:
+        tokens = _tokenize_query(message)
+
+        # 1) 先取范围内的条目（远少于切片），用标题/摘要做候选收窄
+        entry_q = select(Entry)
+        if category_id is not None:
+            entry_q = entry_q.join(
+                EntryCategory, EntryCategory.entry_id == Entry.id
+            ).where(EntryCategory.category_id == category_id)
+        entries = list((await db.execute(entry_q)).scalars().all())
+        if not entries:
+            return [], "keyword"
+
+        ranked_entries: list[tuple[float, Entry]] = []
+        for entry in entries:
+            score = _keyword_score(entry.title or "", tokens) * 1.4
+            score += _keyword_score(entry.summary or "", tokens) * 0.6
+            ranked_entries.append((score, entry))
+        ranked_entries.sort(key=lambda x: x[0], reverse=True)
+
+        positive = [e for s, e in ranked_entries if s > 0][:ENTRY_CANDIDATE_K]
+        # 标题全无命中时仍取若干条，避免空结果（后续靠切片关键词/向量）
+        candidate_entries = positive or [e for _, e in ranked_entries[:ENTRY_CANDIDATE_K]]
+        candidate_ids = [int(e.id) for e in candidate_entries]
+
         q = (
             select(Chunk, Entry)
             .join(Entry, Entry.id == Chunk.entry_id)
+            .where(Chunk.entry_id.in_(candidate_ids))
             .order_by(Chunk.entry_id, Chunk.ord)
         )
-        if category_id is not None:
-            q = q.join(EntryCategory, EntryCategory.entry_id == Entry.id).where(
-                EntryCategory.category_id == category_id
-            )
-
         rows = list((await db.execute(q)).all())
         if not rows:
             return [], "keyword"
 
-        # 尝试向量
+        # 2) 候选切片上再做向量（有 embedding 时）或关键词
         query_vecs = await embed_texts(db, [message])
         if query_vecs and query_vecs[0]:
             qv = query_vecs[0]
@@ -1316,19 +1341,23 @@ class ChatService:
             if scored:
                 return scored[:TOP_K], "vector"
 
-        # 关键词降级
-        tokens = _tokenize_query(message)
         scored_kw: list[tuple[Chunk, Entry, float]] = []
         for chunk, entry in rows:
             if _is_noisy_chunk(chunk.text or ""):
                 continue
             score = _keyword_score(chunk.text or "", tokens)
-            # 标题命中加权
             score += _keyword_score(entry.title or "", tokens) * 1.2
             if score >= KEYWORD_MIN_SCORE:
                 scored_kw.append((chunk, entry, score))
         scored_kw.sort(key=lambda x: x[2], reverse=True)
         return scored_kw[:TOP_K], "keyword"
+
+
+def _clip_context(text: str, limit: int = CHUNK_CONTEXT_CHARS) -> str:
+    raw = (text or "").strip()
+    if len(raw) <= limit:
+        return raw
+    return raw[:limit].rstrip() + "…"
 
 
 chat_service = ChatService()

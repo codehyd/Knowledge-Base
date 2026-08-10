@@ -147,6 +147,11 @@
   max-width: 18em;
 }
 
+.collectionDragging {
+  opacity: 0.72;
+  cursor: grabbing;
+}
+
 .catScroll {
   flex: 1;
   min-width: 0;
@@ -337,6 +342,11 @@
   gap: 8px;
   min-width: 0;
   color: #0f766e;
+  cursor: grab;
+}
+
+.collectionTitleBlock:active {
+  cursor: grabbing;
 }
 
 .collectionFolderIcon {
@@ -650,6 +660,17 @@
 
 .listDragging {
   opacity: 0.55;
+}
+
+.listCollectionItem {
+  background: linear-gradient(180deg, #f3faf9 0%, #fff 70%);
+  border-color: #d7ebe8;
+}
+
+.listCollectionIcon {
+  color: #0d9488;
+  font-size: 14px;
+  flex-shrink: 0;
 }
 
 .listItem {

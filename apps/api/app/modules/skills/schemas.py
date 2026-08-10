@@ -37,6 +37,12 @@ class SkillEnableIn(BaseModel):
     enabled: bool
 
 
+class SkillReorderIn(BaseModel):
+    """技能注入顺序：越靠后对最终输出格式优先级越高。"""
+
+    order: list[str] = Field(default_factory=list, min_length=1)
+
+
 class SkillInstallOut(BaseModel):
     skill: SkillOut
     knowledge_queued: int = 0
