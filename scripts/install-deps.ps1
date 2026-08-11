@@ -31,7 +31,8 @@ function Test-PythonVersion {
         $parts = $ver.Trim().Split(".")
         $major = [int]$parts[0]
         $minor = [int]$parts[1]
-        return ($major -eq 3 -and $minor -ge 12)
+        # 本项目依赖尚未适配 3.14+，锁定 3.12–3.13
+        return ($major -eq 3 -and $minor -ge 12 -and $minor -le 13)
     } catch {
         return $false
     }
@@ -54,43 +55,62 @@ function Find-Python {
 
     try {
         $pyList = & py -0p 2>$null
+        $ordered = New-Object System.Collections.Generic.List[object]
         foreach ($line in @($pyList)) {
-            # 兼容默认标记行： -V:3.13 *        C:\...\python.exe
-            if ($line -match '-V:(\d+\.\d+)\s+\*?\s*(.+\.exe)\s*$') {
+            $isDefault = $line -match '\*'
+            $ver = $null
+            $exe = $null
+            # 兼容默认标记行： -V:3.14 *        C:\...\python.exe
+            if ($line -match '-V:(\S+)\s+\*\s+(.+\.exe)\s*$') {
                 $ver = $matches[1]
                 $exe = $matches[2].Trim()
-                $parts = $ver.Split(".")
-                $major = [int]$parts[0]
-                $minor = [int]$parts[1]
-                if ($major -eq 3 -and $minor -ge 12) {
-                    Add-Candidate "py -$ver" $exe
-                }
+                $isDefault = $true
             }
-            # uv / 其它标签：-V:Astral/CPython3.12.13 C:\...\python.exe
-            elseif ($line -match '-V:\S*?(3\.\d+)\S*\s+(.+\.exe)\s*$') {
+            elseif ($line -match '-V:(\S+)\s+(.+\.exe)\s*$') {
                 $ver = $matches[1]
                 $exe = $matches[2].Trim()
-                $parts = $ver.Split(".")
-                $major = [int]$parts[0]
-                $minor = [int]$parts[1]
-                if ($major -eq 3 -and $minor -ge 12) {
-                    Add-Candidate $exe $exe
-                }
             }
+            if (-not $ver -or -not $exe) { continue }
+            if ($ver -match '(3\.\d+)') { $ver = $matches[1] } else { continue }
+            $parts = $ver.Split(".")
+            $major = [int]$parts[0]
+            $minor = [int]$parts[1]
+            if ($major -eq 3 -and $minor -ge 12 -and $minor -le 13) {
+                $score = if ($isDefault) { 400 + $minor } else { 300 + $minor }
+                $ordered.Add([pscustomobject]@{ Score = $score; Exe = $exe }) | Out-Null
+            }
+        }
+        foreach ($item in ($ordered | Sort-Object Score -Descending)) {
+            Add-Candidate $item.Exe $item.Exe
         }
     } catch { }
 
-    foreach ($name in @("python3.12", "python3.13", "python3.14", "python3", "python", "py")) {
+    # uv 已缓存的 3.12/3.13（不必再装官方安装包）
+    $uvRoot = Join-Path $env:APPDATA "uv\python"
+    if (Test-Path -LiteralPath $uvRoot) {
+        Get-ChildItem -LiteralPath $uvRoot -Recurse -Filter "python.exe" -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending |
+            Select-Object -First 12 |
+            ForEach-Object { Add-Candidate $_.FullName $_.FullName }
+    }
+
+    foreach ($name in @("python3.13", "python3.12", "python3", "python")) {
         $cmd = Get-Command $name -ErrorAction SilentlyContinue
         if ($cmd -and $cmd.Source) {
             Add-Candidate $cmd.Source $cmd.Source
         }
     }
 
-    # 本机常见安装路径（不依赖 PATH）
-    foreach ($verDir in @("Python314", "Python313", "Python312")) {
-        $exe = Join-Path $env:LOCALAPPDATA "Programs\Python\$verDir\python.exe"
-        Add-Candidate $exe $exe
+    # 本机常见安装路径（只扫 3.12 / 3.13）
+    $pyRoot = Join-Path $env:LOCALAPPDATA "Programs\Python"
+    if (Test-Path -LiteralPath $pyRoot) {
+        Get-ChildItem -LiteralPath $pyRoot -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^Python31[23]$' } |
+            Sort-Object Name -Descending |
+            ForEach-Object {
+                $exe = Join-Path $_.FullName "python.exe"
+                Add-Candidate $exe $exe
+            }
     }
 
     foreach ($item in $candidateList) {
@@ -110,7 +130,7 @@ function Find-Python {
                     $parts = $ver.Trim().Split(".")
                     $major = [int]$parts[0]
                     $minor = [int]$parts[1]
-                    if ($major -eq 3 -and $minor -ge 12) {
+                    if ($major -eq 3 -and $minor -ge 12 -and $minor -le 13) {
                         return $cmd
                     }
                 }
@@ -118,16 +138,34 @@ function Find-Python {
         }
     }
 
-    throw "需要 Python 3.12 或更高版本。可从 https://www.python.org/downloads/ 安装，并勾选 Add to PATH"
+    throw "需要 Python 3.12 或 3.13（依赖尚未适配 3.14+）。可用 uv python install 3.12，不必再装官方安装包。"
 }
 
 $pyCmd = Find-Python
 $pyVer = (& $pyCmd --version 2>&1 | Out-String).Trim()
-Write-Host "==> Python：$pyVer"
+Write-Host "==> Python：$pyVer  ($pyCmd)"
 
 $venv = "apps\api\.venv"
+$venvPython = Join-Path $Root "apps\api\.venv\Scripts\python.exe"
+$venvBroken = $false
+if ((Test-Path $venv) -and -not $FreshVenv) {
+    try {
+        & $venvPython -c "import sys" 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            $venvBroken = $true
+        } elseif (-not (Test-PythonVersion $venvPython)) {
+            $venvBroken = $true
+        }
+    } catch {
+        $venvBroken = $true
+    }
+}
+
 if ($FreshVenv -and (Test-Path $venv)) {
-    Write-Host "==> 重建虚拟环境"
+    Write-Host "==> 重建虚拟环境（-FreshVenv）"
+    Remove-Item -Recurse -Force $venv
+} elseif ($venvBroken) {
+    Write-Host "==> 现有虚拟环境不可用或版本不符（需要 3.12–3.13），自动重建"
     Remove-Item -Recurse -Force $venv
 }
 

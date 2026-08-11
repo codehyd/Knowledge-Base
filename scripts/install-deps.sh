@@ -37,18 +37,31 @@ fi
 
 mkdir -p data/uploads data/exports data/tmp
 
+# 本项目依赖（如 pyinstaller==6.12.0）尚未适配 3.14+，锁定 3.12–3.13
 python_version_ok() {
   local py="$1"
   local major minor
   major="$("$py" -c 'import sys; print(sys.version_info.major)' 2>/dev/null || echo 0)"
   minor="$("$py" -c 'import sys; print(sys.version_info.minor)' 2>/dev/null || echo 0)"
-  [[ "$major" -eq 3 && "$minor" -ge 12 ]]
+  [[ "$major" -eq 3 && "$minor" -ge 12 && "$minor" -le 13 ]]
 }
 
+to_bash_path() {
+  local p="$1"
+  [[ -n "$p" ]] || return 0
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -u "$p" 2>/dev/null || echo "$p"
+  else
+    echo "$p" | sed -E 's#^([A-Za-z]):[\\/]#/\L\1/#; s#\\#/#g'
+  fi
+}
+
+# 把可用解释器按「3.13 > 3.12，跳过 3.14+」写入 candidates
 collect_python_candidates() {
   candidates=()
   local seen="|"
-  local name py win_local win_roaming
+  local name py win_local win_roaming line ver exe is_default
+  local -a ranked=()
 
   add_candidate() {
     local py="$1"
@@ -58,85 +71,116 @@ collect_python_candidates() {
     case "$seen" in
       *"|$py|"*) return 0 ;;
     esac
+    # 跳过已失效的解释器（文件在但跑不起来）
+    if ! "$py" -c "import sys" >/dev/null 2>&1; then
+      return 0
+    fi
     seen="${seen}|$py|"
     candidates+=("$py")
   }
 
-  for name in python3.12 python3.13 python3.14 python3 python; do
+  # 1) 读本机 py 启动器清单（只收 3.12 / 3.13）
+  if command -v py >/dev/null 2>&1; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      line="${line//$'\r'/}"
+      [[ -n "$line" ]] || continue
+      is_default=0
+      exe=""
+      ver=""
+      if [[ "$line" =~ -V:([^[:space:]]+)[[:space:]]+\*[[:space:]]+(.+\.[Ee][Xx][Ee]) ]]; then
+        ver="${BASH_REMATCH[1]}"
+        exe="$(to_bash_path "${BASH_REMATCH[2]}")"
+        is_default=1
+      elif [[ "$line" =~ -V:([^[:space:]]+)[[:space:]]+(.+\.[Ee][Xx][Ee]) ]]; then
+        ver="${BASH_REMATCH[1]}"
+        exe="$(to_bash_path "${BASH_REMATCH[2]}")"
+      else
+        continue
+      fi
+      if [[ "$ver" =~ (3\.[0-9]+) ]]; then
+        ver="${BASH_REMATCH[1]}"
+      else
+        continue
+      fi
+      major="${ver%%.*}"
+      minor="${ver#*.}"
+      [[ "$major" == "3" && "$minor" -ge 12 && "$minor" -le 13 ]] || continue
+      # 同版本内：默认标记略优先；跨版本：3.13 > 3.12
+      if [[ "$is_default" -eq 1 ]]; then
+        ranked+=("$((400 + minor)):$exe")
+      else
+        ranked+=("$((300 + minor)):$exe")
+      fi
+    done < <(py -0p 2>/dev/null || true)
+
+    if ((${#ranked[@]})); then
+      while IFS= read -r line; do
+        py="${line#*:}"
+        add_candidate "$py"
+      done < <(printf '%s\n' "${ranked[@]}" | sort -t: -k1,1nr)
+    fi
+  fi
+
+  # 2) uv 已下载的 3.12/3.13（Windows 上很常见，不必再装一份官方包）
+  win_roaming="${APPDATA:-}"
+  if [[ -n "$win_roaming" ]]; then
+    win_roaming="$(to_bash_path "$win_roaming")"
+    if [[ -d "$win_roaming/uv/python" ]]; then
+      while IFS= read -r py; do
+        add_candidate "$py"
+      done < <(find "$win_roaming/uv/python" -name 'python.exe' 2>/dev/null | sort -V -r | head -n 12 || true)
+    fi
+  fi
+  if command -v uv >/dev/null 2>&1; then
+    for name in 3.13 3.12; do
+      py="$(uv python find "$name" 2>/dev/null || true)"
+      [[ -n "$py" ]] || continue
+      add_candidate "$(to_bash_path "$py")"
+    done
+  fi
+
+  # 3) PATH 里的 python（优先 3.13 / 3.12）
+  for name in python3.13 python3.12 python3 python; do
     if command -v "$name" >/dev/null 2>&1; then
       add_candidate "$(command -v "$name")"
     fi
   done
 
-  # Windows：py 启动器（Git Bash / cmd）
-  if command -v py >/dev/null 2>&1; then
-    for name in -3.14 -3.13 -3.12 -3; do
-      py_path="$(py "$name" -c "import sys; print(sys.executable)" 2>/dev/null || true)"
-      # 转成 Git Bash 可读路径（C:\... → /c/...）
-      if [[ -n "$py_path" ]]; then
-        if command -v cygpath >/dev/null 2>&1; then
-          py_path="$(cygpath -u "$py_path" 2>/dev/null || echo "$py_path")"
-        else
-          py_path="$(echo "$py_path" | sed -E 's#^([A-Za-z]):[\\/]#/\L\1/#; s#\\#/#g')"
-        fi
-        add_candidate "$py_path"
-      fi
-    done
-  fi
-
   if command -v which >/dev/null 2>&1; then
     while IFS= read -r py; do
       add_candidate "$py"
-    done < <(which -a python3.12 python3.13 python3.14 python3 python 2>/dev/null || true)
+    done < <(which -a python3.13 python3.12 python3 python 2>/dev/null || true)
   fi
 
+  # 4) 扫描本机常见安装目录
   win_local="${LOCALAPPDATA:-}"
-  win_roaming="${APPDATA:-}"
-  # Git Bash 常带这些环境变量
+  if [[ -n "$win_local" ]]; then
+    win_local="$(to_bash_path "$win_local")"
+    if [[ -d "$win_local/Programs/Python" ]]; then
+      while IFS= read -r py; do
+        add_candidate "$py"
+      done < <(ls -1d "$win_local"/Programs/Python/Python31[23]/python.exe 2>/dev/null | sort -V -r || true)
+    fi
+  fi
+
   for py in \
-    "$HOME/.local/bin/python3.12" \
     "$HOME/.local/bin/python3.13" \
-    "$HOME/.local/bin/python3.14" \
-    "/opt/homebrew/bin/python3.12" \
+    "$HOME/.local/bin/python3.12" \
     "/opt/homebrew/bin/python3.13" \
-    "/opt/homebrew/bin/python3.14" \
-    "/usr/local/bin/python3.12" \
+    "/opt/homebrew/bin/python3.12" \
     "/usr/local/bin/python3.13" \
-    "/usr/local/bin/python3.14" \
-    "/c/Users/${USERNAME:-}/AppData/Local/Programs/Python/Python313/python.exe" \
-    "/c/Users/${USERNAME:-}/AppData/Local/Programs/Python/Python312/python.exe" \
-    "/c/Users/${USER:-}/AppData/Local/Programs/Python/Python313/python.exe" \
-    "/c/Users/${USER:-}/AppData/Local/Programs/Python/Python312/python.exe"; do
+    "/usr/local/bin/python3.12" \
+    "/c/Python313/python.exe" \
+    "/c/Python312/python.exe"; do
     add_candidate "$py"
   done
-
-  if [[ -n "$win_local" ]]; then
-    if command -v cygpath >/dev/null 2>&1; then
-      win_local="$(cygpath -u "$win_local" 2>/dev/null || echo "$win_local")"
-    fi
-    for py in \
-      "$win_local/Programs/Python/Python314/python.exe" \
-      "$win_local/Programs/Python/Python313/python.exe" \
-      "$win_local/Programs/Python/Python312/python.exe"; do
-      add_candidate "$py"
-    done
-  fi
-  if [[ -n "$win_roaming" ]]; then
-    if command -v cygpath >/dev/null 2>&1; then
-      win_roaming="$(cygpath -u "$win_roaming" 2>/dev/null || echo "$win_roaming")"
-    fi
-    # uv 安装的解释器
-    while IFS= read -r py; do
-      add_candidate "$py"
-    done < <(find "$win_roaming/uv/python" -name 'python.exe' 2>/dev/null | head -n 8 || true)
-  fi
 }
 
 pick_python() {
   local py uv_py
 
   collect_python_candidates
-  for py in "${candidates[@]}"; do
+  for py in "${candidates[@]+"${candidates[@]}"}"; do
     if python_version_ok "$py"; then
       echo "$py"
       return 0
@@ -144,33 +188,53 @@ pick_python() {
   done
 
   if command -v uv >/dev/null 2>&1; then
-    for uv_py in $(uv python find 3.12 2>/dev/null) $(uv python find 3.13 2>/dev/null) $(uv python find 3.14 2>/dev/null); do
-      if [[ -n "$uv_py" && -x "$uv_py" ]] && python_version_ok "$uv_py"; then
+    for uv_py in $(uv python find 3.13 2>/dev/null) $(uv python find 3.12 2>/dev/null); do
+      uv_py="$(to_bash_path "$uv_py")"
+      if [[ -n "$uv_py" && ( -x "$uv_py" || -f "$uv_py" ) ]] && python_version_ok "$uv_py"; then
         echo "$uv_py"
         return 0
       fi
     done
 
-    echo "未找到 Python 3.12+，尝试用 uv 安装 3.12…" >&2
+    echo "未找到 Python 3.12/3.13，尝试用 uv 安装 3.12（无需再装官方安装包）…" >&2
     uv python install 3.12
     uv_py="$(uv python find 3.12 2>/dev/null || echo "$HOME/.local/bin/python3.12")"
-    echo "$uv_py"
+    echo "$(to_bash_path "$uv_py")"
     return 0
   fi
 
-  echo "需要 Python 3.12 或更高版本。" >&2
-  echo "  Windows 请用 PowerShell：  .\\scripts\\install-deps.ps1" >&2
-  echo "  或安装 uv：curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
+  echo "需要 Python 3.12 或 3.13（当前依赖尚未适配 3.14+）。" >&2
+  echo "  你本机若只有 3.14：不必再装官方包，可先装 uv 后自动拉 3.12：" >&2
+  echo "    curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
+  echo "    uv python install 3.12" >&2
+  echo "  或 Windows：.\\\\scripts\\\\install-deps.ps1" >&2
   echo "  macOS：brew install python@3.12" >&2
   return 1
 }
 
+venv_is_usable() {
+  local venv="$1"
+  local py=""
+  if [[ -f "$venv/Scripts/python.exe" ]]; then
+    py="$venv/Scripts/python.exe"
+  elif [[ -f "$venv/bin/python" ]]; then
+    py="$venv/bin/python"
+  else
+    return 1
+  fi
+  # 能跑且版本在 3.12–3.13；若是刚建的 3.14 venv 也会判定为不可用并重建
+  "$py" -c "import sys" >/dev/null 2>&1 && python_version_ok "$py"
+}
+
 PY="$(pick_python)"
-echo "==> Python：$("$PY" --version)"
+echo "==> Python：$("$PY" --version)  ($PY)"
 
 VENV="apps/api/.venv"
 if [[ "$FRESH_VENV" -eq 1 && -d "$VENV" ]]; then
-  echo "==> 重建虚拟环境"
+  echo "==> 重建虚拟环境（--fresh-venv）"
+  rm -rf "$VENV"
+elif [[ -d "$VENV" ]] && ! venv_is_usable "$VENV"; then
+  echo "==> 现有虚拟环境不可用或版本不符（需要 3.12–3.13），自动重建"
   rm -rf "$VENV"
 fi
 
