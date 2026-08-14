@@ -74,34 +74,38 @@ export const WikilinkExtension = Extension.create<WikilinkOptions>({
         view() {
           return {
             update(view) {
-              const { from } = view.state.selection;
-              const $from = view.state.doc.resolve(from);
-              if (!$from.parent.isTextblock) {
+              try {
+                const { from } = view.state.selection;
+                const $from = view.state.doc.resolve(from);
+                if (!$from.parent.isTextblock) {
+                  extension.options.onSuggest?.(null);
+                  return;
+                }
+                const parentStart = $from.start();
+                const textBefore = $from.parent.textBetween(0, $from.parentOffset, "\n", "\n");
+                const open = textBefore.lastIndexOf("[[");
+                if (open < 0) {
+                  extension.options.onSuggest?.(null);
+                  return;
+                }
+                const after = textBefore.slice(open + 2);
+                if (after.includes("]]") || after.includes("\n")) {
+                  extension.options.onSuggest?.(null);
+                  return;
+                }
+                const absFrom = parentStart + open;
+                const coords = view.coordsAtPos(from);
+                extension.options.onSuggest?.({
+                  active: true,
+                  query: after,
+                  from: absFrom,
+                  to: from,
+                  left: Math.min(coords.left, window.innerWidth - 320),
+                  top: Math.min(coords.bottom + 6, window.innerHeight - 280),
+                });
+              } catch {
                 extension.options.onSuggest?.(null);
-                return;
               }
-              const parentStart = $from.start();
-              const textBefore = $from.parent.textBetween(0, $from.parentOffset, "\n", "\n");
-              const open = textBefore.lastIndexOf("[[");
-              if (open < 0) {
-                extension.options.onSuggest?.(null);
-                return;
-              }
-              const after = textBefore.slice(open + 2);
-              if (after.includes("]]") || after.includes("\n")) {
-                extension.options.onSuggest?.(null);
-                return;
-              }
-              const absFrom = parentStart + open;
-              const coords = view.coordsAtPos(from);
-              extension.options.onSuggest?.({
-                active: true,
-                query: after,
-                from: absFrom,
-                to: from,
-                left: Math.min(coords.left, window.innerWidth - 320),
-                top: Math.min(coords.bottom + 6, window.innerHeight - 280),
-              });
             },
           };
         },

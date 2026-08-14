@@ -8,52 +8,47 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { useNavigate } from "react-router-dom";
-import { EditorContent, useEditor } from "@tiptap/react";
-import { BubbleMenu } from "@tiptap/react/menus";
-import StarterKit from "@tiptap/starter-kit";
-import Placeholder from "@tiptap/extension-placeholder";
-import TaskList from "@tiptap/extension-task-list";
-import TaskItem from "@tiptap/extension-task-item";
-import Link from "@tiptap/extension-link";
-import Typography from "@tiptap/extension-typography";
-import Underline from "@tiptap/extension-underline";
-import { Markdown } from "tiptap-markdown";
+import { EditorState, Prec } from "@codemirror/state";
+import { EditorView, keymap, placeholder as cmPlaceholder } from "@codemirror/view";
+import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { markdown, markdownKeymap, markdownLanguage } from "@codemirror/lang-markdown";
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { tags as t } from "@lezer/highlight";
 import {
   BoldOutlined,
   CheckSquareOutlined,
   CodeOutlined,
-  DownOutlined,
+  ColumnWidthOutlined,
+  EditOutlined,
+  EyeOutlined,
   FontSizeOutlined,
   ItalicOutlined,
   LinkOutlined,
   MinusOutlined,
   OrderedListOutlined,
-  RedoOutlined,
+  PictureOutlined,
   StrikethroughOutlined,
-  UnderlineOutlined,
-  UndoOutlined,
+  TableOutlined,
   UnorderedListOutlined,
 } from "@ant-design/icons";
-import { App, Button, Dropdown, Tooltip } from "antd";
-import { hasMark } from "@/shared/editor-extensions";
-import { getFilteredSlashItems, SlashCommandMenu } from "./SlashCommandMenu";
-import { readSlashQuery } from "./slashCommands";
-import { restoreWikilinkMarkers } from "./wikilinks";
-import { WikilinkExtension, type WikilinkSuggestState } from "./wikilink/WikilinkExtension";
-import { WikilinkSuggest } from "./wikilink/WikilinkSuggest";
-import { resolveWikilinkHref } from "./wikilink/resolve";
+import { App, Button, Tooltip } from "antd";
+import { api } from "@/shared/api/client";
+import { formatError } from "@/shared/ui/feedback";
+import { hasMark, rewriteMarkdownImagesForEditor, rewriteMarkdownImagesForSave, toEditorImageSrc } from "@/shared/editor-extensions";
+import { MarkdownView } from "@/shared/ui/markdown/MarkdownView";
+import { listSlashCommands, parseSlashInsert, setSlashRuntime, type MarkdownHost, type SlashCommandItem } from "./slashCommands";
+import { SlashCommandMenu } from "./SlashCommandMenu";
+import { WikilinkSuggest, type WikilinkSuggestState } from "./wikilink/WikilinkSuggest";
 import { headingMatches } from "./wikilink/parse";
-import { openInSystemBrowser } from "@/shared/ui/lake-editor/openExternalLink";
+import { EditorErrorBoundary } from "./EditorErrorBoundary";
+import { livePreview } from "./livePreview";
 import styles from "./MarkdownEditor.module.css";
 
 export type MarkdownEditorHandle = {
   getMarkdown: () => string;
   focus: () => void;
   setMarkdown: (md: string) => void;
-  /** 在光标处插入双链字面量 [[label]] */
   insertWikilink: (label: string) => void;
-  /** 滚到正文中匹配的标题（支持 # 锚点） */
   scrollToHeading: (heading: string) => boolean;
 };
 
@@ -64,9 +59,7 @@ type Props = {
   onDirtyChange?: (dirty: boolean) => void;
   onSave?: () => void | Promise<void>;
   saving?: boolean;
-  /** 当前笔记 id：补全时排除「链到整篇自己」 */
   excludeSourceId?: number | null;
-  /** 打开时滚到该标题（来自 URL ?heading=） */
   initialHeading?: string | null;
 };
 
@@ -74,13 +67,77 @@ function isMac() {
   return typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 }
 
-const QuoteIcon = () => (
-  <svg width="1em" height="1em" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
-    <path d="M3.2 4.5c-1.4.7-2.2 2-2.2 3.7V12h4.2V7.8H3.4c0-1 .5-1.9 1.6-2.4L3.2 4.5zm6.6 0c-1.4.7-2.2 2-2.2 3.7V12h4.2V7.8H10c0-1 .5-1.9 1.6-2.4L9.8 4.5z" />
-  </svg>
-);
+type ViewMode = "source" | "split" | "preview";
 
-export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function MarkdownEditor(
+const mdHighlight = HighlightStyle.define([
+  { tag: t.heading1, fontWeight: "700", color: "#0f172a" },
+  { tag: t.heading2, fontWeight: "700", color: "#1e293b" },
+  { tag: t.heading3, fontWeight: "650", color: "#334155" },
+  { tag: t.heading4, fontWeight: "650", color: "#475569" },
+  { tag: t.strong, fontWeight: "700" },
+  { tag: t.emphasis, fontStyle: "italic" },
+  { tag: t.link, color: "#0f766e" },
+  { tag: t.monospace, color: "#0f766e" },
+  { tag: t.meta, color: "#94a3b8" },
+  { tag: t.processingInstruction, color: "#94a3b8" },
+  { tag: t.quote, color: "#64748b", fontStyle: "italic" },
+]);
+
+function readViewMode(): ViewMode {
+  try {
+    const v = localStorage.getItem("kk-note-view-v2");
+    if (v === "source" || v === "split" || v === "preview") return v;
+  } catch {
+    /* ignore */
+  }
+  return "source";
+}
+
+function lineBefore(view: EditorView) {
+  const pos = view.state.selection.main.head;
+  const line = view.state.doc.lineAt(pos);
+  return { pos, line, before: line.text.slice(0, pos - line.from) };
+}
+
+function replaceRange(view: EditorView, from: number, to: number, insert: string) {
+  const parsed = parseSlashInsert(insert);
+  view.dispatch({
+    changes: { from, to, insert: parsed.insert },
+    selection: { anchor: from + parsed.anchor, head: from + parsed.head },
+    scrollIntoView: true,
+  });
+  view.focus();
+}
+
+function findSlashRange(view: EditorView): { from: number; to: number } | null {
+  const pos = view.state.selection.main.head;
+  const line = view.state.doc.lineAt(pos);
+  const before = line.text.slice(0, Math.max(0, pos - line.from));
+  const hit = /(?:^|\s)(\/[^\s]*)$/.exec(before);
+  if (hit) return { from: pos - hit[1].length, to: pos };
+  if (line.number > 1 && pos === line.from) {
+    const prev = view.state.doc.line(line.number - 1);
+    const hit2 = /(?:^|\s)(\/[^\s]*)$/.exec(prev.text);
+    if (hit2) return { from: prev.to - hit2[1].length, to: pos };
+  }
+  return null;
+}
+
+function wrapSelection(view: EditorView, before: string, after = before) {
+  const { from, to } = view.state.selection.main;
+  const selected = view.state.doc.sliceString(from, to);
+  const insert = `${before}${selected}${after}`;
+  view.dispatch({
+    changes: { from, to, insert },
+    selection: selected
+      ? { anchor: from + before.length, head: from + before.length + selected.length }
+      : { anchor: from + before.length },
+    scrollIntoView: true,
+  });
+  view.focus();
+}
+
+const MarkdownEditorBody = forwardRef<MarkdownEditorHandle, Props>(function MarkdownEditorBody(
   {
     initialMarkdown = "",
     placeholder = "输入正文，或按 / 插入块；[[ 笔记 或 笔记#标题…",
@@ -93,506 +150,500 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
   },
   ref,
 ) {
-  const navigate = useNavigate();
   const { message } = App.useApp();
+  const hostElRef = useRef<HTMLDivElement>(null);
+  const viewRef = useRef<EditorView | null>(null);
+  const onSaveRef = useRef(onSave);
+  const onDirtyRef = useRef(onDirtyChange);
+  const sourceIdRef = useRef(excludeSourceId);
+  onSaveRef.current = onSave;
+  onDirtyRef.current = onDirtyChange;
+  sourceIdRef.current = excludeSourceId;
+
+  const [toolbarOpen, setToolbarOpen] = useState(true);
+  const [viewMode, setViewMode] = useState<ViewMode>(readViewMode);
+  const [previewMd, setPreviewMd] = useState(initialMarkdown);
   const [slash, setSlash] = useState<{
     query: string;
     left: number;
-    top: number;
+    caretTop: number;
+    caretBottom: number;
   } | null>(null);
   const [slashIndex, setSlashIndex] = useState(0);
   const [wikiSuggest, setWikiSuggest] = useState<WikilinkSuggestState | null>(null);
-  const [toolbarOpen, setToolbarOpen] = useState(false);
-  /** Esc 关闭后，在未闭合 [[ 仍存在时禁止立刻再次弹出 */
-  const wikiDismissedRef = useRef(false);
-  const mod = useMemo(() => (isMac() ? "⌘" : "Ctrl"), []);
-  const onSaveRef = useCallback(() => onSave?.(), [onSave]);
   const enableWikilink = hasMark("wikilink");
-  /** 供 Esc 关闭后回焦；避免在 useEditor 之前引用 editor 造成 TDZ 白屏 */
-  const editorFocusRef = useRef<{ commands: { focus: (pos?: string) => boolean } } | null>(null);
+  const mod = useMemo(() => (isMac() ? "⌘" : "Ctrl"), []);
+  const scanMenusRef = useRef<(view: EditorView) => void>(() => undefined);
+  const setPreviewMdRef = useRef(setPreviewMd);
+  const slashRef = useRef(slash);
+  const slashIndexRef = useRef(slashIndex);
+  const slashQueryRef = useRef("");
+  const hostApiRef = useRef<() => MarkdownHost>(() => ({
+    replaceSlash() {},
+    insert() {},
+    wrap() {},
+    startWikilink() {},
+  }));
+  const runSlashRef = useRef<() => boolean>(() => false);
+  setPreviewMdRef.current = setPreviewMd;
+  slashRef.current = slash;
+  slashIndexRef.current = slashIndex;
 
-  const dismissWikiSuggest = useCallback(() => {
-    wikiDismissedRef.current = true;
-    setWikiSuggest(null);
-    window.requestAnimationFrame(() => {
-      try {
-        editorFocusRef.current?.commands.focus();
-      } catch {
-        /* 切换笔记时 editor 可能已销毁 */
+  const uploadImage = useCallback(
+    async (file: File) => {
+      const id = sourceIdRef.current;
+      if (id == null) {
+        message.warning("请先保存笔记再插入图片");
+        return null;
       }
-    });
-  }, []);
-
-  const openLinkRef = useRef<(target: string) => void>(() => {});
-  openLinkRef.current = (target: string) => {
-    void (async () => {
       try {
-        const href = await resolveWikilinkHref(target);
-        if (!href) {
-          message.warning(`断链：未找到「${target}」`);
-          return;
-        }
-        navigate(href);
-      } catch {
-        message.error("打开双链失败");
+        const res = await api.uploadVaultAsset(id, file);
+        return toEditorImageSrc(res.path);
+      } catch (err) {
+        message.error(formatError(err, "图片上传失败"));
+        return null;
       }
-    })();
-  };
-
-  const handleWikiSuggest = useCallback((state: WikilinkSuggestState | null) => {
-    if (!state?.active) {
-      wikiDismissedRef.current = false;
-      setWikiSuggest((prev) => (prev ? null : prev));
-      return;
-    }
-    if (wikiDismissedRef.current) return;
-    setWikiSuggest(state);
-  }, []);
-
-  const editor = useEditor({
-    extensions: [
-      StarterKit.configure({
-        heading: { levels: [1, 2, 3, 4] },
-        link: false,
-      }),
-      Underline,
-      Typography,
-      TaskList,
-      TaskItem.configure({ nested: true }),
-      Link.configure({
-        openOnClick: false,
-        autolink: true,
-        defaultProtocol: "https",
-      }),
-      Placeholder.configure({ placeholder }),
-      Markdown.configure({
-        html: false,
-        tightLists: true,
-        bulletListMarker: "-",
-        linkify: false,
-        breaks: true,
-        transformPastedText: true,
-        transformCopiedText: true,
-      }),
-      ...(enableWikilink
-        ? [
-            WikilinkExtension.configure({
-              onSuggest: handleWikiSuggest,
-              onOpenLink: (target) => openLinkRef.current(target),
-            }),
-          ]
-        : []),
-    ],
-    content: initialMarkdown || "",
-    editorProps: {
-      attributes: {
-        class: "tiptap",
-        spellcheck: "false",
-      },
-      handleClick: (_view, _pos, event) => {
-        if (event.button !== 0) return false;
-        const el = event.target as HTMLElement | null;
-        if (!el) return false;
-        // 双链芯片走 WikilinkExtension，不在这里处理
-        if (el.closest?.(".kk-wikilink, [data-wikilink-target], .wikilink")) return false;
-        const anchor = el.closest?.("a[href]") as HTMLAnchorElement | null;
-        if (!anchor?.href) return false;
-        const href = anchor.getAttribute("href") || anchor.href;
-        if (!href || href.startsWith("#")) return false;
-        event.preventDefault();
-        openInSystemBrowser(href);
-        return true;
-      },
-      handleKeyDown: (_view, event) => {
-        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
-          event.preventDefault();
-          void onSaveRef();
-          return true;
-        }
-        if ((event.ctrlKey || event.metaKey) && event.altKey && ["1", "2", "3"].includes(event.key)) {
-          event.preventDefault();
-          return false;
-        }
-        return false;
-      },
     },
-    onUpdate: ({ editor: ed }) => {
-      onDirtyChange?.(true);
-      const hit = readSlashQuery(ed);
-      if (!hit) {
-        setSlash(null);
+    [message],
+  );
+
+  useEffect(() => {
+    setSlashRuntime({ sourceId: excludeSourceId, uploadImage });
+  }, [excludeSourceId, uploadImage]);
+
+  const scanMenus = useCallback(
+    (view: EditorView) => {
+      const { pos, before } = lineBefore(view);
+      const slashHit = /(?:^|\s)\/([^\s]*)$/.exec(before);
+      if (slashHit) {
+        const query = slashHit[1] || "";
+        const coords = view.coordsAtPos(pos);
+        setWikiSuggest(null);
+        setSlash({
+          query,
+          left: coords?.left ?? 24,
+          caretTop: coords?.top ?? 80,
+          caretBottom: coords?.bottom ?? 80,
+        });
+        if (query !== slashQueryRef.current) setSlashIndex(0);
+        slashQueryRef.current = query;
         return;
       }
-      // 双链建议打开时不抢 slash 菜单
-      if (enableWikilink) {
-        const $from = ed.state.doc.resolve(ed.state.selection.from);
-        const textBefore = $from.parent.textBetween(0, $from.parentOffset, "\n", "\n");
-        if (/\[\[[^\]]*$/.test(textBefore)) {
-          setSlash(null);
+      slashQueryRef.current = "";
+      setSlash(null);
+      if (!enableWikilink) {
+        setWikiSuggest(null);
+        return;
+      }
+      const wikiHit = /\[\[([^\]\n]*)$/.exec(before);
+      if (!wikiHit) {
+        setWikiSuggest(null);
+        return;
+      }
+      const coords = view.coordsAtPos(pos);
+      setWikiSuggest({
+        active: true,
+        query: wikiHit[1] || "",
+        from: pos - wikiHit[0].length,
+        to: pos,
+        left: Math.min(coords?.left ?? 24, window.innerWidth - 320),
+        top: Math.min((coords?.bottom ?? 80) + 6, window.innerHeight - 280),
+      });
+    },
+    [enableWikilink],
+  );
+  scanMenusRef.current = scanMenus;
+
+  const applyViewMode = useCallback((mode: ViewMode) => {
+    setPreviewMd(viewRef.current?.state.doc.toString() || "");
+    setViewMode(mode);
+    try {
+      localStorage.setItem("kk-note-view-v2", mode);
+    } catch {
+      /* ignore */
+    }
+    if (mode !== "preview") {
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => viewRef.current?.requestMeasure());
+      });
+    }
+  }, []);
+
+  const hostApi = useCallback((): MarkdownHost => {
+    return {
+      replaceSlash(text: string) {
+        const view = viewRef.current;
+        if (!view) return;
+        const range = findSlashRange(view);
+        const pos = view.state.selection.main.head;
+        if (!range) {
+          replaceRange(view, pos, pos, text);
           return;
         }
-      }
-      const coords = ed.view.coordsAtPos(ed.state.selection.from);
-      setSlash({
-        query: hit.query,
-        left: Math.min(coords.left, window.innerWidth - 300),
-        top: Math.min(coords.bottom + 6, window.innerHeight - 300),
-      });
-      setSlashIndex(0);
-    },
-  });
+        replaceRange(view, range.from, range.to, text);
+      },
+      insert(text: string) {
+        const view = viewRef.current;
+        if (!view) return;
+        const pos = view.state.selection.main.head;
+        replaceRange(view, pos, pos, text);
+      },
+      wrap(before, after) {
+        const view = viewRef.current;
+        if (!view) return;
+        wrapSelection(view, before, after ?? before);
+      },
+      startWikilink() {
+        const view = viewRef.current;
+        if (!view) return;
+        const pos = view.state.selection.main.head;
+        replaceRange(view, pos, pos, "[[");
+        scanMenus(view);
+      },
+    };
+  }, [scanMenus]);
+  hostApiRef.current = hostApi;
+  runSlashRef.current = () => {
+    const s = slashRef.current;
+    if (!s) return false;
+    const items = listSlashCommands(s.query);
+    const item = items[slashIndexRef.current];
+    if (!item) return false;
+    slashRef.current = null;
+    slashQueryRef.current = "";
+    setSlash(null);
+    item.run(hostApiRef.current());
+    return true;
+  };
 
-  editorFocusRef.current = editor;
+  useEffect(() => {
+    const parent = hostElRef.current;
+    if (!parent) return;
+    let ready = false;
+    let previewTimer = 0;
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: rewriteMarkdownImagesForEditor(initialMarkdown || ""),
+        extensions: [
+          history(),
+          markdown({ base: markdownLanguage, addKeymap: false, completeHTMLTags: false }),
+          syntaxHighlighting(mdHighlight),
+          livePreview,
+          cmPlaceholder(placeholder),
+          Prec.highest(
+            keymap.of([
+              {
+                key: "Enter",
+                run: () => runSlashRef.current(),
+              },
+              {
+                key: "Tab",
+                run: () => runSlashRef.current(),
+              },
+              {
+                key: "ArrowDown",
+                run: () => {
+                  if (!slashRef.current) return false;
+                  const items = listSlashCommands(slashRef.current.query);
+                  setSlashIndex((i) => (items.length ? (i + 1) % items.length : 0));
+                  return true;
+                },
+              },
+              {
+                key: "ArrowUp",
+                run: () => {
+                  if (!slashRef.current) return false;
+                  const items = listSlashCommands(slashRef.current.query);
+                  setSlashIndex((i) => (items.length ? (i - 1 + items.length) % items.length : 0));
+                  return true;
+                },
+              },
+              {
+                key: "Escape",
+                run: () => {
+                  if (!slashRef.current) return false;
+                  slashRef.current = null;
+                  slashQueryRef.current = "";
+                  setSlash(null);
+                  return true;
+                },
+              },
+            ]),
+          ),
+          Prec.high(keymap.of(markdownKeymap)),
+          keymap.of([
+            {
+              key: "Mod-s",
+              run: () => {
+                void onSaveRef.current?.();
+                return true;
+              },
+            },
+            {
+              key: "Mod-b",
+              run: (v) => {
+                wrapSelection(v, "**");
+                return true;
+              },
+            },
+            {
+              key: "Mod-i",
+              run: (v) => {
+                wrapSelection(v, "*");
+                return true;
+              },
+            },
+            {
+              key: "Mod-k",
+              run: (v) => {
+                wrapSelection(v, "[", "](https://)");
+                return true;
+              },
+            },
+            indentWithTab,
+            ...historyKeymap,
+            ...defaultKeymap,
+          ]),
+          EditorView.lineWrapping,
+          EditorView.updateListener.of((u) => {
+            if (u.docChanged && ready) onDirtyRef.current?.(true);
+            if (u.docChanged || u.selectionSet) scanMenusRef.current(u.view);
+            if (u.docChanged) {
+              window.clearTimeout(previewTimer);
+              previewTimer = window.setTimeout(() => {
+                setPreviewMdRef.current(u.view.state.doc.toString());
+              }, 140);
+            }
+          }),
+          EditorView.theme({
+            "&": { height: "100%", fontSize: "16px", backgroundColor: "transparent" },
+            ".cm-scroller": {
+              fontFamily: 'ui-sans-serif, system-ui, "PingFang SC", "Microsoft YaHei", sans-serif',
+              lineHeight: "1.75",
+            },
+            ".cm-content": { padding: "28px 40px 96px", caretColor: "#0f172a", maxWidth: "46rem", margin: "0 auto" },
+            ".cm-gutters": { display: "none" },
+            "&.cm-focused": { outline: "none" },
+          }),
+        ],
+      }),
+    });
+    viewRef.current = view;
+    setPreviewMdRef.current(view.state.doc.toString());
+    const boot = window.requestAnimationFrame(() => {
+      ready = true;
+      if (initialHeading?.trim()) {
+        const needle = initialHeading.trim();
+        const doc = view.state.doc;
+        for (let i = 1; i <= doc.lines; i++) {
+          const line = doc.line(i);
+          const title = line.text.replace(/^#{1,6}\s+/, "").trim();
+          if (headingMatches(needle, title) || headingMatches(needle, line.text)) {
+            view.dispatch({ selection: { anchor: line.from }, scrollIntoView: true });
+            break;
+          }
+        }
+      }
+      view.focus();
+    });
+    return () => {
+      window.cancelAnimationFrame(boot);
+      window.clearTimeout(previewTimer);
+      view.destroy();
+      viewRef.current = null;
+    };
+    // parent remounts via key=note id
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useImperativeHandle(
     ref,
     () => ({
-      getMarkdown: () => {
-        if (!editor) return "";
-        const raw = (editor.storage as { markdown?: { getMarkdown: () => string } }).markdown
-          ?.getMarkdown?.();
-        return restoreWikilinkMarkers(raw || "");
-      },
-      focus: () => {
-        editor?.commands.focus("end");
-      },
+      getMarkdown: () =>
+        rewriteMarkdownImagesForSave(viewRef.current?.state.doc.toString() ?? initialMarkdown ?? ""),
+      focus: () => viewRef.current?.focus(),
       setMarkdown: (md: string) => {
-        editor?.commands.setContent(md || "");
+        const view = viewRef.current;
+        if (!view) return;
+        const next = rewriteMarkdownImagesForEditor(md || "");
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: next },
+        });
+        setPreviewMdRef.current(next);
       },
       insertWikilink: (label: string) => {
-        const text = `[[${(label || "笔记名").trim()}]]`;
-        editor?.chain().focus("end").insertContent(text).run();
+        const view = viewRef.current;
+        if (!view) return;
+        const pos = view.state.selection.main.head;
+        replaceRange(view, pos, pos, `[[${(label || "笔记名").trim()}]]`);
       },
       scrollToHeading: (heading: string) => {
-        if (!editor || !heading.trim()) return false;
-        try {
-          let foundPos: number | null = null;
-          editor.state.doc.descendants((node, pos) => {
-            if (foundPos != null) return false;
-            if (node.type.name === "heading" && headingMatches(heading, node.textContent || "")) {
-              foundPos = pos;
-              return false;
-            }
+        const view = viewRef.current;
+        if (!view || !heading.trim()) return false;
+        const doc = view.state.doc;
+        for (let i = 1; i <= doc.lines; i++) {
+          const line = doc.line(i);
+          const title = line.text.replace(/^#{1,6}\s+/, "").trim();
+          if (headingMatches(heading, title) || headingMatches(heading, line.text)) {
+            view.dispatch({ selection: { anchor: line.from }, scrollIntoView: true });
             return true;
-          });
-          if (foundPos == null) return false;
-          const max = editor.state.doc.content.size;
-          const sel = Math.min(foundPos + 1, Math.max(1, max));
-          editor.chain().focus().setTextSelection(sel).run();
-          const dom = editor.view.nodeDOM(foundPos);
-          if (dom instanceof HTMLElement) {
-            dom.scrollIntoView({ block: "start", behavior: "smooth" });
           }
-          return true;
-        } catch (err) {
-          console.warn("[markdown-editor] scrollToHeading", err);
-          return false;
         }
+        return false;
       },
     }),
-    [editor],
+    [initialMarkdown],
   );
 
   useEffect(() => {
-    if (!editor) return;
-    try {
-      editor.commands.setContent(initialMarkdown || "", { emitUpdate: false });
-    } catch (err) {
-      console.warn("[markdown-editor] setContent", err);
-      try {
-        editor.commands.setContent("", { emitUpdate: false });
-      } catch {
-        /* ignore */
-      }
-    }
-    const timer = window.setTimeout(() => {
-      try {
-        if (initialHeading?.trim()) {
-          let foundPos: number | null = null;
-          editor.state.doc.descendants((node, pos) => {
-            if (foundPos != null) return false;
-            if (
-              node.type.name === "heading" &&
-              headingMatches(initialHeading, node.textContent || "")
-            ) {
-              foundPos = pos;
-              return false;
-            }
-            return true;
-          });
-          if (foundPos != null) {
-            const max = editor.state.doc.content.size;
-            const sel = Math.min(foundPos + 1, Math.max(1, max));
-            editor.chain().focus().setTextSelection(sel).run();
-            const dom = editor.view.nodeDOM(foundPos);
-            if (dom instanceof HTMLElement) {
-              dom.scrollIntoView({ block: "start", behavior: "smooth" });
-            }
-            return;
-          }
-        }
-        editor.commands.focus("end");
-      } catch (err) {
-        console.warn("[markdown-editor] autofocus", err);
-      }
-    }, 40);
-    return () => window.clearTimeout(timer);
-  }, [editor, initialMarkdown, initialHeading]);
-
-  const closeSlash = useCallback(() => setSlash(null), []);
-
-  // 点击双链/slash 菜单外（编辑区空白等）→ 关闭菜单，焦点留在编辑器
-  useEffect(() => {
-    if (!wikiSuggest?.active && !slash) return;
-    const onPointerDown = (event: PointerEvent) => {
-      const el = event.target as HTMLElement | null;
-      if (!el) return;
-      if (el.closest(`.${styles.wikilinkMenu}`) || el.closest(`.${styles.slashMenu}`)) return;
-      if (wikiSuggest?.active) dismissWikiSuggest();
-      if (slash) closeSlash();
-    };
-    document.addEventListener("pointerdown", onPointerDown, true);
-    return () => document.removeEventListener("pointerdown", onPointerDown, true);
-  }, [wikiSuggest, slash, dismissWikiSuggest, closeSlash]);
-
-  useEffect(() => {
-    if (!editor) return;
+    if (!slash && !wikiSuggest?.active) return;
     const onKey = (event: KeyboardEvent) => {
-      const modKey = event.ctrlKey || event.metaKey;
-      if (modKey && event.altKey && ["1", "2", "3", "4"].includes(event.key)) {
-        event.preventDefault();
-        const level = Number(event.key) as 1 | 2 | 3 | 4;
-        editor.chain().focus().toggleHeading({ level }).run();
-        return;
-      }
-      if (modKey && event.altKey && event.key.toLowerCase() === "c") {
-        event.preventDefault();
-        editor.chain().focus().toggleCodeBlock().run();
-        return;
-      }
-      // 行内代码：Ctrl/Cmd + `
-      if (modKey && (event.key === "`" || event.code === "Backquote")) {
-        event.preventDefault();
-        editor.chain().focus().toggleCode().run();
-        return;
-      }
-      if (modKey && event.shiftKey && event.key.toLowerCase() === "x") {
-        event.preventDefault();
-        editor.chain().focus().toggleStrike().run();
-        return;
-      }
-      if (modKey && event.key.toLowerCase() === "u") {
-        event.preventDefault();
-        editor.chain().focus().toggleUnderline().run();
-        return;
-      }
-      if (modKey && event.shiftKey && event.key === "8") {
-        event.preventDefault();
-        editor.chain().focus().toggleBulletList().run();
-        return;
-      }
-      if (modKey && event.shiftKey && event.key === "7") {
-        event.preventDefault();
-        editor.chain().focus().toggleOrderedList().run();
-        return;
-      }
-      if (modKey && event.shiftKey && event.key === "9") {
-        event.preventDefault();
-        editor.chain().focus().toggleTaskList().run();
-        return;
-      }
-      if (modKey && event.shiftKey && event.key.toLowerCase() === "b") {
-        event.preventDefault();
-        editor.chain().focus().toggleBlockquote().run();
-        return;
-      }
-      if (modKey && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        const prev = editor.getAttributes("link").href as string | undefined;
-        const url = window.prompt("链接地址", prev || "https://");
-        if (url === null) return;
-        if (!url) {
-          editor.chain().focus().extendMarkRange("link").unsetLink().run();
-          return;
-        }
-        editor.chain().focus().extendMarkRange("link").setLink({ href: url }).run();
-        return;
-      }
-      if (event.key === "Escape" && wikiSuggest?.active) {
+      if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
-        dismissWikiSuggest();
+        slashRef.current = null;
+        slashQueryRef.current = "";
+        setSlash(null);
+        setWikiSuggest(null);
         return;
       }
-      if (event.key === "Escape" && slash) {
+      if (!slashRef.current) return;
+      if (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Enter" || event.key === "Tab") {
         event.preventDefault();
         event.stopPropagation();
-        closeSlash();
-        editor.commands.focus();
-        return;
       }
-      if (wikiSuggest?.active) return;
-      if (!slash) return;
-      const items = getFilteredSlashItems(slash.query);
+      const items = listSlashCommands(slashRef.current.query);
       if (event.key === "ArrowDown") {
-        event.preventDefault();
         setSlashIndex((i) => (items.length ? (i + 1) % items.length : 0));
-        return;
-      }
-      if (event.key === "ArrowUp") {
-        event.preventDefault();
+      } else if (event.key === "ArrowUp") {
         setSlashIndex((i) => (items.length ? (i - 1 + items.length) % items.length : 0));
-        return;
-      }
-      if (event.key === "Enter" && items.length) {
-        event.preventDefault();
-        event.stopPropagation();
-        items[slashIndex]?.run(editor);
-        closeSlash();
+      } else if ((event.key === "Enter" || event.key === "Tab") && items.length) {
+        runSlashRef.current();
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [closeSlash, dismissWikiSuggest, editor, slash, slashIndex, wikiSuggest]);
+  }, [slash, wikiSuggest]);
 
-  if (!editor) return null;
+  const btn = (tip: string, onClick: () => void, icon: ReactNode) => (
+    <Tooltip title={tip}>
+      <Button type="text" size="small" className={styles.toolbarBtn} icon={icon} onClick={onClick} />
+    </Tooltip>
+  );
 
-  const promptLink = () => {
-    const prev = editor.getAttributes("link").href as string | undefined;
-    const url = window.prompt("链接地址", prev || "https://");
-    if (url === null) return;
-    if (!url) {
-      editor.chain().focus().extendMarkRange("link").unsetLink().run();
-      return;
-    }
-    editor.chain().focus().extendMarkRange("link").setLink({ href: url }).run();
+  const withView = (fn: (view: EditorView) => void) => {
+    const view = viewRef.current;
+    if (view) fn(view);
   };
 
-  const btn = (
-    tip: string,
-    active: boolean,
-    onClick: () => void,
-    icon: ReactNode,
-    label?: string,
-    disabled?: boolean,
-  ) => (
+  const showSource = viewMode !== "preview";
+  const showPreview = viewMode !== "source";
+  const previewEmpty = !previewMd.trim();
+
+  const viewBtn = (mode: ViewMode, tip: string, icon: ReactNode) => (
     <Tooltip title={tip}>
       <Button
         type="text"
         size="small"
-        className={`${styles.toolbarBtn} ${active ? styles.toolbarBtnActive : ""}`}
+        className={`${styles.toolbarBtn}${viewMode === mode ? ` ${styles.toolbarBtnActive}` : ""}`}
         icon={icon}
-        disabled={disabled}
-        onClick={onClick}
-      >
-        {label}
-      </Button>
+        onClick={() => applyViewMode(mode)}
+      />
     </Tooltip>
-  );
-
-  const headingLevel = ([1, 2, 3, 4] as const).find((l) => editor.isActive("heading", { level: l }));
-
-  const styleSelect = (
-    <Dropdown
-      menu={{
-        items: [
-          { key: "p", label: "正文" },
-          ...([1, 2, 3, 4] as const).map((l) => ({ key: `h${l}`, label: `标题 ${l}` })),
-        ],
-        selectedKeys: [headingLevel ? `h${headingLevel}` : "p"],
-        onClick: ({ key, domEvent }) => {
-          domEvent.preventDefault();
-          if (key === "p") {
-            editor.chain().focus().setParagraph().run();
-          } else {
-            editor.chain().focus().toggleHeading({ level: Number(key.slice(1)) as 1 | 2 | 3 | 4 }).run();
-          }
-        },
-      }}
-      trigger={["click"]}
-    >
-      <Button type="text" size="small" className={styles.styleSelect}>
-        {headingLevel ? `标题 ${headingLevel}` : "正文"}
-        <DownOutlined className={styles.styleSelectArrow} />
-      </Button>
-    </Dropdown>
   );
 
   return (
     <div className={styles.root}>
-      <Tooltip title={toolbarOpen ? "收起格式工具栏" : "格式工具栏"}>
-        <Button
-          type="text"
-          size="small"
-          className={`${styles.toolbarToggle}${toolbarOpen ? ` ${styles.toolbarToggleActive}` : ""}`}
-          icon={<FontSizeOutlined />}
-          onClick={() => setToolbarOpen((v) => !v)}
-        />
-      </Tooltip>
-      <div className={`${styles.toolbarDock}${toolbarOpen ? ` ${styles.toolbarDockOpen}` : ""}`}>
-        {btn("撤销", false, () => editor.chain().focus().undo().run(), <UndoOutlined />, undefined, !editor.can().undo())}
-        {btn("重做", false, () => editor.chain().focus().redo().run(), <RedoOutlined />, undefined, !editor.can().redo())}
-        <span className={styles.sep} />
-        {styleSelect}
-        <span className={styles.sep} />
-        {btn(`${mod}+B 加粗`, editor.isActive("bold"), () => editor.chain().focus().toggleBold().run(), <BoldOutlined />)}
-        {btn(`${mod}+I 斜体`, editor.isActive("italic"), () => editor.chain().focus().toggleItalic().run(), <ItalicOutlined />)}
-        {btn("下划线", editor.isActive("underline"), () => editor.chain().focus().toggleUnderline().run(), <UnderlineOutlined />)}
-        {btn("删除线", editor.isActive("strike"), () => editor.chain().focus().toggleStrike().run(), <StrikethroughOutlined />)}
-        <span className={styles.sep} />
-        {btn("无序列表", editor.isActive("bulletList"), () => editor.chain().focus().toggleBulletList().run(), <UnorderedListOutlined />)}
-        {btn("有序列表", editor.isActive("orderedList"), () => editor.chain().focus().toggleOrderedList().run(), <OrderedListOutlined />)}
-        {btn("任务列表", editor.isActive("taskList"), () => editor.chain().focus().toggleTaskList().run(), <CheckSquareOutlined />)}
-        <span className={styles.sep} />
-        {btn("引用", editor.isActive("blockquote"), () => editor.chain().focus().toggleBlockquote().run(), <QuoteIcon />)}
-        {btn("代码块", editor.isActive("codeBlock"), () => editor.chain().focus().toggleCodeBlock().run(), <CodeOutlined />)}
-        {btn(`${mod}+K 链接`, editor.isActive("link"), promptLink, <LinkOutlined />)}
-        {btn("分割线", false, () => editor.chain().focus().setHorizontalRule().run(), <MinusOutlined />)}
+      <div className={styles.chrome}>
+        <div className={`${styles.toolbarDock}${toolbarOpen ? ` ${styles.toolbarDockOpen}` : ""}`}>
+          {btn(`${mod}+B 加粗`, () => withView((v) => wrapSelection(v, "**")), <BoldOutlined />)}
+          {btn(`${mod}+I 斜体`, () => withView((v) => wrapSelection(v, "*")), <ItalicOutlined />)}
+          {btn("删除线", () => withView((v) => wrapSelection(v, "~~")), <StrikethroughOutlined />)}
+          {btn("行内代码", () => withView((v) => wrapSelection(v, "`")), <CodeOutlined />)}
+          <span className={styles.sep} />
+          {btn("无序列表", () => withView((v) => wrapSelection(v, "- ", "")), <UnorderedListOutlined />)}
+          {btn("有序列表", () => withView((v) => wrapSelection(v, "1. ", "")), <OrderedListOutlined />)}
+          {btn("任务", () => withView((v) => wrapSelection(v, "- [ ] ", "")), <CheckSquareOutlined />)}
+          <span className={styles.sep} />
+          {btn(`${mod}+K 链接`, () => withView((v) => wrapSelection(v, "[", "](https://)")), <LinkOutlined />)}
+          {btn("分割线", () => hostApi().insert("\n---\n"), <MinusOutlined />)}
+          {btn("表格", () => hostApi().insert(`\n| 列 1 | 列 2 | 列 3 |\n| --- | --- | --- |\n|  |  |  |\n`), <TableOutlined />)}
+          {btn("图片", () => {
+            const input = document.createElement("input");
+            input.type = "file";
+            input.accept = "image/png,image/jpeg,image/gif,image/webp";
+            input.onchange = () => {
+              const file = input.files?.[0];
+              if (!file) return;
+              void uploadImage(file).then((src) => {
+                if (src) hostApi().insert(`![图片](${src})`);
+              });
+            };
+            input.click();
+          }, <PictureOutlined />)}
+        </div>
+        <div className={styles.chromeRight}>
+          <div className={styles.viewSwitch} role="group" aria-label="视图">
+            {viewBtn("source", "编辑（边写边排版）", <EditOutlined />)}
+            {viewBtn("split", "源码 | 预览", <ColumnWidthOutlined />)}
+            {viewBtn("preview", "阅读", <EyeOutlined />)}
+          </div>
+          <Tooltip title={toolbarOpen ? "收起格式工具栏" : "格式工具栏"}>
+            <Button
+              type="text"
+              size="small"
+              className={`${styles.toolbarToggle}${toolbarOpen ? ` ${styles.toolbarToggleActive}` : ""}`}
+              icon={<FontSizeOutlined />}
+              onClick={() => setToolbarOpen((v) => !v)}
+            />
+          </Tooltip>
+        </div>
       </div>
 
-      <BubbleMenu
-        editor={editor}
-        options={{ placement: "top", offset: 8, flip: true }}
-        shouldShow={({ editor: e, state }) =>
-          e.isEditable && !state.selection.empty && !e.isActive("codeBlock")
-        }
-      >
-        <div className={styles.bubble}>
-          {btn(`${mod}+B 加粗`, editor.isActive("bold"), () => editor.chain().focus().toggleBold().run(), <BoldOutlined />)}
-          {btn(`${mod}+I 斜体`, editor.isActive("italic"), () => editor.chain().focus().toggleItalic().run(), <ItalicOutlined />)}
-          {btn("下划线", editor.isActive("underline"), () => editor.chain().focus().toggleUnderline().run(), <UnderlineOutlined />)}
-          {btn("删除线", editor.isActive("strike"), () => editor.chain().focus().toggleStrike().run(), <StrikethroughOutlined />)}
-          {btn(`${mod}+\` 行内代码`, editor.isActive("code"), () => editor.chain().focus().toggleCode().run(), <CodeOutlined />)}
-          {btn(`${mod}+K 链接`, editor.isActive("link"), promptLink, <LinkOutlined />)}
-          <span className={styles.sep} />
-          {btn(`${mod}+Alt+1`, editor.isActive("heading", { level: 1 }), () => editor.chain().focus().toggleHeading({ level: 1 }).run(), null, "H1")}
-          {btn(`${mod}+Alt+2`, editor.isActive("heading", { level: 2 }), () => editor.chain().focus().toggleHeading({ level: 2 }).run(), null, "H2")}
-          {btn(`${mod}+Alt+3`, editor.isActive("heading", { level: 3 }), () => editor.chain().focus().toggleHeading({ level: 3 }).run(), null, "H3")}
-          {btn("引用", editor.isActive("blockquote"), () => editor.chain().focus().toggleBlockquote().run(), <QuoteIcon />)}
+      <div className={`${styles.editorWrap} ${styles[`mode_${viewMode}`]}`}>
+        <div className={styles.sourcePane} data-visible={showSource ? "true" : "false"}>
+          {viewMode === "split" ? <div className={styles.paneLabel}>编辑</div> : null}
+          <div ref={hostElRef} className={styles.cmHost} data-placeholder={placeholder} />
         </div>
-      </BubbleMenu>
-
-      <div className={styles.editorWrap}>
-        <div className={styles.editor}>
-          <EditorContent editor={editor} />
+        <div className={styles.previewPane} data-visible={showPreview ? "true" : "false"}>
+          {viewMode === "split" ? <div className={styles.paneLabel}>预览</div> : null}
+          <div className={styles.previewBody}>
+            {previewEmpty ? (
+              <p className={styles.previewEmpty}>
+                {viewMode === "preview" ? "这篇笔记还是空的" : "在左侧输入 Markdown，这里会实时渲染"}
+              </p>
+            ) : (
+              <MarkdownView content={previewMd} className={styles.previewMd} />
+            )}
+          </div>
         </div>
-        {slash && !wikiSuggest ? (
+        {slash && !wikiSuggest?.active && showSource ? (
           <SlashCommandMenu
-            editor={editor}
             query={slash.query}
             left={slash.left}
-            top={slash.top}
+            caretTop={slash.caretTop}
+            caretBottom={slash.caretBottom}
             selectedIndex={slashIndex}
             onSelectedIndexChange={setSlashIndex}
-            onClose={closeSlash}
+            onRun={(item: SlashCommandItem) => {
+              slashRef.current = null;
+              slashQueryRef.current = "";
+              item.run(hostApi());
+            }}
+            onClose={() => setSlash(null)}
           />
         ) : null}
-        {wikiSuggest?.active ? (
+        {wikiSuggest?.active && showSource ? (
           <WikilinkSuggest
-            editor={editor}
             state={wikiSuggest}
             excludeSourceId={excludeSourceId}
-            onClose={dismissWikiSuggest}
+            onClose={() => setWikiSuggest(null)}
+            onPick={(label) => {
+              const view = viewRef.current;
+              if (!view) return;
+              replaceRange(view, wikiSuggest.from, wikiSuggest.to, `[[${label}]]`);
+            }}
           />
         ) : null}
       </div>
@@ -601,8 +652,16 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function M
         <span className={dirty ? styles.saveStateDirty : undefined}>
           {dirty ? (saving ? "保存中…" : "未保存") : "已保存"}
         </span>
-        <span className={styles.footerHint}>{mod}+S 保存 · `/` 插入 · `[[` 笔记 或 笔记#标题</span>
+        <span className={styles.footerHint}>{mod}+S 保存 · `/` 插入 · `[[` 笔记 · 回车延续列表</span>
       </div>
     </div>
+  );
+});
+
+export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function MarkdownEditor(props, ref) {
+  return (
+    <EditorErrorBoundary>
+      <MarkdownEditorBody {...props} ref={ref} />
+    </EditorErrorBoundary>
   );
 });

@@ -100,7 +100,7 @@ function DeleteConfirmBody({ inVault }: { inVault?: boolean }) {
         {inVault ? (
           <>
             <li>知识库中的条目与检索切片</li>
-            <li>笔记库中的文件（.md / .lake），侧栏会同步消失</li>
+            <li>笔记库中的文件（.md），侧栏会同步消失</li>
             <li>喂养来源记录与本地 uploads 缓存</li>
           </>
         ) : (

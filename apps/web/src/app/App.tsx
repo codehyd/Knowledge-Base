@@ -3,7 +3,7 @@ import { Route, Routes } from "react-router-dom";
 import { AppLayout } from "@/shared/ui/AppLayout";
 
 /**
- * 路由懒加载：避免首屏打进 force-graph / 语雀编辑器等重模块，
+ * 路由懒加载：避免首屏打进 force-graph 等重模块，
  * 否则 boot-splash「正在进入空库…」会卡很久。
  */
 const HomePage = lazy(() =>

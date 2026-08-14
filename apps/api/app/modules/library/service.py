@@ -362,12 +362,12 @@ class LibraryService:
             if (row.type or "") == "note":
                 try:
                     from app.modules.vault.paths import resolve_in_vault
-                    from app.modules.vault.service import _lake_source_path
+                    from app.modules.vault.service import unlink_companion_lake
 
                     vpath = resolve_in_vault(vault_rel)
                     if vpath.is_file():
                         vpath.unlink(missing_ok=True)
-                    _lake_source_path(vpath).unlink(missing_ok=True)
+                    unlink_companion_lake(vpath)
                 except Exception:
                     pass
         remove_source_from_library(sid)

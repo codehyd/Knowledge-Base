@@ -13,6 +13,7 @@ export const WIKILINK_EXTENSION: EditorExtensionManifest = {
         title: "双链笔记",
         description: "搜索库内笔记并插入 [[名称]]",
         keywords: ["wiki", "wikilink", "双链", "笔记", "obsidian", "[[", "]]"],
+        group: "常用",
         action: "wikilink-suggest",
       },
     ],

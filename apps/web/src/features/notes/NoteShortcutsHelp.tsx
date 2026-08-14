@@ -8,27 +8,24 @@ type Platform = "win" | "mac";
 type Props = {
   open: boolean;
   onClose: () => void;
-  /** 当前是否语雀模式，用于高亮对应分区 */
-  lakeMode?: boolean;
-  /** 打开时默认选中的平台（本机） */
   isMac?: boolean;
 };
 
 function rows(mod: string, alt: string, shift: string): { title: string; items: ShortcutRow[]; hint?: string }[] {
   return [
     {
-      title: "通用（Markdown / 语雀）",
+      title: "通用",
       items: [
         { keys: `${mod}+S`, desc: "保存笔记（并尝试入库）" },
         { keys: `${mod}+${shift}+L`, desc: "打开双链面板，插入 [[笔记]] 或 [[笔记#标题]]" },
-        { keys: "Esc", desc: "关闭双链/命令菜单、对话框；语雀全屏时退出全屏" },
+        { keys: "Esc", desc: "关闭双链/命令菜单、对话框" },
       ],
     },
     {
-      title: "Markdown 模式",
-      hint: "关闭顶部「语雀」开关时生效",
+      title: "编辑",
+      hint: "输入 / 可插入标题、表格、高亮块、公式、流程图等",
       items: [
-        { keys: "/", desc: "打开插入命令菜单（标题、列表、任务等）" },
+        { keys: "/", desc: "打开插入命令菜单" },
         { keys: "[[", desc: "双链补全；输入 笔记# 可选多级标题" },
         { keys: "Esc", desc: "关闭双链补全或 / 命令菜单，焦点回到正文" },
         { keys: `${mod}+B`, desc: "加粗" },
@@ -46,19 +43,6 @@ function rows(mod: string, alt: string, shift: string): { title: string; items: 
         { keys: `${mod}+Z / ${mod}+${shift}+Z`, desc: "撤销 / 重做" },
       ],
     },
-    {
-      title: "语雀模式",
-      hint: "打开顶部「语雀」开关时生效（实验）",
-      items: [
-        { keys: `${mod}+S`, desc: "保存（同时写 .md 与 .lake）" },
-        { keys: `${mod}+${shift}+L`, desc: "插入双链（写入正文）" },
-        { keys: "[[（文末）", desc: "在正文末尾输入 [[ 可弹出笔记补全" },
-        { keys: "顶部「插入双链」", desc: "按钮插入双链到正文" },
-        { keys: "点击链接", desc: "在系统浏览器打开（可写 www.baidu.com 或完整 https://）" },
-        { keys: "Esc", desc: "退出语雀全屏，回到应用界面" },
-        { keys: "语雀工具栏", desc: "标题、列表、表格等排版由语雀编辑器提供" },
-      ],
-    },
   ];
 }
 
@@ -69,7 +53,7 @@ function platformLabels(platform: Platform) {
   return { mod: "Ctrl", alt: "Alt", shift: "Shift" };
 }
 
-export function NoteShortcutsHelp({ open, onClose, lakeMode = false, isMac = false }: Props) {
+export function NoteShortcutsHelp({ open, onClose, isMac = false }: Props) {
   const [platform, setPlatform] = useState<Platform>(isMac ? "mac" : "win");
 
   useEffect(() => {
@@ -110,8 +94,7 @@ export function NoteShortcutsHelp({ open, onClose, lakeMode = false, isMac = fal
       <div className={styles.shortcutsBody}>
         <div className={styles.shortcutsToolbar}>
           <p className={styles.shortcutsLead}>
-            当前为{lakeMode ? "语雀" : "Markdown"}模式
-            {platform === "mac" ? " · 显示 Mac 键位" : " · 显示 Windows 键位"}
+            {platform === "mac" ? "显示 Mac 键位" : "显示 Windows 键位"}
           </p>
           <Segmented
             size="small"
@@ -125,15 +108,7 @@ export function NoteShortcutsHelp({ open, onClose, lakeMode = false, isMac = fal
         </div>
         <div className={styles.shortcutsScroll}>
           {sections.map((sec) => (
-            <section
-              key={sec.title}
-              className={`${styles.shortcutsSection}${
-                (lakeMode && sec.title.startsWith("语雀")) ||
-                (!lakeMode && sec.title.startsWith("Markdown"))
-                  ? ` ${styles.shortcutsSectionActive}`
-                  : ""
-              }`}
-            >
+            <section key={sec.title} className={`${styles.shortcutsSection} ${styles.shortcutsSectionActive}`}>
               <h3 className={styles.shortcutsSectionTitle}>{sec.title}</h3>
               {sec.hint ? <p className={styles.shortcutsHint}>{sec.hint}</p> : null}
               <table className={styles.shortcutsTable}>

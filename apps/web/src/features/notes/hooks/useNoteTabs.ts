@@ -102,7 +102,6 @@ export function useNoteTabs({
             parent: selectedFolder,
             title: "未命名笔记",
           });
-          await refreshTree();
           setParams({ id: String(res.source_id) }, { replace: true });
           store.flushActiveDraft();
           store.setTabs((prev) => {
@@ -110,7 +109,7 @@ export function useNoteTabs({
             return [...prev, tabFromNote(res)];
           });
           store.setActiveId(res.source_id);
-          store.setContentKey((k) => k + 1);
+          void refreshTree();
         } catch (err) {
           newHandledRef.current = false;
           message.error(formatError(err));
@@ -127,7 +126,6 @@ export function useNoteTabs({
             if (num !== current.activeId) {
               current.flushActiveDraft();
               current.setActiveId(num);
-              current.setContentKey((k) => k + 1);
             }
           } else if (num !== current.activeId) {
             await openNote(num);

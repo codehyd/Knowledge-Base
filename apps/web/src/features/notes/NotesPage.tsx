@@ -30,10 +30,9 @@ export function NotesPage() {
 
   const editor = useNoteEditor({ message });
 
-  // 同笔记切换标题锚点时不重挂载编辑器，需主动滚到标题
   const headingParam = params.get("heading");
   useEffect(() => {
-    if (!headingParam || editor.lakeMode) return;
+    if (!headingParam) return;
     const timer = window.setTimeout(() => {
       try {
         editor.editorRef.current?.scrollToHeading(headingParam);
@@ -42,7 +41,7 @@ export function NotesPage() {
       }
     }, 80);
     return () => window.clearTimeout(timer);
-  }, [headingParam, editor.lakeMode, editor.editorRef, tabsHook.activeId, tabsHook.contentKey]);
+  }, [headingParam, editor.editorRef, tabsHook.activeId, tabsHook.contentKey]);
 
   const activeInTree =
     tabsHook.activeId != null ? findNote(vault.nodes, tabsHook.activeId) : null;
@@ -98,12 +97,8 @@ export function NotesPage() {
     if (!tabsHook.unsavedConfirm) return;
     const action = tabsHook.unsavedConfirm;
     tabsHook.setUnsavedConfirm(null);
-    if (action.type === "switch") {
-      editor.applyLakeMode(action.next);
-      return;
-    }
     tabsHook.removeTab(action.sourceId);
-  }, [editor, tabsHook]);
+  }, [tabsHook]);
 
   const renderTabBar = useCallback(
     (keyPrefix = "") => (
@@ -151,18 +146,12 @@ export function NotesPage() {
       if (vault.deleteConfirm != null && !vault.deleting) {
         event.preventDefault();
         vault.setDeleteConfirm(null);
-        return;
-      }
-      if (editor.lakeMode && editor.lakeFocus) {
-        event.preventDefault();
-        editor.setLakeFocusRemembered(false);
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [
     ctxMenu,
-    editor,
     tabsHook.unsavedConfirm,
     tabsHook.setUnsavedConfirm,
     vault.deleteConfirm,
@@ -200,18 +189,12 @@ export function NotesPage() {
           dirty={editor.dirty}
           saving={editor.saving}
           loadingNote={tabsHook.loadingNote}
-          lakeMode={editor.lakeMode}
-          lakeFocus={editor.lakeFocus}
-          mdBooting={editor.mdBooting}
           contentKey={tabsHook.contentKey}
           activeInTree={activeInTree}
           editorRef={editor.editorRef}
-          lakeRef={editor.lakeRef}
           renderTabBar={renderTabBar}
           onCreateNote={() => void vault.onCreateNote()}
           onSetTitle={tabsHook.setActiveTitle}
-          onToggleLakeMode={editor.onToggleLakeMode}
-          onSetLakeFocus={editor.setLakeFocusRemembered}
           onDeleteNote={vault.onDeleteNote}
           onSave={editor.save}
           onDirtyChange={editor.markActiveDirty}
@@ -286,9 +269,7 @@ export function NotesPage() {
           </>
         }
       >
-        {tabsHook.unsavedConfirm?.type === "switch"
-          ? "切换编辑器将丢失未保存内容，是否继续？"
-          : "关闭标签将丢失未保存内容，是否继续？"}
+        关闭标签将丢失未保存内容，是否继续？
       </ConfirmDialog>
 
       <ConfirmDialog
@@ -324,12 +305,12 @@ export function NotesPage() {
         <ul className={confirmDialogStyles.confirmPoints}>
           {vault.deleteConfirm?.orphan ? (
             <>
-              <li>笔记库中的残留文件（.md / .lake）</li>
+              <li>笔记库中的残留文件（.md）</li>
               <li>不会再出现在侧栏；知识库若仍有条目请另行清理</li>
             </>
           ) : (
             <>
-              <li>笔记库中的文件（.md 与语雀 .lake）</li>
+              <li>笔记库中的 Markdown 文件与内嵌图片</li>
               <li>知识库中已入库的对应条目与检索切片</li>
               <li>喂养来源记录与本地 uploads 缓存</li>
             </>

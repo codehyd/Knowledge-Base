@@ -42,6 +42,8 @@ _REPO_ROOT = _resolve_repo_root()
 
 # 资源根下的笔记分类文件夹名（与 library list 的「笔记库」标签一致）
 VAULT_CATEGORY_DIR = "笔记库"
+# 笔记内嵌图片：data/library/笔记库/_assets/{source_id}/
+VAULT_ASSETS_DIR = "_assets"
 _migrated = False
 
 

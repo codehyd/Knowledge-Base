@@ -1,7 +1,7 @@
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from sqlalchemy import inspect, text
+from sqlalchemy import event, inspect, text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -48,7 +48,22 @@ def configure_engine(url: str) -> AsyncEngine:
         from sqlalchemy.pool import NullPool
 
         kwargs["poolclass"] = NullPool
+        # 避免后台 embed 占锁时读笔记一直排队
+        kwargs["connect_args"] = {"timeout": 30}
     engine = create_async_engine(url, **kwargs)
+    if url.startswith("sqlite"):
+
+        @event.listens_for(engine.sync_engine, "connect")
+        def _sqlite_pragmas(dbapi_conn, _record) -> None:  # noqa: ANN001
+            try:
+                cursor = dbapi_conn.cursor()
+                cursor.execute("PRAGMA journal_mode=WAL")
+                cursor.execute("PRAGMA busy_timeout=8000")
+                cursor.execute("PRAGMA synchronous=NORMAL")
+                cursor.close()
+            except Exception:
+                pass
+
     SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     return engine
 

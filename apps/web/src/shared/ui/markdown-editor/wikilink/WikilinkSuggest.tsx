@@ -1,15 +1,22 @@
-import type { Editor } from "@tiptap/react";
 import { NoteLinkPicker } from "@/shared/ui/note-link";
-import type { WikilinkSuggestState } from "./WikilinkExtension";
+
+export type WikilinkSuggestState = {
+  active: boolean;
+  query: string;
+  from: number;
+  to: number;
+  left: number;
+  top: number;
+};
 
 type Props = {
-  editor: Editor;
   state: WikilinkSuggestState;
   excludeSourceId?: number | null;
   onClose: () => void;
+  onPick: (label: string) => void;
 };
 
-export function WikilinkSuggest({ editor, state, excludeSourceId = null, onClose }: Props) {
+export function WikilinkSuggest({ state, excludeSourceId = null, onClose, onPick }: Props) {
   return (
     <NoteLinkPicker
       open={state.active}
@@ -19,20 +26,9 @@ export function WikilinkSuggest({ editor, state, excludeSourceId = null, onClose
       excludeSourceId={excludeSourceId}
       onClose={onClose}
       onPick={(label) => {
-        const text = `[[${label}]]`;
-        editor
-          .chain()
-          .focus()
-          .deleteRange({ from: state.from, to: state.to })
-          .insertContent(text)
-          .run();
+        onPick(label);
         onClose();
       }}
     />
   );
-}
-
-/** 从 slash / 外部打开：在光标处插入 [[ 并唤起建议（由插件 view 接管） */
-export function startWikilinkSuggest(editor: Editor) {
-  editor.chain().focus().insertContent("[[").run();
 }

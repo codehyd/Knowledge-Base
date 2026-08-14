@@ -7,7 +7,6 @@ export type NoteTab = {
   note: VaultNote;
   draftTitle: string;
   draftContent: string;
-  draftLake: string | null;
   dirty: boolean;
 };
 
@@ -41,7 +40,6 @@ export function tabFromNote(res: VaultNote): NoteTab {
     note: res,
     draftTitle: res.title || "",
     draftContent: res.content ?? "",
-    draftLake: res.source_lake ?? null,
     dirty: false,
   };
 }

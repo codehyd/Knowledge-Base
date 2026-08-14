@@ -1,9 +1,7 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  CompressOutlined,
   DeleteOutlined,
-  ExpandOutlined,
   FileAddOutlined,
   FileTextOutlined,
   LinkOutlined,
@@ -12,7 +10,6 @@ import {
 import { Button, Tooltip } from "antd";
 import type { VaultNode, VaultNote } from "@/shared/api/client";
 import { MarkdownEditor, type MarkdownEditorHandle } from "@/shared/ui/markdown-editor";
-import type { LakeEditorHandle } from "@/shared/ui/lake-editor";
 import {
   NoteLinkPicker,
   isNoteLinkHotkey,
@@ -22,12 +19,27 @@ import type { NoteTab } from "./types";
 import { NoteShortcutsHelp } from "./NoteShortcutsHelp";
 import styles from "./NotesPage.module.css";
 
-const LakeEditor = lazy(() =>
-  import("@/shared/ui/lake-editor").then((m) => ({ default: m.LakeEditor })),
-);
-
 function isMac() {
   return typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+}
+
+function NoteBootOverlay({ visible, title }: { visible: boolean; title?: string }) {
+  return (
+    <div
+      className={`${styles.bootLoading}${visible ? "" : ` ${styles.bootLoadingHidden}`}`}
+      aria-hidden={!visible}
+      aria-busy={visible}
+    >
+      <div className={styles.bootCard}>
+        <div className={styles.bootKicker}>{title?.trim() || "笔记"}</div>
+        <div className={styles.bootTitle}>正在打开…</div>
+        <div className={styles.bootTrack}>
+          <div className={styles.bootBar} />
+        </div>
+        <div className={styles.bootHint}>正在拉取笔记内容</div>
+      </div>
+    </div>
+  );
 }
 
 export type NoteEditorPaneProps = {
@@ -39,18 +51,12 @@ export type NoteEditorPaneProps = {
   dirty: boolean;
   saving: boolean;
   loadingNote: boolean;
-  lakeMode: boolean;
-  lakeFocus: boolean;
-  mdBooting: boolean;
   contentKey: number;
   activeInTree: VaultNode | null;
   editorRef: React.RefObject<MarkdownEditorHandle | null>;
-  lakeRef: React.RefObject<LakeEditorHandle | null>;
   renderTabBar: (keyPrefix?: string) => React.ReactNode;
   onCreateNote: () => void;
   onSetTitle: (title: string) => void;
-  onToggleLakeMode: (next: boolean) => void;
-  onSetLakeFocus: (next: boolean) => void;
   onDeleteNote: (sourceId: number, title: string) => void;
   onSave: () => void;
   onDirtyChange: (dirty: boolean) => void;
@@ -67,18 +73,12 @@ export function NoteEditorPane({
   dirty,
   saving,
   loadingNote,
-  lakeMode,
-  lakeFocus,
-  mdBooting,
   contentKey,
   activeInTree,
   editorRef,
-  lakeRef,
   renderTabBar,
   onCreateNote,
   onSetTitle,
-  onToggleLakeMode,
-  onSetLakeFocus,
   onDeleteNote,
   onSave,
   onDirtyChange,
@@ -87,33 +87,35 @@ export function NoteEditorPane({
   const navigate = useNavigate();
   const [linkPickerOpen, setLinkPickerOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [slowFetch, setSlowFetch] = useState(false);
   const hotkeyLabel = noteLinkHotkeyLabel(isMac());
   const mac = isMac();
 
+  useEffect(() => {
+    if (!loadingNote) {
+      setSlowFetch(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setSlowFetch(true), 180);
+    return () => window.clearTimeout(timer);
+  }, [loadingNote]);
+
   const insertNoteLink = useCallback(
     (label: string) => {
-      const text = `[[${label}]]`;
-      if (lakeMode) {
-        lakeRef.current?.insertText(text);
-        onDirtyChange(true);
-        lakeRef.current?.focus();
-      } else {
-        editorRef.current?.insertWikilink(label);
-        onDirtyChange(true);
-        editorRef.current?.focus();
-      }
+      editorRef.current?.insertWikilink(label);
+      onDirtyChange(true);
+      editorRef.current?.focus();
       setLinkPickerOpen(false);
     },
-    [editorRef, lakeMode, lakeRef, onDirtyChange],
+    [editorRef, onDirtyChange],
   );
 
   const closeLinkPicker = useCallback(() => {
     setLinkPickerOpen(false);
     window.requestAnimationFrame(() => {
-      if (lakeMode) lakeRef.current?.focus();
-      else editorRef.current?.focus();
+      editorRef.current?.focus();
     });
-  }, [editorRef, lakeMode, lakeRef]);
+  }, [editorRef]);
 
   useEffect(() => {
     if (activeId == null) return;
@@ -129,9 +131,13 @@ export function NoteEditorPane({
 
   return (
     <div className={styles.editorPane}>
-      {tabs.length > 0 && !(lakeMode && lakeFocus && activeTab) ? renderTabBar() : null}
+      {tabs.length > 0 ? renderTabBar() : null}
 
-      {activeId == null || !activeTab || !note ? (
+      {loadingNote && (activeId == null || !activeTab || !note) ? (
+        <div className={styles.editorMain}>
+          {slowFetch ? <NoteBootOverlay visible title="打开笔记" /> : null}
+        </div>
+      ) : activeId == null || !activeTab || !note ? (
         <div className={styles.emptyEditor}>
           <FileTextOutlined style={{ fontSize: 36, opacity: 0.35 }} />
           <div>选择左侧笔记，或新建一篇开始写</div>
@@ -143,8 +149,7 @@ export function NoteEditorPane({
           </Button>
         </div>
       ) : (
-        <div className={`${styles.editorMain}${lakeMode && lakeFocus ? ` ${styles.lakeCover}` : ""}`}>
-          {lakeMode && lakeFocus && tabs.length > 0 ? renderTabBar("cover-") : null}
+        <div className={styles.editorMain}>
           <div className={styles.editorHead}>
             <div className={styles.editorHeadRow}>
               <input
@@ -177,41 +182,6 @@ export function NoteEditorPane({
                     <LinkOutlined />
                   </button>
                 </Tooltip>
-                {lakeMode && lakeFocus && (
-                  <button
-                    type="button"
-                    className={styles.iconBtn}
-                    title="退回应用界面（Esc）"
-                    onClick={() => onSetLakeFocus(false)}
-                  >
-                    <CompressOutlined />
-                  </button>
-                )}
-                {lakeMode && !lakeFocus && (
-                  <button
-                    type="button"
-                    className={styles.iconBtn}
-                    title="全屏编辑"
-                    onClick={() => onSetLakeFocus(true)}
-                  >
-                    <ExpandOutlined />
-                  </button>
-                )}
-                <span
-                  className={styles.lakeSwitch}
-                  title="语雀编辑器（实验）：保存时同时写 .md 和 .lake 源文件"
-                >
-                  <span className={styles.lakeSwitchLabel}>语雀</span>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={lakeMode}
-                    className={`${styles.miniSwitch}${lakeMode ? ` ${styles.miniSwitchOn}` : ""}`}
-                    onClick={() => onToggleLakeMode(!lakeMode)}
-                  >
-                    <span className={styles.miniSwitchThumb} />
-                  </button>
-                </span>
                 <button
                   type="button"
                   className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
@@ -239,18 +209,7 @@ export function NoteEditorPane({
             </div>
           </div>
           <div className={styles.editorBody}>
-            {lakeMode ? (
-              <Suspense fallback={<div className={styles.bootLoading}><span className={styles.bootSpinner} /></div>}>
-                <LakeEditor
-                  key={`lake-${activeId}-${contentKey}`}
-                  ref={lakeRef}
-                  initialContent={activeTab.draftLake ?? activeTab.draftContent}
-                  initialScheme={activeTab.draftLake ? "text/lake" : "text/markdown"}
-                  onDirtyChange={onDirtyChange}
-                  onSave={onSave}
-                />
-              </Suspense>
-            ) : (
+            <div className={styles.editorHost}>
               <MarkdownEditor
                 key={`md-${activeId}-${contentKey}`}
                 ref={editorRef}
@@ -262,24 +221,14 @@ export function NoteEditorPane({
                 excludeSourceId={activeId}
                 initialHeading={initialHeading}
               />
-            )}
-            {!lakeMode && mdBooting && (
-              <div className={styles.bootLoading}>
-                <span className={styles.bootSpinner} />
-              </div>
-            )}
+            </div>
             <NoteLinkPicker
               open={linkPickerOpen}
               excludeSourceId={activeId}
               onClose={closeLinkPicker}
               onPick={(label) => insertNoteLink(label)}
             />
-            <NoteShortcutsHelp
-              open={helpOpen}
-              onClose={() => setHelpOpen(false)}
-              lakeMode={lakeMode}
-              isMac={mac}
-            />
+            <NoteShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} isMac={mac} />
           </div>
         </div>
       )}

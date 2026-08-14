@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { MessageInstance } from "antd/es/message/interface";
 import type { SetURLSearchParams } from "react-router-dom";
-import { api, type VaultNode } from "@/shared/api/client";
+import { api, type VaultNode, type VaultNote } from "@/shared/api/client";
 import { formatError } from "@/shared/ui/feedback";
 import { extractWikilinkTargets } from "@/shared/ui/markdown-editor/wikilinks";
 import { tabFromNote, type NoteTab } from "../types";
@@ -19,21 +19,14 @@ export type DeleteConfirm = {
   orphan?: boolean;
 } | null;
 
-export type UnsavedConfirm =
-  | { type: "switch"; next: boolean }
-  | { type: "closeTab"; sourceId: number }
-  | null;
+export type UnsavedConfirm = { type: "closeTab"; sourceId: number } | null;
 
 export type EditorDraft = {
   content: string;
-  lake: string | null;
 };
 
-const LAKE_MODE_KEY = "kongku-notes-lake-mode";
-const LAKE_FOCUS_KEY = "kongku-notes-lake-focus";
-
 /** 编辑器 DOM 句柄不进 store；由 useNoteEditor 注册 */
-let readEditorDraftImpl: () => EditorDraft = () => ({ content: "", lake: null });
+let readEditorDraftImpl: () => EditorDraft = () => ({ content: "" });
 
 export function registerReadEditorDraft(fn: () => EditorDraft) {
   readEditorDraftImpl = fn;
@@ -41,16 +34,6 @@ export function registerReadEditorDraft(fn: () => EditorDraft) {
 
 function readEditorDraft() {
   return readEditorDraftImpl();
-}
-
-function initialLakeMode() {
-  return typeof localStorage !== "undefined" && localStorage.getItem(LAKE_MODE_KEY) === "1";
-}
-
-function initialLakeFocus() {
-  if (typeof localStorage === "undefined") return true;
-  const saved = localStorage.getItem(LAKE_FOCUS_KEY);
-  return saved == null ? true : saved === "1";
 }
 
 type NotesState = {
@@ -73,11 +56,7 @@ type NotesState = {
   draggingTabId: number | null;
   dragOver: { id: number; side: "before" | "after" } | null;
 
-  // editor prefs (refs 仍留在 hook)
-  lakeMode: boolean;
-  lakeFocus: boolean;
   saving: boolean;
-  mdBooting: boolean;
 
   // tree setters / actions
   setNodes: (nodes: VaultNode[]) => void;
@@ -116,7 +95,12 @@ type NotesState = {
   reorderTabs: (fromId: number, toId: number, side: "before" | "after") => void;
   openNote: (
     sourceId: number,
-    deps: { message: MessageInstance; setParams: SetURLSearchParams },
+    deps: {
+      message: MessageInstance;
+      setParams: SetURLSearchParams;
+      /** 已有正文时跳过再拉一遍（新建空笔记） */
+      note?: VaultNote;
+    },
   ) => Promise<void>;
   markActiveDirty: (dirty: boolean) => void;
   setActiveTitle: (title: string) => void;
@@ -124,14 +108,7 @@ type NotesState = {
   patchTabAfterRename: (oldPath: string, patchedPath: string, nextTitle: string) => void;
   tabsUnderPath: (path: string) => NoteTab[];
 
-  // editor prefs
   setSaving: (v: boolean) => void;
-  setLakeMode: (v: boolean) => void;
-  setLakeFocus: (v: boolean) => void;
-  setMdBooting: (v: boolean) => void;
-  setLakeFocusRemembered: (next: boolean) => void;
-  applyLakeMode: (next: boolean) => void;
-  onToggleLakeMode: (next: boolean) => void;
   saveActiveNote: (deps: {
     message: MessageInstance;
     activeId: number;
@@ -156,10 +133,7 @@ export const useNotesStore = create<NotesState>((set, get) => ({
   draggingTabId: null,
   dragOver: null,
 
-  lakeMode: initialLakeMode(),
-  lakeFocus: initialLakeFocus(),
   saving: false,
-  mdBooting: false,
 
   setNodes: (nodes) => set({ nodes }),
   setExpanded: (updater) =>
@@ -215,18 +189,12 @@ export const useNotesStore = create<NotesState>((set, get) => ({
   clearTabDrag: () => set({ draggingTabId: null, dragOver: null }),
 
   flushActiveDraft: () => {
-    const { activeId, lakeMode } = get();
+    const { activeId } = get();
     if (activeId == null) return;
-    const { content, lake } = readEditorDraft();
+    const { content } = readEditorDraft();
     set((s) => ({
       tabs: s.tabs.map((t) =>
-        t.sourceId === activeId
-          ? {
-              ...t,
-              draftContent: content,
-              draftLake: lakeMode ? lake : t.draftLake,
-            }
-          : t,
+        t.sourceId === activeId ? { ...t, draftContent: content } : t,
       ),
     }));
   },
@@ -234,7 +202,7 @@ export const useNotesStore = create<NotesState>((set, get) => ({
   activateTab: (sourceId, setParams) => {
     if (sourceId === get().activeId) return;
     get().flushActiveDraft();
-    set((s) => ({ activeId: sourceId, contentKey: s.contentKey + 1 }));
+    set({ activeId: sourceId });
     setParams({ id: String(sourceId) }, { replace: true });
   },
 
@@ -289,14 +257,12 @@ export const useNotesStore = create<NotesState>((set, get) => ({
     });
   },
 
-  openNote: async (sourceId, { message, setParams }) => {
+  openNote: async (sourceId, { message, setParams, note: preloaded }) => {
     if (get().tabs.some((t) => t.sourceId === sourceId)) {
       get().activateTab(sourceId, setParams);
       return;
     }
-    set({ loadingNote: true });
-    try {
-      const res = await api.getVaultNote(sourceId);
+    const adopt = (res: VaultNote) => {
       get().flushActiveDraft();
       set((s) => {
         if (s.tabs.some((t) => t.sourceId === res.source_id)) {
@@ -312,6 +278,14 @@ export const useNotesStore = create<NotesState>((set, get) => ({
         };
       });
       setParams({ id: String(res.source_id) }, { replace: true });
+    };
+    if (preloaded && preloaded.source_id === sourceId) {
+      adopt(preloaded);
+      return;
+    }
+    set({ loadingNote: true });
+    try {
+      adopt(await api.getVaultNote(sourceId));
     } catch (err) {
       message.error(formatError(err));
     } finally {
@@ -322,6 +296,8 @@ export const useNotesStore = create<NotesState>((set, get) => ({
   markActiveDirty: (dirty) => {
     const id = get().activeId;
     if (id == null) return;
+    const tab = get().tabs.find((t) => t.sourceId === id);
+    if (tab && tab.dirty === dirty) return;
     set((s) => ({
       tabs: s.tabs.map((t) => (t.sourceId === id ? { ...t, dirty } : t)),
     }));
@@ -349,7 +325,6 @@ export const useNotesStore = create<NotesState>((set, get) => ({
               ...t,
               draftTitle: t.note.title || "",
               draftContent: t.note.content,
-              draftLake: t.note.source_lake ?? null,
               dirty: false,
             }
           : t,
@@ -377,59 +352,16 @@ export const useNotesStore = create<NotesState>((set, get) => ({
     get().tabs.filter((t) => t.path === path || t.path.startsWith(path + "/")),
 
   setSaving: (v) => set({ saving: v }),
-  setLakeMode: (v) => set({ lakeMode: v }),
-  setLakeFocus: (v) => set({ lakeFocus: v }),
-  setMdBooting: (v) => set({ mdBooting: v }),
-
-  setLakeFocusRemembered: (next) => {
-    set({ lakeFocus: next });
-    localStorage.setItem(LAKE_FOCUS_KEY, next ? "1" : "0");
-  },
-
-  applyLakeMode: (next) => {
-    get().resetActiveTabFromServer();
-    set({ lakeMode: next, unsavedConfirm: null });
-    localStorage.setItem(LAKE_MODE_KEY, next ? "1" : "0");
-    if (next) {
-      const saved = localStorage.getItem(LAKE_FOCUS_KEY);
-      set({ lakeFocus: saved == null ? true : saved === "1" });
-    } else {
-      set({ mdBooting: true });
-      window.setTimeout(() => set({ mdBooting: false }), 550);
-    }
-    set((s) => ({ contentKey: s.contentKey + 1 }));
-  },
-
-  onToggleLakeMode: (next) => {
-    const { tabs, activeId } = get();
-    const activeTab = activeId != null ? tabs.find((t) => t.sourceId === activeId) : null;
-    if (activeTab?.dirty) {
-      set({ unsavedConfirm: { type: "switch", next } });
-      return;
-    }
-    get().flushActiveDraft();
-    set({ lakeMode: next });
-    localStorage.setItem(LAKE_MODE_KEY, next ? "1" : "0");
-    if (next) {
-      const saved = localStorage.getItem(LAKE_FOCUS_KEY);
-      set({ lakeFocus: saved == null ? true : saved === "1" });
-    } else {
-      set({ mdBooting: true });
-      window.setTimeout(() => set({ mdBooting: false }), 550);
-    }
-    set((s) => ({ contentKey: s.contentKey + 1 }));
-  },
 
   saveActiveNote: async ({ message, activeId }) => {
-    const { lakeMode, tabs } = get();
-    const { content, lake } = readEditorDraft();
+    const { tabs } = get();
+    const { content } = readEditorDraft();
     const draftTitle = tabs.find((t) => t.sourceId === activeId)?.draftTitle.trim() ?? "";
     set({ saving: true });
     try {
       const res = await api.saveVaultNote(activeId, {
         title: draftTitle,
         content,
-        ...(lakeMode ? { source_lake: lake } : {}),
       });
       set((s) => ({
         tabs: s.tabs.map((t) =>
@@ -441,7 +373,6 @@ export const useNotesStore = create<NotesState>((set, get) => ({
                 path: res.path,
                 draftTitle: res.title,
                 draftContent: res.content,
-                draftLake: res.source_lake ?? t.draftLake,
                 dirty: false,
               }
             : t,

@@ -4,7 +4,10 @@ import { BrowserRouter, HashRouter } from "react-router-dom";
 import { App } from "./app/App";
 import { initApiBase } from "./shared/api/client";
 import { UiProvider } from "./shared/ui/UiProvider";
+import { RootErrorBoundary, installFatalErrorOverlay } from "./shared/ui/RootErrorBoundary";
 import "./shared/styles/global.css";
+
+installFatalErrorOverlay();
 
 const isElectron = Boolean(
   (window as unknown as { kongkuDesktop?: unknown }).kongkuDesktop,
@@ -41,15 +44,17 @@ void (async () => {
     new Promise<void>((resolve) => window.setTimeout(resolve, 1500)),
   ]);
   try {
-    createRoot(document.getElementById("root")!).render(
-      <StrictMode>
-        <UiProvider>
-          <Router>
-            <App />
-          </Router>
-        </UiProvider>
-      </StrictMode>,
-    );
+        createRoot(document.getElementById("root")!).render(
+          <StrictMode>
+            <RootErrorBoundary>
+              <UiProvider>
+                <Router>
+                  <App />
+                </Router>
+              </UiProvider>
+            </RootErrorBoundary>
+          </StrictMode>,
+        );
   } finally {
     dismissBootSplash();
   }

@@ -1,9 +1,15 @@
-import { marked } from "marked";
+import markdownit from "markdown-it";
+import taskLists from "markdown-it-task-lists";
+import { applyDialectPlugins } from "@/shared/editor-extensions/markdown/mditPlugins";
+import { rewriteHtmlImageSrcs } from "@/shared/editor-extensions/vaultAssets";
 
-marked.setOptions({
-  gfm: true,
+const md = markdownit({
+  html: true,
   breaks: true,
+  linkify: false,
 });
+md.use(taskLists, { enabled: true, label: true });
+applyDialectPlugins(md);
 
 const BLOCKED_TAGS = new Set([
   "script",
@@ -44,9 +50,9 @@ export function sanitizeHtml(html: string): string {
   return doc.body.innerHTML;
 }
 
-export function renderMarkdown(md: string): string {
-  const raw = (md || "").trim();
+export function renderMarkdown(source: string): string {
+  const raw = (source || "").trim();
   if (!raw) return "";
-  const html = marked.parse(raw, { async: false }) as string;
-  return sanitizeHtml(html);
+  const html = md.render(raw);
+  return sanitizeHtml(rewriteHtmlImageSrcs(html));
 }

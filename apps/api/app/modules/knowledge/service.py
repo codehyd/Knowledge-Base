@@ -924,7 +924,7 @@ class KnowledgeService:
         source_id = row.source_id
         source = await db.get(Source, source_id) if source_id else None
 
-        # 笔记库中的手写笔记：与笔记页删除统一（来源 + 条目 + .md/.lake + uploads）
+        # 笔记库中的手写笔记：与笔记页删除统一（来源 + 条目 + .md + uploads）
         if (
             source
             and (source.type or "") == "note"

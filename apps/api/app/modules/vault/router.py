@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, Query
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -18,6 +21,14 @@ from app.modules.vault.schemas import (
 from app.modules.vault.service import vault_service
 
 router = APIRouter(prefix="/vault", tags=["笔记库"])
+
+_MEDIA = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
 
 
 @router.get("/tree", response_model=VaultTreeOut, summary="笔记库文件树")
@@ -78,6 +89,25 @@ async def save_note(
     db: AsyncSession = Depends(get_db),
 ) -> VaultNoteOut:
     return await vault_service.save_note(db, source_id, payload)
+
+
+@router.post("/notes/{source_id}/assets", summary="上传笔记内嵌图片")
+async def upload_note_asset(
+    source_id: int,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    data = await file.read()
+    return await vault_service.upload_asset(
+        db, source_id, file.filename or "image.png", data
+    )
+
+
+@router.get("/files/{path:path}", summary="读取笔记资源（_assets）")
+async def get_vault_file(path: str) -> FileResponse:
+    file_path = vault_service.resolve_asset(path)
+    media = _MEDIA.get(Path(file_path.name).suffix.lower(), "application/octet-stream")
+    return FileResponse(file_path, media_type=media)
 
 
 @router.patch("/nodes", response_model=VaultNodeOut, summary="重命名或移动节点")

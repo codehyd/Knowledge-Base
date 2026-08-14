@@ -1,29 +1,26 @@
 import { useEffect, useMemo, useRef, type MouseEvent as ReactMouseEvent } from "react";
-import type { Editor } from "@tiptap/react";
-import { filterWikiNotes, insertWikilink, type WikiNoteOption } from "./wikilinks";
+import { filterWikiNotes, type WikiNoteOption } from "./wikilinks";
 import styles from "./MarkdownEditor.module.css";
 
 type Props = {
-  editor: Editor;
   query: string;
-  range: { from: number; to: number };
   notes: WikiNoteOption[];
   left: number;
   top: number;
   selectedIndex: number;
   onSelectedIndexChange: (index: number) => void;
+  onPick: (title: string) => void;
   onClose: () => void;
 };
 
 export function WikiLinkMenu({
-  editor,
   query,
-  range,
   notes,
   left,
   top,
   selectedIndex,
   onSelectedIndexChange,
+  onPick,
   onClose,
 }: Props) {
   const items = useMemo(() => filterWikiNotes(notes, query), [notes, query]);
@@ -54,7 +51,7 @@ export function WikiLinkMenu({
   };
 
   const pick = (title: string) => {
-    insertWikilink(editor, title, range);
+    onPick(title);
     onClose();
   };
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from app.modules.knowledge.models import Category, Chunk, Entry, EntryCategory
 from app.modules.sources.classify import content_fingerprint, normalize_title_key
 from app.modules.sources.models import Source
 from app.modules.vault.paths import (
+    VAULT_ASSETS_DIR,
     data_root,
     note_filename,
     resolve_in_vault,
@@ -38,11 +40,33 @@ from app.modules.vault.schemas import (
 )
 
 SUMMARY_CHARS = 800
+_ASSET_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+_ASSET_MAX_BYTES = 8 * 1024 * 1024
 
 
 def _lake_source_path(md_path: Path) -> Path:
-    """与 .md 同目录同名的 Lake 源文件（实验：语雀编辑器双份存储）。"""
+    """历史伴生 .lake；仅用于清理残留。"""
     return md_path.with_name(f"{md_path.stem}.lake")
+
+
+_legacy_swept = False
+
+
+def unlink_companion_lake(md_path: Path) -> None:
+    _lake_source_path(md_path).unlink(missing_ok=True)
+
+
+def sweep_legacy_lake(folder: Path) -> None:
+    """删除笔记库中残留的 .lake 文件。"""
+    if not folder.is_dir():
+        return
+    for child in folder.rglob("*.lake"):
+        if child.is_file():
+            child.unlink(missing_ok=True)
+
+
+def _note_assets_dir(source_id: int) -> Path:
+    return resolve_in_vault(f"{VAULT_ASSETS_DIR}/{int(source_id)}")
 
 
 class VaultService:
@@ -70,7 +94,7 @@ class VaultService:
             return nodes
         entries = sorted(folder.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
         for child in entries:
-            if child.name.startswith("."):
+            if child.name.startswith(".") or child.name == VAULT_ASSETS_DIR:
                 continue
             rel = to_vault_rel(child)
             if child.is_dir():
@@ -103,8 +127,12 @@ class VaultService:
     async def tree(self, db: AsyncSession) -> VaultTreeOut:
         from app.modules.vault.paths import vault_rel_prefix
 
+        global _legacy_swept
         root = self.ensure_root()
-        await self._rewrite_legacy_storage_paths(db)
+        if not _legacy_swept:
+            sweep_legacy_lake(root)
+            await self._rewrite_legacy_storage_paths(db)
+            _legacy_swept = True
         path_map = await self._path_map(db)
         return VaultTreeOut(
             root=vault_rel_prefix(),
@@ -241,12 +269,6 @@ class VaultService:
         if not path.is_file():
             raise HTTPException(status_code=404, detail="笔记文件缺失")
         content = path.read_text(encoding="utf-8", errors="ignore")
-        lake_path = _lake_source_path(path)
-        source_lake = (
-            lake_path.read_text(encoding="utf-8", errors="ignore")
-            if lake_path.is_file()
-            else None
-        )
         return VaultNoteOut(
             source_id=row.id,
             title=row.title or path.stem,
@@ -255,7 +277,6 @@ class VaultService:
             status=row.status or "",
             committed=row.status == "committed",
             char_count=len(content),
-            source_lake=source_lake,
         )
 
     async def _ensure_category(self, db: AsyncSession, name: str) -> Category:
@@ -339,13 +360,7 @@ class VaultService:
         title = title[:500]
 
         path.write_text(content, encoding="utf-8")
-
-        if payload.source_lake is not None:
-            lake_path = _lake_source_path(path)
-            if payload.source_lake.strip():
-                lake_path.write_text(payload.source_lake, encoding="utf-8")
-            else:
-                lake_path.unlink(missing_ok=True)
+        unlink_companion_lake(path)
 
         folder = data_root() / "uploads" / str(row.id)
         folder.mkdir(parents=True, exist_ok=True)
@@ -364,7 +379,6 @@ class VaultService:
             await self._auto_commit(db, row, content)
             await db.refresh(row)
 
-        lake_path = _lake_source_path(path)
         return VaultNoteOut(
             source_id=row.id,
             title=row.title,
@@ -373,11 +387,6 @@ class VaultService:
             status=row.status or "",
             committed=row.status == "committed",
             char_count=len(content),
-            source_lake=(
-                lake_path.read_text(encoding="utf-8", errors="ignore")
-                if lake_path.is_file()
-                else None
-            ),
         )
 
     async def patch_node(self, db: AsyncSession, payload: VaultNodePatchIn) -> VaultNodeOut:
@@ -420,9 +429,8 @@ class VaultService:
         new_rel = to_vault_rel(dest)
 
         if not is_dir:
-            old_lake = _lake_source_path(src)
-            if old_lake.is_file():
-                old_lake.rename(_lake_source_path(dest))
+            unlink_companion_lake(src)
+            unlink_companion_lake(dest)
 
         path_map = await self._path_map(db)
         touched: Source | None = path_map.get(old_rel)
@@ -479,7 +487,10 @@ class VaultService:
 
         if path.is_file():
             path.unlink(missing_ok=True)
-        _lake_source_path(path).unlink(missing_ok=True)
+        unlink_companion_lake(path)
+        assets = _note_assets_dir(sid)
+        if assets.exists():
+            shutil.rmtree(assets, ignore_errors=True)
         # 仅清理该笔记自己的 uploads/{id}（抽取副本），不碰 library/书籍 等镜像目录。
         # 曾调用 remove_source_from_library：在 SQLite 复用 source id 时，可能误删
         # 同 id 残留的书籍资源文件夹。
@@ -529,7 +540,7 @@ class VaultService:
             await self._auto_commit(db, row, content)
             await db.refresh(row)
 
-        lake_path = _lake_source_path(path)
+        unlink_companion_lake(path)
         return VaultNoteOut(
             source_id=row.id,
             title=row.title,
@@ -538,11 +549,6 @@ class VaultService:
             status=row.status or "",
             committed=row.status == "committed",
             char_count=len(content),
-            source_lake=(
-                lake_path.read_text(encoding="utf-8", errors="ignore")
-                if lake_path.is_file()
-                else None
-            ),
         )
 
     async def delete_path(self, db: AsyncSession, rel: str) -> dict:
@@ -561,7 +567,7 @@ class VaultService:
         if path.suffix.lower() != ".md":
             raise HTTPException(status_code=400, detail="只能删除笔记文件")
         path.unlink(missing_ok=True)
-        _lake_source_path(path).unlink(missing_ok=True)
+        unlink_companion_lake(path)
         return {"ok": True, "path": key, "orphan": True}
 
     async def delete_folder(self, db: AsyncSession, rel: str) -> dict:
@@ -1021,6 +1027,30 @@ class VaultService:
 
         lim = max(1, min(int(limit or 20), 50))
         return VaultLinkTargetsOut(items=items[:lim], total=len(items))
+
+    async def upload_asset(
+        self, db: AsyncSession, source_id: int, filename: str, data: bytes
+    ) -> dict:
+        await self._get_vault_source(db, source_id)
+        ext = Path(filename or "image.png").suffix.lower()
+        if ext not in _ASSET_EXTS:
+            raise HTTPException(status_code=400, detail="仅支持 png / jpg / gif / webp")
+        if len(data) > _ASSET_MAX_BYTES:
+            raise HTTPException(status_code=400, detail="图片不能超过 8MB")
+        rel = f"{VAULT_ASSETS_DIR}/{int(source_id)}/{uuid.uuid4().hex}{ext}"
+        dest = resolve_in_vault(rel)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+        return {"path": rel, "url": f"/api/vault/files/{rel}"}
+
+    def resolve_asset(self, rel: str) -> Path:
+        key = (rel or "").replace("\\", "/").strip().lstrip("/")
+        if not key.startswith(f"{VAULT_ASSETS_DIR}/"):
+            raise HTTPException(status_code=400, detail="非法资源路径")
+        path = resolve_in_vault(key)
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="文件不存在")
+        return path
 
 
 vault_service = VaultService()

@@ -36,16 +36,11 @@ class VaultNoteOut(BaseModel):
     status: str = ""
     committed: bool = False
     char_count: int = 0
-    source_lake: str | None = Field(default=None, description="Lake 编辑器源文档（实验，双份存储）")
 
 
 class VaultNoteSaveIn(BaseModel):
     title: str = Field(default="", max_length=500)
     content: str = Field(default="")
-    source_lake: str | None = Field(
-        default=None,
-        description="Lake 编辑器源文档；None 不动伴生文件，空串删除，非空写入",
-    )
 
 
 class VaultNodePatchIn(BaseModel):

@@ -31,7 +31,7 @@ function deleteFolderConfirmContent() {
     createElement(
       "ul",
       { style: { margin: 0, paddingLeft: "1.2em", color: "#475569" } },
-      createElement("li", null, "文件夹内全部笔记文件（.md / .lake）"),
+      createElement("li", null, "文件夹内全部笔记文件（.md）与内嵌图片"),
       createElement("li", null, "对应的知识库条目与检索切片"),
       createElement("li", null, "相关喂养来源与本地 uploads 缓存"),
     ),
@@ -115,8 +115,8 @@ export function useVaultTree({ message, modal, setParams }: UseVaultTreeOptions)
           title: "未命名笔记",
         });
         if (parent) setExpanded((s) => new Set(s).add(parent));
-        await refreshTree(message);
-        await openNote(res.source_id, { message, setParams });
+        await openNote(res.source_id, { message, setParams, note: res });
+        void refreshTree(message);
       } catch (err) {
         message.error(formatError(err));
       }

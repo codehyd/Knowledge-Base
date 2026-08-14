@@ -6,7 +6,7 @@ import {
 } from "@/shared/ui/markdown-editor/wikilink/parse";
 import styles from "@/shared/ui/markdown-editor/MarkdownEditor.module.css";
 
-/** 双链唤起快捷键：Ctrl/Cmd + Shift + L（Link），MD 与语雀模式共用 */
+/** 双链唤起快捷键：Ctrl/Cmd + Shift + L（Link） */
 export const NOTE_LINK_HOTKEY = {
   key: "l",
   shift: true,

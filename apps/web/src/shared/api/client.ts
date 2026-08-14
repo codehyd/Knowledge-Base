@@ -132,7 +132,6 @@ export type VaultNote = {
   status: string;
   committed: boolean;
   char_count: number;
-  source_lake?: string | null;
 };
 
 export type VaultGraphNode = {
@@ -758,11 +757,19 @@ export const api = {
     }),
   getVaultNote: (sourceId: number) =>
     request<VaultNote>(`/api/vault/notes/${sourceId}`),
-  saveVaultNote: (sourceId: number, body: { title?: string; content: string; source_lake?: string | null }) =>
+  saveVaultNote: (sourceId: number, body: { title?: string; content: string }) =>
     request<VaultNote>(`/api/vault/notes/${sourceId}`, {
       method: "PUT",
       body: JSON.stringify(body),
     }),
+  uploadVaultAsset: (sourceId: number, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<{ path: string; url: string }>(`/api/vault/notes/${sourceId}/assets`, {
+      method: "POST",
+      body: form,
+    });
+  },
   patchVaultNode: (body: {
     path: string;
     new_parent?: string | null;

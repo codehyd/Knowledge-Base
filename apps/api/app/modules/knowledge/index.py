@@ -51,10 +51,11 @@ async def index_entry(db: AsyncSession, entry_id: int, *, with_embed: bool = Tru
     if not pieces:
         await db.commit()
         return 0
+    # 先提交删切片，避免 embedding HTTP 期间一直占着 SQLite 写锁
+    await db.commit()
 
     vectors: list[list[float]] | None = None
     if with_embed:
-        # 分批 embed，避免超长请求
         vectors = []
         batch_size = 16
         for i in range(0, len(pieces), batch_size):

@@ -10,6 +10,7 @@
 .layout {
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   flex: 1;
   min-height: 0;
   border: 1px solid #e6eaee;
@@ -310,6 +311,7 @@
 .editorPane {
   display: flex;
   flex-direction: column;
+  height: 100%;
   min-height: 0;
   min-width: 0;
   background: #fff;
@@ -479,6 +481,7 @@
 }
 
 .editorMain {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -808,6 +811,92 @@
   left: 15px;
 }
 
+/* 打开笔记过渡层：盖住拉正文 / 挂载编辑器时的空白 */
+.bootLoading {
+  position: absolute;
+  inset: 0;
+  z-index: 24;
+  display: flex;
+  align-items: flex-start;
+  justify-content: stretch;
+  padding: 28px 36px 40px;
+  background: #fff;
+  opacity: 1;
+  transition: opacity 0.28s ease;
+}
+
+.bootLoadingHidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.bootCard {
+  width: min(520px, 100%);
+  padding-top: 8px;
+}
+
+.bootKicker {
+  margin-bottom: 10px;
+  color: #94a3b8;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bootTitle {
+  margin-bottom: 16px;
+  color: #334155;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.bootTrack {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: #eef1f4;
+}
+
+.bootBar {
+  height: 100%;
+  width: 40%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, #2a6f6a, #4fb3ab);
+  animation: bootBarSlide 1.15s ease-in-out infinite;
+}
+
+.bootHint {
+  margin-top: 12px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+@keyframes bootBarSlide {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
+}
+
+@keyframes bootSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes bootShimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
 .editorBody {
   position: relative;
   flex: 1;
@@ -817,35 +906,19 @@
   padding: 0;
 }
 
-/* 切回 Markdown 的短加载层：盖住重挂载瞬间的布局跳动 */
-.bootLoading {
-  position: absolute;
-  inset: 0;
-  z-index: 20;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #fff;
-}
-
-.bootSpinner {
-  width: 26px;
-  height: 26px;
-  border: 2.5px solid var(--color-accent-soft, #e7f2f1);
-  border-top-color: var(--color-accent, #2a6f6a);
-  border-radius: 50%;
-  animation: bootSpin 0.8s linear infinite;
-}
-
-@keyframes bootSpin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.editorBody > * {
+.editorHost {
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.editorHost > * {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
   border: none !important;
   border-radius: 0 !important;
   animation: editorFadeIn 0.28s ease;
